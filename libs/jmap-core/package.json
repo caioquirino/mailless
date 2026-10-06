@@ -1,0 +1,48 @@
+{
+  "name": "@mailless/jmap-core",
+  "version": "0.0.1",
+  "description": "JMAP (RFC 8620/8621) protocol types, validators and pure helpers for TypeScript",
+  "license": "Apache-2.0",
+  "keywords": [
+    "jmap",
+    "email",
+    "mail",
+    "rfc8620",
+    "rfc8621"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@mailless/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "name": "jmap-core",
+    "tags": [
+      "scope:jmap-core",
+      "type:lib"
+    ]
+  },
+  "dependencies": {
+    "tslib": "^2.3.0",
+    "zod": "^4.6.5"
+  }
+}

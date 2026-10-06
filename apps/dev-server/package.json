@@ -1,0 +1,73 @@
+{
+  "name": "@mailless/dev-server",
+  "version": "0.0.1",
+  "private": true,
+  "nx": {
+    "name": "dev-server",
+    "targets": {
+      "build": {
+        "executor": "@nx/esbuild:esbuild",
+        "outputs": [
+          "{options.outputPath}"
+        ],
+        "defaultConfiguration": "production",
+        "options": {
+          "platform": "node",
+          "outputPath": "apps/dev-server/dist",
+          "format": [
+            "esm"
+          ],
+          "bundle": true,
+          "main": "apps/dev-server/src/main.ts",
+          "tsConfig": "apps/dev-server/tsconfig.app.json",
+          "esbuildOptions": {
+            "sourcemap": true,
+            "outExtension": {
+              ".js": ".js"
+            }
+          },
+          "thirdParty": true
+        },
+        "configurations": {
+          "development": {},
+          "production": {
+            "esbuildOptions": {
+              "sourcemap": false,
+              "outExtension": {
+                ".js": ".js"
+              }
+            }
+          }
+        }
+      },
+      "serve": {
+        "continuous": true,
+        "executor": "@nx/js:node",
+        "defaultConfiguration": "development",
+        "dependsOn": [
+          "build"
+        ],
+        "options": {
+          "buildTarget": "dev-server:build",
+          "runBuildTargetDependencies": false
+        },
+        "configurations": {
+          "development": {
+            "buildTarget": "dev-server:build:development"
+          },
+          "production": {
+            "buildTarget": "dev-server:build:production"
+          }
+        }
+      }
+    },
+    "tags": [
+      "type:app"
+    ]
+  },
+  "dependencies": {
+    "@mailless/jmap-core": "workspace:*",
+    "@mailless/jmap-server": "workspace:*"
+  },
+  "type": "module"
+}

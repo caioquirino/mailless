@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "description": "Nx and the tooling it installs are upgraded together with `nx migrate latest`, never one by one.",
+      "matchPackageNames": [
+        "nx",
+        "@nx/**",
+        "typescript",
+        "typescript-eslint",
+        "eslint",
+        "@eslint/js",
+        "eslint-config-prettier",
+        "jsonc-eslint-parser",
+        "vitest",
+        "@vitest/**",
+        "vite",
+        "esbuild",
+        "prettier",
+        "@swc/**",
+        "@swc-node/**",
+        "verdaccio",
+        "tslib",
+        "@types/node"
+      ],
+      "enabled": false
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+packages:
+  - 'libs/*'
+  - 'apps/*'
+
+# Dependencies allowed to run install scripts (native binaries).
+allowBuilds:
+  '@parcel/watcher': true
+  '@swc/core': true
+  esbuild: true
+  nx: true
+  unrs-resolver: true
