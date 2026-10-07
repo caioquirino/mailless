@@ -11,6 +11,18 @@
     },
     {
       "path": "./apps/dev-server"
+    },
+    {
+      "path": "./libs/storage-dynamodb"
+    },
+    {
+      "path": "./libs/storage-s3"
+    },
+    {
+      "path": "./libs/storage-fs"
+    },
+    {
+      "path": "./apps/mailless-service"
     }
   ],
   "compilerOptions": {}

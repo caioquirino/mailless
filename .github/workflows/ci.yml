@@ -20,10 +20,19 @@ jobs:
       fail-fast: false
       matrix:
         node-version: [22, 24]
+    env:
+      # The storage and ingest tests must run here, not be skipped. Nx starts the
+      # containers they need as a dependency of those test tasks.
+      REQUIRE_LOCAL_SERVICES: '1'
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      # Terraform at the version pinned in mise.toml; Node comes from the matrix below.
+      - uses: jdx/mise-action@v3
+        with:
+          install_args: terraform
 
       - uses: pnpm/action-setup@v4
 
@@ -38,4 +47,4 @@ jobs:
 
       - run: pnpm nx sync:check
       - run: pnpm nx format:check
-      - run: pnpm nx affected -t lint typecheck test build
+      - run: pnpm nx affected -t lint typecheck validate test build

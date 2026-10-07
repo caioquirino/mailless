@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is not committed.
+
+region = "eu-west-1"
+domain = "example.com"
+
+mailboxes = {
+  "me@example.com" = "me"
+  # "*@example.com" = "me"   # everything else at the domain
+}
+
+# true replaces whatever SES receipt rule set is active in this region today.
+activate_receipt_rule_set = false
+
+# Set when the domain's DNS is hosted in Route53; otherwise add the records from
+# the dns_records output by hand.
+# route53_zone_id = "Z0123456789ABCDEFGHIJ"

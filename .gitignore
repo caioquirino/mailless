@@ -51,3 +51,12 @@ Thumbs.db
 vitest.config.*.timestamp*
 # test and local registry output
 test-output
+
+# Terraform: local state, provider cache, build artefacts and account-specific settings
+.terraform/
+.terraform-check/
+*.tfstate
+*.tfstate.*
+*.tfplan
+infra/.build/
+infra/**/terraform.tfvars

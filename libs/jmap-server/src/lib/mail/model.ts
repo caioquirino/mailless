@@ -77,7 +77,13 @@ export function asJson(value: object): JsonObject {
   return value as JsonObject;
 }
 
-/** Message ids that tie an email to a conversation: its own, and those it replies to. */
+const MAX_THREAD_KEYS = 16;
+
+/**
+ * Message ids that tie an email to a conversation: its own, what it replies
+ * to, and the most recent references. Capped so one email never needs an
+ * unbounded number of index entries.
+ */
 export function threadKeys(value: {
   messageId: string[] | null;
   inReplyTo: string[] | null;
@@ -87,9 +93,9 @@ export function threadKeys(value: {
     ...new Set([
       ...(value.messageId ?? []),
       ...(value.inReplyTo ?? []),
-      ...(value.references ?? []),
+      ...[...(value.references ?? [])].reverse(),
     ]),
-  ];
+  ].slice(0, MAX_THREAD_KEYS);
 }
 
 export function emailIndexes(value: EmailValue): IndexKeys {

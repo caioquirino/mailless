@@ -1795,6 +1795,74 @@ export function describeJmapConformance(
       );
     });
 
+    it('delivers by mailbox role, falling back to the inbox', async () => {
+      const raw = encoder.encode(buildMessage({ subject: 'Delivered' }));
+      const junk = await h.mailbox('junk');
+      const toJunk = await h.server.importMessage(AUTH, raw, {
+        mailboxRole: 'junk',
+      });
+      const toInbox = await h.server.importMessage(AUTH, raw, {
+        mailboxRole: 'no-such-role',
+      });
+      const { list } = await h.call('Email/get', {
+        ids: [toJunk.id, toInbox.id],
+        properties: ['mailboxIds'],
+      });
+      expect(list).toEqual([
+        { id: toJunk.id, mailboxIds: { [junk]: true } },
+        { id: toInbox.id, mailboxIds: { [inbox]: true } },
+      ]);
+
+      await expect(h.server.importMessage(AUTH, raw, {})).rejects.toMatchObject(
+        {
+          error: { type: 'invalidProperties' },
+        },
+      );
+      await expect(
+        h.server.importMessage(AUTH, raw, {
+          mailboxRole: 'inbox',
+          mailboxIds: { [inbox]: true },
+        }),
+      ).rejects.toMatchObject({ error: { type: 'invalidProperties' } });
+    });
+
+    it('imports once per idempotency key, even concurrently', async () => {
+      const raw = encoder.encode(
+        buildMessage({ subject: 'Once', messageId: '<once@example.com>' }),
+      );
+      const options = { mailboxRole: 'inbox', idempotencyKey: 'delivery-1' };
+
+      const results = await Promise.all(
+        Array.from({ length: 6 }, () =>
+          h.server.importMessage(AUTH, raw, options),
+        ),
+      );
+      const again = await h.server.importMessage(AUTH, raw, options);
+      expect(new Set([...results, again].map((result) => result.id)).size).toBe(
+        1,
+      );
+      expect(new Set(results.map((result) => result.threadId)).size).toBe(1);
+
+      expect(await counts(inbox)).toMatchObject({
+        totalEmails: 1,
+        totalThreads: 1,
+      });
+      const stored = await h.server.download(
+        AUTH,
+        AUTH.accountId,
+        again.blobId,
+      );
+      expect(stored).toEqual(raw);
+
+      const other = await h.server.importMessage(AUTH, raw, {
+        mailboxRole: 'inbox',
+        idempotencyKey: 'delivery-2',
+      });
+      expect(other.id).not.toBe(again.id);
+      expect(other.threadId).toBe(again.threadId);
+      expect((await counts(inbox)).totalEmails).toBe(2);
+    });
+
     it('keeps accounts isolated', async () => {
       const email = await h.deliver(inbox);
       const other = { accountId: 'acc2', username: 'other@example.com' };

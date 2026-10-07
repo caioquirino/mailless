@@ -4,10 +4,12 @@ A mailbox without a mail server to run: serverless email on AWS, reached over
 [JMAP](https://jmap.io) instead of IMAP, built from reusable TypeScript
 libraries.
 
-> **Status: early.** The protocol core and the server framework work and are
-> tested against in-memory storage. AWS storage, the Terraform stack, the
-> client library and sending mail are not built yet. Nothing has been
-> published to npm.
+> **Status: early.** Mail can be received and stored: the protocol core, the
+> server framework, the DynamoDB, S3 and filesystem storage adapters and the
+> SES ingest function all work and are tested locally, and the Terraform
+> stack applies cleanly to a real AWS account. Delivery of a real message
+> through SES has not been confirmed yet. There is no HTTP API on AWS, no
+> client library, and no sending. Nothing has been published to npm.
 
 ## Why JMAP
 
@@ -18,19 +20,29 @@ be served by functions that only run while a request is in flight.
 
 ## Packages
 
-| Package                                     | What it is                                                                                                                            | State   |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| [`@mailless/jmap-core`](libs/jmap-core)     | Protocol types, validators, result references, patch objects. No I/O; runs anywhere.                                                  | Working |
-| [`@mailless/jmap-server`](libs/jmap-server) | JMAP server framework: request engine, Mailbox / Email / Thread methods, storage contract, in-memory adapter, conformance test suite. | Working |
-| `@mailless/storage-dynamodb`, `-s3`, `-fs`  | Storage adapters for AWS and for self-hosting.                                                                                        | Planned |
-| `@mailless/jmap-client`                     | Typed JMAP client.                                                                                                                    | Planned |
+| Package                                               | What it is                                                                                                                            | State   |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| [`@mailless/jmap-core`](libs/jmap-core)               | Protocol types, validators, result references, patch objects. No I/O; runs anywhere.                                                  | Working |
+| [`@mailless/jmap-server`](libs/jmap-server)           | JMAP server framework: request engine, Mailbox / Email / Thread methods, storage contract, in-memory adapter, conformance test suite. | Working |
+| [`@mailless/storage-dynamodb`](libs/storage-dynamodb) | Metadata store on DynamoDB (or DynamoDB Local).                                                                                       | Working |
+| [`@mailless/storage-s3`](libs/storage-s3)             | Blob store on S3 or an S3-compatible server.                                                                                          | Working |
+| [`@mailless/storage-fs`](libs/storage-fs)             | Blob store on a local directory.                                                                                                      | Working |
+| `@mailless/jmap-client`                               | Typed JMAP client.                                                                                                                    | Planned |
 
-`apps/dev-server` is a small local JMAP server over in-memory storage for
-trying things out.
+Also in this repository:
+
+- [`apps/mailless-service`](apps/mailless-service): the Lambda functions.
+  Today that is the SES ingest function, which imports inbound mail.
+- [`apps/dev-server`](apps/dev-server): a small local JMAP server over
+  in-memory storage for trying things out.
+- [`infra/`](infra): Terraform for SES receiving, S3, DynamoDB and the ingest
+  function. See its README before applying.
 
 ## Try it
 
-Requires Node.js 22.12 or newer (24 recommended, see `.nvmrc`) and pnpm.
+Requires Node.js 22.12 or newer and pnpm. Tool versions are pinned in
+`mise.toml`; with [mise](https://mise.jdx.dev) installed, `mise install` sets
+up Node.js and Terraform.
 
 ```sh
 pnpm install
@@ -64,11 +76,30 @@ fixed account, and listens on localhost only.
 
 ## Development
 
-```sh
-pnpm nx run-many -t lint typecheck test build   # everything
-pnpm nx test jmap-server                        # one project
-pnpm nx graph                                   # project graph
-```
+Everything runs through Nx, which works out what each task needs first. The
+common entry points are scripts in the root `package.json`:
+
+| Command                                   | What it does                                                            |
+| ----------------------------------------- | ----------------------------------------------------------------------- |
+| `pnpm run check`                          | Lint, typecheck, Terraform validate, test and build, for every project. |
+| `pnpm test`                               | All tests. Starts the local services first if they are not running.     |
+| `pnpm build`                              | All builds, in dependency order.                                        |
+| `pnpm lint` / `pnpm typecheck`            | Just those.                                                             |
+| `pnpm format`                             | Format changed files.                                                   |
+| `pnpm dev`                                | The local JMAP dev server.                                              |
+| `pnpm infra plan`                         | Build the Lambda bundle and show what a deploy would change.            |
+| `pnpm infra apply`                        | Build and deploy to AWS. See [`infra/`](infra) first.                   |
+| `pnpm services:up` / `pnpm services:down` | Start or stop the local DynamoDB and S3 stand-ins.                      |
+
+For one project or one task, call Nx directly: `pnpm nx test jmap-server`,
+`pnpm nx graph`. Results are cached, so a task whose inputs have not changed
+is not run again.
+
+The storage adapter and ingest tests talk to DynamoDB Local and an S3 stand-in
+from `docker-compose.yml`. Nx starts those containers before the tests that
+need them, so Docker has to be available. When the test files are run without
+Nx and the services are not there, those tests are skipped; set
+`REQUIRE_LOCAL_SERVICES=1` (as CI does) to make that a failure.
 
 This is an [Nx](https://nx.dev) workspace. Build, test and lint tooling
 (TypeScript, Vitest, ESLint, esbuild) is installed at the versions Nx pins and
@@ -92,9 +123,10 @@ wrapper around `handleRequest`.
 ## Roadmap
 
 1. ~~Workspace, `jmap-core`, `jmap-server` on in-memory storage~~
-2. DynamoDB and S3 adapters; Terraform for SES inbound, S3, DynamoDB, DNS
+2. ~~DynamoDB, S3 and filesystem adapters; SES ingest function; Terraform~~
+   (deployed; first real delivery still to be confirmed)
 3. `jmap-client`
-4. Lambda service behind API Gateway, authentication, sending through SES
+4. Lambda JMAP API behind API Gateway, authentication, sending through SES
 5. Push over WebSocket, `/queryChanges`, first npm release
 6. Self-hosted build with docker-compose
 

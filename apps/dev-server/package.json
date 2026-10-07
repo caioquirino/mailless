@@ -19,7 +19,7 @@
           ],
           "bundle": true,
           "main": "apps/dev-server/src/main.ts",
-          "tsConfig": "apps/dev-server/tsconfig.app.json",
+          "tsConfig": "apps/dev-server/tsconfig.build.json",
           "esbuildOptions": {
             "sourcemap": true,
             "outExtension": {

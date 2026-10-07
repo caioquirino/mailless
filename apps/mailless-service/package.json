@@ -1,0 +1,73 @@
+{
+  "name": "@mailless/mailless-service",
+  "version": "0.0.1",
+  "private": true,
+  "nx": {
+    "name": "mailless-service",
+    "targets": {
+      "build": {
+        "executor": "@nx/esbuild:esbuild",
+        "outputs": [
+          "{options.outputPath}"
+        ],
+        "defaultConfiguration": "production",
+        "options": {
+          "platform": "node",
+          "outputPath": "apps/mailless-service/dist",
+          "format": [
+            "esm"
+          ],
+          "bundle": true,
+          "main": "apps/mailless-service/src/ingest.ts",
+          "tsConfig": "apps/mailless-service/tsconfig.build.json",
+          "esbuildOptions": {
+            "sourcemap": true,
+            "outExtension": {
+              ".js": ".mjs"
+            },
+            "mainFields": [
+              "module",
+              "main"
+            ],
+            "banner": {
+              "js": "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);"
+            }
+          },
+          "thirdParty": true
+        },
+        "configurations": {
+          "development": {},
+          "production": {}
+        }
+      },
+      "test": {
+        "dependsOn": [
+          "^build",
+          "build",
+          {
+            "target": "local-services",
+            "projects": [
+              "@mailless/source"
+            ]
+          }
+        ]
+      }
+    },
+    "tags": [
+      "type:app"
+    ]
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1146.0",
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/lib-dynamodb": "^3.1146.0",
+    "@mailless/jmap-core": "workspace:*",
+    "@mailless/jmap-server": "workspace:*",
+    "@mailless/storage-dynamodb": "workspace:*",
+    "@mailless/storage-s3": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.164"
+  },
+  "type": "module"
+}

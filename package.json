@@ -7,9 +7,23 @@
   "engines": {
     "node": ">=22.12"
   },
-  "scripts": {},
+  "scripts": {
+    "build": "nx run-many -t build",
+    "test": "nx run-many -t test",
+    "lint": "nx run-many -t lint",
+    "typecheck": "nx run-many -t typecheck",
+    "check": "nx run-many -t lint typecheck validate test build",
+    "format": "nx format:write",
+    "format:check": "nx format:check",
+    "dev": "nx serve dev-server",
+    "services:up": "nx run @mailless/source:local-services",
+    "services:down": "docker compose down",
+    "infra": "node tools/infra.mjs"
+  },
   "dependencies": {},
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/client-sts": "^3.1146.0",
     "@eslint/js": "^9.8.0",
     "@nx/esbuild": "23.2.1",
     "@nx/eslint": "23.2.1",
@@ -45,6 +59,13 @@
           "config": ".verdaccio/config.yml",
           "storage": "tmp/local-registry/storage"
         }
+      },
+      "local-services": {
+        "command": "docker compose up -d && node tools/wait-for-local-services.mjs",
+        "options": {
+          "cwd": "{workspaceRoot}"
+        },
+        "cache": false
       }
     }
   }

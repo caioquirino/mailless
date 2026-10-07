@@ -1,0 +1,62 @@
+{
+  "name": "infra",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "tags": ["type:infra"],
+  "implicitDependencies": ["mailless-service"],
+  "targets": {
+    "lint": {
+      "command": "terraform fmt -check -recursive -diff",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "inputs": ["{projectRoot}/**/*.tf", "{projectRoot}/**/*.hcl"],
+      "cache": true
+    },
+    "validate": {
+      "command": "TF_DATA_DIR=.terraform-check terraform init -backend=false -input=false && TF_DATA_DIR=.terraform-check terraform validate",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "inputs": ["{projectRoot}/**/*.tf", "{projectRoot}/.terraform.lock.hcl"],
+      "cache": true
+    },
+    "test": {
+      "command": "TF_DATA_DIR=.terraform-check terraform test && node --test \"scripts/*.test.mjs\"",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "dependsOn": ["validate"],
+      "inputs": [
+        "{projectRoot}/**/*.tf",
+        "{projectRoot}/**/*.hcl",
+        "{projectRoot}/tests/**/*",
+        "{projectRoot}/scripts/**/*"
+      ],
+      "cache": true
+    },
+    "init": {
+      "command": "node scripts/init.mjs",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "cache": false
+    },
+    "plan": {
+      "command": "terraform plan",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "dependsOn": ["validate", "init", "mailless-service:build"],
+      "cache": false
+    },
+    "apply": {
+      "command": "terraform apply",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "dependsOn": ["validate", "init", "mailless-service:build"],
+      "cache": false
+    }
+  }
+}

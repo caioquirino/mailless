@@ -60,6 +60,7 @@ import {
   MAILBOX,
   type EmailRecord,
   type EmailValue,
+  type MailboxRecord,
   type StoredBodyPart,
 } from './model.js';
 
@@ -700,9 +701,20 @@ const emailSetSpec: SetSpec = {
 
 export interface ImportOptions {
   /** Mailbox ids; keys may be `#creationId` references within a request. */
-  mailboxIds: Record<string, true>;
+  mailboxIds?: Record<string, true>;
+  /**
+   * Deliver to the mailbox with this role instead of naming ids. Falls back
+   * to the inbox when no mailbox has the role. Exactly one of `mailboxIds`
+   * and `mailboxRole` must be given.
+   */
+  mailboxRole?: string;
   keywords?: Record<string, true>;
   receivedAt?: string;
+  /**
+   * Makes the import repeatable: a second call with the same key returns the
+   * email the first one created. Use the delivery id of the inbound message.
+   */
+  idempotencyKey?: string;
 }
 
 export interface ImportedEmail {
@@ -711,6 +723,8 @@ export interface ImportedEmail {
   threadId: string;
   size: number;
 }
+
+const MAX_THREAD_LOOKUPS = 16;
 
 async function findThread(
   ctx: MethodContext,
@@ -729,7 +743,7 @@ async function findThread(
       ...[...(message.references ?? [])].reverse(),
       ...(message.messageId ?? []),
     ]),
-  ];
+  ].slice(0, MAX_THREAD_LOOKUPS);
   for (const key of keys) {
     const related = (await ctx.store.list(ctx.auth.accountId, EMAIL, {
       name: 'threadKey',
@@ -743,6 +757,45 @@ async function findThread(
   return undefined;
 }
 
+async function resolveMailboxIds(
+  ctx: MethodContext,
+  options: ImportOptions,
+): Promise<Record<string, true>> {
+  if (
+    (options.mailboxIds === undefined) ===
+    (options.mailboxRole === undefined)
+  ) {
+    throw invalid(
+      ['mailboxIds'],
+      'Give exactly one of mailboxIds and mailboxRole',
+    );
+  }
+  if (options.mailboxIds !== undefined) {
+    return normaliseMailboxIds(ctx, options.mailboxIds);
+  }
+
+  const mailboxes = (await ctx.store.list(
+    ctx.auth.accountId,
+    MAILBOX,
+  )) as unknown as MailboxRecord[];
+  const target =
+    mailboxes.find((mailbox) => mailbox.value.role === options.mailboxRole) ??
+    mailboxes.find((mailbox) => mailbox.value.role === 'inbox');
+  if (!target) {
+    throw invalid(['mailboxIds'], 'The account has no inbox to deliver to');
+  }
+  return { [target.id]: true };
+}
+
+async function stableSuffix(key: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(key));
+  let hex = '';
+  for (const byte of new Uint8Array(digest).subarray(0, 12)) {
+    hex += byte.toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
 /**
  * Stores a raw RFC 5322 message as an Email. This is the one entry point for
  * new mail, used by Email/import and by inbound delivery.
@@ -753,7 +806,30 @@ export async function importMessage(
   options: ImportOptions,
 ): Promise<ImportedEmail> {
   const accountId = ctx.auth.accountId;
-  const mailboxIds = await normaliseMailboxIds(ctx, options.mailboxIds);
+
+  // With an idempotency key every id is derived from it, so a repeat finds the first result.
+  const suffix =
+    options.idempotencyKey === undefined
+      ? undefined
+      : await stableSuffix(options.idempotencyKey);
+  const id = suffix ? `em${suffix}` : generateId('em');
+  const blobId = suffix ? `bm${suffix}` : generateId('bm');
+  const existing = async (): Promise<ImportedEmail | undefined> => {
+    if (!suffix) return undefined;
+    const record = await getEmail(ctx, id);
+    return record
+      ? {
+          id,
+          blobId: record.value.blobId,
+          threadId: record.value.threadId,
+          size: record.value.size,
+        }
+      : undefined;
+  };
+  const already = await existing();
+  if (already) return already;
+
+  const mailboxIds = await resolveMailboxIds(ctx, options);
   const keywords = normaliseKeywords(options.keywords ?? {});
 
   let parsed;
@@ -766,9 +842,9 @@ export async function importMessage(
     throw error;
   }
 
-  const id = generateId('em');
-  const blobId = generateId('bm');
-  const threadId = (await findThread(ctx, parsed.metadata)) ?? generateId('th');
+  const threadId =
+    (await findThread(ctx, parsed.metadata)) ??
+    (suffix ? `th${suffix}` : generateId('th'));
 
   const value: EmailValue = {
     ...parsed.metadata,
@@ -783,8 +859,15 @@ export async function importMessage(
 
   await ctx.blobs.put(accountId, blobId, raw);
   try {
-    await mutateThread(ctx, threadId, () => [{ kind: 'create', id, value }]);
+    await mutateThread(ctx, threadId, (emails) =>
+      emails.some((email) => email.id === id)
+        ? []
+        : [{ kind: 'create', id, value }],
+    );
   } catch (error) {
+    // A concurrent import with the same key may have won; its blob must not be removed.
+    const winner = await existing();
+    if (winner) return winner;
     await ctx.blobs.delete(accountId, blobId);
     throw error;
   }

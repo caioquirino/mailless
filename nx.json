@@ -49,8 +49,8 @@
       "pattern": "{projectName}@{version}"
     },
     "version": {
-      "conventionalCommits": true,
-      "preVersionCommand": "pnpm nx run-many -t build --projects=libs/*"
+      "preVersionCommand": "pnpm nx run-many -t build --projects=libs/*",
+      "conventionalCommits": true
     },
     "changelog": {
       "projectChangelogs": true
@@ -58,7 +58,14 @@
   },
   "targetDefaults": {
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+      "inputs": [
+        "default",
+        "^production",
+        {
+          "env": "REQUIRE_LOCAL_SERVICES"
+        }
+      ]
     },
     "@nx/esbuild:esbuild": {
       "cache": true,

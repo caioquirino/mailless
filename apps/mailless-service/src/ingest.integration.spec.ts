@@ -1,0 +1,179 @@
+import {
+  CreateTableCommand,
+  DeleteTableCommand,
+  DynamoDBClient,
+} from '@aws-sdk/client-dynamodb';
+import {
+  CreateBucketCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { createJmapServer } from '@mailless/jmap-server';
+import { buildMessage } from '@mailless/jmap-server/testing';
+import {
+  DynamoDbMetadataStore,
+  tableDefinition,
+} from '@mailless/storage-dynamodb';
+import { S3BlobStore } from '@mailless/storage-s3';
+import type { SESEvent } from 'aws-lambda';
+
+// Runs the built Lambda bundle against DynamoDB Local and an S3 stand-in:
+// `docker compose up -d` at the workspace root.
+const dynamoEndpoint =
+  process.env['DYNAMODB_ENDPOINT'] ?? 'http://127.0.0.1:8000';
+const s3Endpoint = process.env['S3_ENDPOINT'] ?? 'http://127.0.0.1:9090';
+const credentials = { accessKeyId: 'test', secretAccessKey: 'test' };
+const run = Date.now().toString(36);
+const tableName = `mailless-ingest-${run}`;
+const bucket = `mailless-ingest-${run}`;
+
+const dynamo = new DynamoDBClient({
+  endpoint: dynamoEndpoint,
+  region: 'us-east-1',
+  credentials,
+});
+const s3 = new S3Client({
+  endpoint: s3Endpoint,
+  region: 'us-east-1',
+  forcePathStyle: true,
+  credentials,
+});
+
+let reachable = true;
+try {
+  await dynamo.send(new CreateTableCommand(tableDefinition(tableName)));
+  await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+} catch (error) {
+  reachable = false;
+  if (process.env['REQUIRE_LOCAL_SERVICES']) throw error;
+  console.warn(
+    'Skipping ingest integration test: local services are not reachable',
+  );
+}
+
+afterAll(async () => {
+  await dynamo
+    .send(new DeleteTableCommand({ TableName: tableName }))
+    .catch(() => undefined);
+});
+
+describe.skipIf(!reachable)('ingest Lambda entry point', () => {
+  it('imports a message SES stored in the bucket', async () => {
+    Object.assign(process.env, {
+      AWS_REGION: 'us-east-1',
+      AWS_ACCESS_KEY_ID: credentials.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: credentials.secretAccessKey,
+      AWS_ENDPOINT_URL_DYNAMODB: dynamoEndpoint,
+      AWS_ENDPOINT_URL_S3: s3Endpoint,
+      S3_FORCE_PATH_STYLE: 'true',
+      TABLE_NAME: tableName,
+      BUCKET: bucket,
+      MAILBOXES: JSON.stringify({ '*@example.com': 'acc-1' }),
+    });
+    // Load the bundle that is actually deployed, not the sources: bundling problems only show up there.
+    const bundle = new URL('../dist/ingest.mjs', import.meta.url).href;
+    const { handler } = (await import(
+      /* @vite-ignore */ bundle
+    )) as typeof import('./ingest.js');
+
+    const raw = buildMessage({
+      subject: 'Through the Lambda',
+      text: 'Body text',
+    });
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: 'inbound/ses-msg-1',
+        Body: raw,
+      }),
+    );
+    const event = {
+      Records: [
+        {
+          eventSource: 'aws:ses',
+          eventVersion: '1.0',
+          ses: {
+            mail: {
+              messageId: 'ses-msg-1',
+              timestamp: '2026-10-07T09:30:00.000Z',
+            },
+            receipt: {
+              recipients: ['me@example.com'],
+              spamVerdict: { status: 'PASS' },
+              virusVerdict: { status: 'PASS' },
+            },
+          },
+        },
+      ],
+    } as unknown as SESEvent;
+
+    await handler(event);
+    await handler(event); // a retry after success must change nothing
+
+    const keys = (
+      await s3.send(new ListObjectsV2Command({ Bucket: bucket }))
+    ).Contents?.map((object) => object.Key);
+    expect(keys).toHaveLength(1);
+    expect(keys?.[0]).toMatch(/^blobs\/acc-1\/bm[0-9a-f]{24}$/);
+
+    // Read it back through an independently constructed server over the same storage.
+    const jmap = createJmapServer({
+      storage: {
+        metadata: new DynamoDbMetadataStore({
+          client: DynamoDBDocumentClient.from(dynamo),
+          tableName,
+        }),
+        blobs: new S3BlobStore({ client: s3, bucket, keyPrefix: 'blobs/' }),
+      },
+      urls: { api: 'x', download: 'x', upload: 'x', eventSource: 'x' },
+    });
+    const response = await jmap.handleRequest(
+      {
+        using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+        methodCalls: [
+          ['Email/query', { accountId: 'acc-1' }, 'q'],
+          [
+            'Email/get',
+            {
+              accountId: 'acc-1',
+              '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' },
+              properties: ['subject', 'receivedAt', 'bodyValues', 'textBody'],
+              fetchTextBodyValues: true,
+            },
+            'g',
+          ],
+          [
+            'Mailbox/query',
+            { accountId: 'acc-1', filter: { role: 'inbox' } },
+            'mq',
+          ],
+          [
+            'Mailbox/get',
+            {
+              accountId: 'acc-1',
+              '#ids': { resultOf: 'mq', name: 'Mailbox/query', path: '/ids' },
+              properties: ['totalEmails', 'unreadEmails'],
+            },
+            'mg',
+          ],
+        ],
+      },
+      { accountId: 'acc-1', username: 'me@example.com' },
+    );
+    const emails = (
+      response.methodResponses[1]?.[1] as { list: Record<string, unknown>[] }
+    ).list;
+    expect(emails).toHaveLength(1);
+    expect(emails[0]).toMatchObject({
+      subject: 'Through the Lambda',
+      receivedAt: '2026-10-07T09:30:00Z',
+    });
+    expect(JSON.stringify(emails[0]?.['bodyValues'])).toContain('Body text');
+    expect(
+      (response.methodResponses[3]?.[1] as { list: Record<string, unknown>[] })
+        .list[0],
+    ).toMatchObject({ totalEmails: 1, unreadEmails: 1 });
+  });
+});

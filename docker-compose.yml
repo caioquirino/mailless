@@ -1,0 +1,15 @@
+# Local stand-ins for the AWS services the storage adapters talk to.
+# Used by the adapter test suites; nothing here is persisted.
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: ['-jar', 'DynamoDBLocal.jar', '-inMemory', '-sharedDb']
+    ports:
+      - '127.0.0.1:8000:8000'
+
+  s3:
+    image: adobe/s3mock:latest
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: mailless-test
+    ports:
+      - '127.0.0.1:9090:9090'

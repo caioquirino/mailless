@@ -1,0 +1,5 @@
+# Tool versions for this repository. Run `mise install` once after cloning.
+# pnpm is not listed: its version comes from the `packageManager` field in package.json.
+[tools]
+node = "24"
+terraform = "1.16.5"
