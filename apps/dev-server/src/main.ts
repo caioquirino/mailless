@@ -44,7 +44,14 @@ const jmap: JmapServer = createJmapServer({
       }
     },
   },
-  identities: () => [{ id: 'dev', email: '*@mailless.test' }],
+  identities: () => [
+    {
+      id: 'dev',
+      email: 'dev@mailless.test',
+      name: 'Dev',
+      allowedFrom: ['*@mailless.test'],
+    },
+  ],
 });
 
 // The token is accepted as a bearer token, or as the password of any username over Basic.

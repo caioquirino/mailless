@@ -11,6 +11,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { createJmapServer } from '@mailless/jmap-server';
+import { createAppPasswordStore } from '@mailless/jmap-server/auth';
 import { buildMessage } from '@mailless/jmap-server/testing';
 import {
   DynamoDbMetadataStore,
@@ -101,6 +102,43 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
       );
     }
     expect((await call('GET', '/elsewhere')).statusCode).toBe(404);
+  });
+
+  it('signs in with an app password, by address, without the identity provider', async () => {
+    const bundle = new URL('../dist/api.mjs', import.meta.url).href;
+    const { handler } = (await import(
+      /* @vite-ignore */ bundle
+    )) as typeof import('./api.js');
+    const passwords = createAppPasswordStore(
+      new DynamoDbMetadataStore({
+        client: DynamoDBDocumentClient.from(dynamo),
+        tableName,
+      }),
+    );
+    const { id, secret } = await passwords.create('acc-1', 'Integration test');
+
+    const session = (username: string, password: string) =>
+      handler({
+        rawPath: '/.well-known/jmap',
+        rawQueryString: '',
+        headers: {
+          authorization: `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`,
+        },
+        isBase64Encoded: false,
+        requestContext: { domainName: 'internal', http: { method: 'GET' } },
+      } as unknown as Parameters<typeof handler>[0]);
+
+    const accepted = await session('acc-1', secret);
+    expect(accepted.statusCode).toBe(200);
+    expect(JSON.parse(accepted.body as string).username).toBe('acc-1');
+
+    const wrong = `${secret.slice(0, -1)}${secret.endsWith('a') ? 'b' : 'a'}`;
+    expect((await session('acc-1', wrong)).statusCode).toBe(401);
+    expect((await session('someone-else', secret)).statusCode).toBe(401);
+
+    // A different spelling of the same secret is a fresh check, so revocation is seen at once.
+    await passwords.revoke('acc-1', id);
+    expect((await session('acc-1', secret.toUpperCase())).statusCode).toBe(401);
   });
 });
 

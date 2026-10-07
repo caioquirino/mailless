@@ -126,7 +126,10 @@ resource "aws_lambda_function" "api" {
         USER_POOL_CLIENT_ID = aws_cognito_user_pool_client.jmap.id
         # Decides which addresses each account may send from.
         MAILBOXES         = jsonencode(var.mailboxes)
+        ACCOUNT_NAMES     = jsonencode(var.account_names)
         CONFIGURATION_SET = aws_sesv2_configuration_set.main.configuration_set_name
+        # "false" makes mail clients use app passwords; the account password then only works for tokens.
+        ALLOW_PASSWORD_SIGN_IN = tostring(var.allow_password_sign_in)
       },
       # Without a hostname of our own the function uses the host each request arrived on.
       local.api_custom_domain ? { PUBLIC_URL = "https://${local.api_hostname}" } : {},

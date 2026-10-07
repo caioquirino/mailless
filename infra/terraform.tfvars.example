@@ -8,6 +8,11 @@ mailboxes = {
   # "*@example.com" = "me"   # everything else at the domain
 }
 
+# The name shown as the sender of each account's mail.
+account_names = {
+  me = "Your Name"
+}
+
 # true replaces whatever SES receipt rule set is active in this region today.
 activate_receipt_rule_set = false
 

@@ -29,6 +29,12 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./auth": {
+      "@mailless/source": "./src/auth.ts",
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.js",
+      "default": "./dist/auth.js"
+    },
     "./http": {
       "@mailless/source": "./src/http.ts",
       "types": "./dist/http.d.ts",

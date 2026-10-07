@@ -19,6 +19,7 @@ import {
   toUtcDate,
   type MethodContext,
   type MethodHandler,
+  type ResolvedIdentity,
 } from '../context.js';
 import type { StoredRecord } from '../storage.js';
 import { standardChanges, toChangesResponse } from '../standard/changes.js';
@@ -38,7 +39,7 @@ import {
 import { MailRejectedError } from '../transport.js';
 import { isValidAddress, removeHeader } from './compose.js';
 import { runEmailSet } from './email.js';
-import { getEmail } from './email-store.js';
+import { getEmail, mutateThread } from './email-store.js';
 import { asJson } from './model.js';
 
 export const SUBMISSION = 'EmailSubmission';
@@ -80,14 +81,18 @@ function identityState(identities: readonly Identity[]): string {
 }
 
 /** Whether an identity may be used to send as this address; `*@domain` covers the whole domain. */
-export function identityAllows(identity: Identity, email: string): boolean {
+export function identityAllows(
+  identity: ResolvedIdentity,
+  email: string,
+): boolean {
   const address = email.toLowerCase();
-  const allowed = identity.email.toLowerCase();
-  if (allowed.startsWith('*@')) {
-    const at = address.lastIndexOf('@');
-    return at > 0 && address.slice(at) === allowed.slice(1);
-  }
-  return address === allowed;
+  const at = address.lastIndexOf('@');
+  return [identity.email, ...identity.allowedFrom].some((pattern) => {
+    const allowed = pattern.toLowerCase();
+    return allowed.startsWith('*@')
+      ? at > 0 && address.slice(at) === allowed.slice(1)
+      : address === allowed;
+  });
 }
 
 // ---------------------------------------------------------- EmailSubmission
@@ -134,6 +139,15 @@ async function createSubmission(
     throw new SetFailure('invalidEmail', 'The email has no From address', {
       properties: ['from'],
     });
+  }
+  // "*@domain" means "any address here" in an identity. As a sender it is a placeholder
+  // that was never filled in, and mail from it is treated as spam.
+  if (from.some((address) => address.email.startsWith('*@'))) {
+    throw new SetFailure(
+      'invalidEmail',
+      'The From address is a wildcard, not a real address',
+      { properties: ['from'] },
+    );
   }
   if (!from.every((address) => identityAllows(identity, address.email))) {
     throw new SetFailure(
@@ -182,9 +196,10 @@ async function createSubmission(
   if (!raw) throw invalid(['emailId'], 'The content of the email is missing');
 
   const id = generateId('es');
+  let receipt;
   try {
     // Bcc recipients are in the envelope; the header must not travel with the message.
-    await transport.send(removeHeader(raw, 'Bcc'), {
+    receipt = await transport.send(removeHeader(raw, 'Bcc'), {
       mailFrom,
       rcptTo,
       // Lets delivery events find their way back to this submission.
@@ -195,6 +210,35 @@ async function createSubmission(
       throw new SetFailure('forbiddenToSend', error.message);
     }
     throw error;
+  }
+
+  const transportMessageIds = receipt?.messageIds ?? [];
+  if (transportMessageIds.length > 0) {
+    try {
+      await mutateThread(ctx, email.value.threadId, (emails) => {
+        const current = emails.find((candidate) => candidate.id === email.id);
+        if (!current) return [];
+        return [
+          {
+            kind: 'update',
+            id: email.id,
+            value: {
+              ...current.value,
+              transportMessageIds: [
+                ...new Set([
+                  ...(current.value.transportMessageIds ?? []),
+                  ...transportMessageIds,
+                ]),
+              ],
+            },
+            changedProperties: [],
+          },
+        ];
+      });
+    } catch {
+      // The message has gone out. Failing now would invite the client to send it again,
+      // which is far worse than a reply landing in a thread of its own.
+    }
   }
 
   const value: SubmissionValue = {

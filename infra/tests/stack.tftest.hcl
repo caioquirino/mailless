@@ -106,6 +106,9 @@ variables {
   mail_from_subdomain  = "bounce"
   dmarc_policy         = "quarantine"
   alarm_email          = null
+
+  allow_password_sign_in = true
+  account_names          = { me = "Me Myself" }
 }
 
 run "defaults" {
@@ -334,6 +337,16 @@ run "api_and_sign_in" {
   }
 
   assert {
+    condition     = aws_lambda_function.api.environment[0].variables["ACCOUNT_NAMES"] == jsonencode({ me = "Me Myself" })
+    error_message = "The API needs the display names to put a sender name on outgoing mail."
+  }
+
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables["ALLOW_PASSWORD_SIGN_IN"] == "true"
+    error_message = "Account passwords are accepted unless turned off."
+  }
+
+  assert {
     condition     = aws_lambda_function.api.environment[0].variables["MAILBOXES"] == jsonencode(var.mailboxes)
     error_message = "The API needs the mailbox map to decide who may send from which address."
   }
@@ -394,6 +407,19 @@ run "api_hostname_can_be_chosen" {
   assert {
     condition     = output.jmap_session_url == "https://jmap.example.com/.well-known/jmap"
     error_message = "A chosen hostname must be used throughout."
+  }
+}
+
+run "password_sign_in_can_be_turned_off" {
+  command = plan
+
+  variables {
+    allow_password_sign_in = false
+  }
+
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables["ALLOW_PASSWORD_SIGN_IN"] == "false"
+    error_message = "The API must be told not to accept account passwords."
   }
 }
 

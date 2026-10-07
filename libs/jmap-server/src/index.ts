@@ -31,5 +31,6 @@ export { type DeliveryUpdate } from './lib/mail/submission.js';
 export {
   MailRejectedError,
   type MailEnvelope,
+  type MailReceipt,
   type MailTransport,
 } from './lib/transport.js';

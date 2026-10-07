@@ -8,14 +8,18 @@ const envelope = {
   rcptTo: ['a@example.org', 'b@example.org'],
 };
 
-function fakeClient(failure?: { name: string; message: string }) {
+function fakeClient(
+  failure?: { name: string; message: string },
+  region = 'eu-central-1',
+) {
   const sent: Array<{ name: string; input: unknown }> = [];
   const client = {
+    config: { region: async () => region },
     async send(command: { constructor: { name: string }; input: unknown }) {
       sent.push({ name: command.constructor.name, input: command.input });
       if (failure)
         throw Object.assign(new Error(failure.message), { name: failure.name });
-      return {};
+      return { MessageId: '0107abc-000000' };
     },
   } as unknown as SESv2Client;
   return { client, sent };
@@ -35,6 +39,27 @@ describe('SesMailTransport', () => {
         },
       },
     ]);
+  });
+
+  it('reports the Message-ID that SES substitutes, which differs by region', async () => {
+    const frankfurt = fakeClient();
+    expect(
+      await new SesMailTransport({ client: frankfurt.client }).send(
+        message,
+        envelope,
+      ),
+    ).toEqual({
+      messageIds: ['0107abc-000000@eu-central-1.amazonses.com'],
+    });
+    const virginia = fakeClient(undefined, 'us-east-1');
+    expect(
+      await new SesMailTransport({ client: virginia.client }).send(
+        message,
+        envelope,
+      ),
+    ).toEqual({
+      messageIds: ['0107abc-000000@email.amazonses.com'],
+    });
   });
 
   it('attaches the envelope tags to the message', async () => {

@@ -19,7 +19,19 @@ export interface MailTransport {
    * MailRejectedError when the message itself was refused; any other error is
    * treated as a failure of the service.
    */
-  send(message: Uint8Array, envelope: MailEnvelope): Promise<void>;
+  send(
+    message: Uint8Array,
+    envelope: MailEnvelope,
+  ): Promise<void | MailReceipt>;
+}
+
+export interface MailReceipt {
+  /**
+   * Message ids, without angle brackets, that the transport gave the message
+   * in place of its own. Some services rewrite the Message-ID header; replies
+   * then refer to the new id, and knowing it keeps them in the same thread.
+   */
+  messageIds?: string[];
 }
 
 /** The transport refused this message, for example an unverified sender or a blocked recipient. */

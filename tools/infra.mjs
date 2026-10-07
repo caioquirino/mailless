@@ -9,6 +9,7 @@ if (!task || task.startsWith('-')) {
       '  plan      show what would change\n' +
       '  apply     deploy (Terraform asks before changing anything)\n' +
       '  password  set the sign-in password of a mailbox user: pnpm infra password <name>\n' +
+      '  app-password  create, list or revoke per-client passwords\n' +
       '  send-test send a test message and wait for it to arrive: pnpm infra send-test [recipient]\n' +
       '  init      create the state bucket if needed and initialise Terraform\n' +
       '  validate  check the configuration\n' +
@@ -21,11 +22,29 @@ if (!task || task.startsWith('-')) {
 // These need the real terminal to ask for a password, which Nx does not pass on to a task.
 // They are not build steps either, so they run directly.
 const direct = {
-  password: 'infra/scripts/set-password.mjs',
-  'send-test': 'infra/scripts/send-test.mjs',
+  password: { script: 'infra/scripts/set-password.mjs' },
+  'send-test': { script: 'infra/scripts/send-test.mjs' },
+  // Uses the admin tool from the service build, so that is brought up to date first.
+  'app-password': {
+    script: 'infra/scripts/app-password.mjs',
+    build: 'mailless-service',
+  },
 };
-const result = direct[task]
-  ? spawnSync(process.execPath, [direct[task], ...rest], { stdio: 'inherit' })
+
+const entry = direct[task];
+if (entry?.build) {
+  const built = spawnSync('nx', ['run', `${entry.build}:build`], {
+    stdio: ['ignore', 'ignore', 'inherit'],
+  });
+  if (built.status !== 0) {
+    console.error(
+      `\nBuilding ${entry.build} failed. Run \`pnpm nx build ${entry.build}\` to see why.\n`,
+    );
+    process.exit(built.status ?? 1);
+  }
+}
+const result = entry
+  ? spawnSync(process.execPath, [entry.script, ...rest], { stdio: 'inherit' })
   : spawnSync('nx', ['run', `infra:${task}`, ...rest], { stdio: 'inherit' });
 if (result.error) throw result.error;
 process.exit(result.status ?? 1);

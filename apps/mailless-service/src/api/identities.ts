@@ -3,27 +3,52 @@ import type { IdentityInput } from '@mailless/jmap-server';
 import type { MailboxMap } from '../ingest/recipients.js';
 
 /**
- * The sending identities of an account: one for each address that delivers
- * to it. A `*@domain` entry becomes a wildcard identity, which lets the
- * account send from any address at that domain.
+ * The sending identities of an account, derived from the addresses that
+ * deliver to it.
+ *
+ * Every identity has a real address, because clients put the identity's
+ * address in the From header as it is. A `*@domain` entry therefore does not
+ * become an identity of its own: it lets the account's identities send as any
+ * address at that domain, and if the account has no address there yet, one is
+ * made from the account name.
  */
 export function identitiesFor(
   mailboxes: MailboxMap,
   accountId: string,
+  names: Record<string, string> = {},
 ): IdentityInput[] {
+  const own = Object.entries(mailboxes)
+    .filter(([, account]) => account === accountId)
+    .map(([address]) => address);
+  const wildcards = own.filter((address) => address.startsWith('*@'));
+  const addresses = new Set(own.filter((address) => !address.startsWith('*@')));
+
+  for (const wildcard of wildcards) {
+    const domain = wildcard.slice(1);
+    if (![...addresses].some((address) => address.endsWith(domain))) {
+      addresses.add(`${accountId.toLowerCase()}${domain}`);
+    }
+  }
+
+  const localPart = (address: string) =>
+    address.slice(0, address.lastIndexOf('@'));
+  const isNamedAfterAccount = (address: string) =>
+    localPart(address) === accountId.toLowerCase();
+  const name = names[accountId];
+
   return (
-    Object.entries(mailboxes)
-      .filter(([, account]) => account === accountId)
-      .map(([address]) => address)
-      // Exact addresses first: clients tend to offer the first identity as the default.
+    [...addresses]
+      // The address named after the account first: clients offer the first identity as the default.
       .sort(
         (a, b) =>
-          Number(a.startsWith('*')) - Number(b.startsWith('*')) ||
+          Number(isNamedAfterAccount(b)) - Number(isNamedAfterAccount(a)) ||
           a.localeCompare(b),
       )
       .map((email) => ({
         id: `id${createHash('sha256').update(email).digest('hex').slice(0, 24)}`,
         email,
+        ...(name ? { name } : {}),
+        allowedFrom: wildcards,
       }))
   );
 }

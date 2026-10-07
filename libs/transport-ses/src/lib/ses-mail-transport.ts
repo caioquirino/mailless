@@ -2,6 +2,7 @@ import { SendEmailCommand, type SESv2Client } from '@aws-sdk/client-sesv2';
 import {
   MailRejectedError,
   type MailEnvelope,
+  type MailReceipt,
   type MailTransport,
 } from '@mailless/jmap-server';
 
@@ -30,9 +31,12 @@ export class SesMailTransport implements MailTransport {
     this.configurationSetName = options.configurationSetName;
   }
 
-  async send(message: Uint8Array, envelope: MailEnvelope): Promise<void> {
+  async send(
+    message: Uint8Array,
+    envelope: MailEnvelope,
+  ): Promise<MailReceipt> {
     try {
-      await this.client.send(
+      const result = await this.client.send(
         new SendEmailCommand({
           FromEmailAddress: envelope.mailFrom,
           // With raw content, SES delivers to exactly these addresses, whatever the headers say.
@@ -55,6 +59,11 @@ export class SesMailTransport implements MailTransport {
             : {}),
         }),
       );
+      if (!result.MessageId) return {};
+      // SES replaces the Message-ID header with its own id at a domain that depends on the region.
+      const region = await this.client.config.region();
+      const host = region === 'us-east-1' ? 'email' : region;
+      return { messageIds: [`${result.MessageId}@${host}.amazonses.com`] };
     } catch (error) {
       const failure = error as { name?: string; message?: string };
       if (REJECTIONS.has(failure.name ?? '')) {

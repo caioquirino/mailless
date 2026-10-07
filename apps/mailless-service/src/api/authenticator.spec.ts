@@ -7,7 +7,9 @@ const request = (authorization?: string) =>
     headers: authorization === undefined ? {} : { authorization },
   });
 
-function setup() {
+function setup(options: { allowPasswordLogin?: boolean } = {}) {
+  const appLogins: Array<[string, string]> = [];
+  const revoked = new Set<string>();
   let time = 1_000_000;
   const logins: Array<[string, string]> = [];
   const verified: string[] = [];
@@ -22,6 +24,14 @@ function setup() {
       if (!token.startsWith('token-for-')) throw new Error('invalid token');
       return token.slice('token-for-'.length);
     },
+    isAppPassword: (password) => password.startsWith('mlapp-'),
+    appPasswordLogin: async (username, password) => {
+      appLogins.push([username, password]);
+      return password === 'mlapp-good' && !revoked.has(password)
+        ? username
+        : null;
+    },
+    allowPasswordLogin: options.allowPasswordLogin ?? true,
     passwordLogin: async (username, password) => {
       logins.push([username, password]);
       if (password === 'boom') throw new Error('identity provider unavailable');
@@ -36,6 +46,8 @@ function setup() {
     logins,
     verified,
     failures,
+    appLogins,
+    revoked,
     advance: (ms: number) => (time += ms),
   };
 }
@@ -170,8 +182,18 @@ describe('createAuthenticator', () => {
     expect(failures).toEqual([
       { scheme: 'none', reason: 'missing' },
       { scheme: 'bearer', reason: 'refused' },
-      { scheme: 'basic', reason: 'refused', usernameKind: 'name' },
-      { scheme: 'basic', reason: 'refused', usernameKind: 'address' },
+      {
+        scheme: 'basic',
+        reason: 'refused',
+        credentialKind: 'password',
+        usernameKind: 'name',
+      },
+      {
+        scheme: 'basic',
+        reason: 'refused',
+        credentialKind: 'password',
+        usernameKind: 'address',
+      },
       { scheme: 'basic', reason: 'malformed' },
       { scheme: 'digest', reason: 'unsupported-scheme' },
       { scheme: 'other', reason: 'unsupported-scheme' },
@@ -190,6 +212,63 @@ describe('createAuthenticator', () => {
     const before = failures.length;
     await authenticate(request(basic('me', 'correct horse')));
     expect(failures).toHaveLength(before);
+  });
+
+  it('checks app passwords locally and never offers them to the identity provider', async () => {
+    const { authenticate, logins, appLogins } = setup();
+    expect(
+      await authenticate(request(basic('someone@example.com', 'mlapp-good'))),
+    ).toEqual({
+      accountId: 'me',
+      username: 'me',
+    });
+    expect(await authenticate(request(basic('me', 'mlapp-wrong')))).toBeNull();
+    expect(appLogins).toEqual([
+      ['me', 'mlapp-good'],
+      ['me', 'mlapp-wrong'],
+    ]);
+    expect(logins).toEqual([]);
+  });
+
+  it('stops accepting a revoked app password within a minute', async () => {
+    const { authenticate, revoked, advance, appLogins } = setup();
+    const header = basic('me', 'mlapp-good');
+    expect(await authenticate(request(header))).not.toBeNull();
+
+    revoked.add('mlapp-good');
+    advance(59_000);
+    expect(await authenticate(request(header))).not.toBeNull();
+    expect(appLogins).toHaveLength(1);
+
+    advance(2_000);
+    expect(await authenticate(request(header))).toBeNull();
+  });
+
+  it('can refuse the account password while still accepting app passwords and tokens', async () => {
+    const { authenticate, logins, failures } = setup({
+      allowPasswordLogin: false,
+    });
+    expect(
+      await authenticate(request(basic('me', 'correct horse'))),
+    ).toBeNull();
+    expect(logins).toEqual([]);
+    expect(failures.at(-1)).toEqual({
+      scheme: 'basic',
+      reason: 'password-sign-in-disabled',
+      credentialKind: 'password',
+      usernameKind: 'name',
+    });
+
+    expect(
+      await authenticate(request(basic('me', 'mlapp-good'))),
+    ).not.toBeNull();
+    expect(await authenticate(request('Bearer token-for-me'))).not.toBeNull();
+
+    await authenticate(request(basic('me', 'mlapp-wrong')));
+    expect(failures.at(-1)).toMatchObject({
+      reason: 'refused',
+      credentialKind: 'app-password',
+    });
   });
 
   it('surfaces provider failures and does not cache them', async () => {

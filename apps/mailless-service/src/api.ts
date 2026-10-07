@@ -12,6 +12,10 @@ import { SESv2Client } from '@aws-sdk/client-sesv2';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createJmapServer } from '@mailless/jmap-server';
+import {
+  createAppPasswordStore,
+  isAppPassword,
+} from '@mailless/jmap-server/auth';
 import { createFetchHandler, jmapUrls } from '@mailless/jmap-server/http';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import { S3BlobStore } from '@mailless/storage-s3';
@@ -34,6 +38,11 @@ const clientId = required('USER_POOL_CLIENT_ID');
 const downloadPrefix = process.env['DOWNLOAD_PREFIX'] ?? 'downloads/';
 const DOWNLOAD_URL_SECONDS = 300;
 const mailboxes = parseMailboxMap(process.env['MAILBOXES']);
+// Display names for the From header, by account.
+const accountNames = JSON.parse(process.env['ACCOUNT_NAMES'] ?? '{}') as Record<
+  string,
+  string
+>;
 const configurationSetName = process.env['CONFIGURATION_SET'];
 const transport = new SesMailTransport({
   client: new SESv2Client({}),
@@ -73,7 +82,13 @@ const REFUSALS = new Set([
   'InvalidParameterException',
 ]);
 
+const appPasswords = createAppPasswordStore(storage.metadata);
+
 const authenticate = createAuthenticator({
+  isAppPassword,
+  appPasswordLogin: async (username, password) =>
+    (await appPasswords.verify(username, password)) ? username : null,
+  allowPasswordLogin: process.env['ALLOW_PASSWORD_SIGN_IN'] !== 'false',
   // Mail clients ask for an email address. Sign in as the account that address delivers to.
   resolveUsername: (username) =>
     username.includes('@')
@@ -111,7 +126,8 @@ export const handler = createLambdaHttpHandler({
         limits: { maxSizeRequest: 5_000_000, maxSizeUpload: 4_000_000 },
         transport,
         // An account may send from the addresses that deliver to it.
-        identities: (auth) => identitiesFor(mailboxes, auth.accountId),
+        identities: (auth) =>
+          identitiesFor(mailboxes, auth.accountId, accountNames),
         onError: (error, method) =>
           console.error(JSON.stringify({ method, error: String(error) })),
         // Method names and error types only; descriptions name properties, never values.

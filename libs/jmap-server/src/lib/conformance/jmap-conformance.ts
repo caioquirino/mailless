@@ -135,11 +135,18 @@ async function createHarness(factory: StorageAdapterFactory): Promise<Harness> {
           throw new MailRejectedError(reason);
         }
         sent.push({ message: decoder.decode(message), envelope });
+        // Like services that replace the Message-ID header with one of their own.
+        return { messageIds: [`relay-${sent.length}@relay.example`] };
       },
     },
     identities: () => [
       { id: 'me', email: 'me@example.com', name: 'Me Myself' },
       { id: 'team', email: '*@team.example.com' },
+      {
+        id: 'catchall',
+        email: 'me@catch.example.com',
+        allowedFrom: ['*@catch.example.com', 'legacy@old.example.com'],
+      },
     ],
   });
   await server.provisionAccount(AUTH);
@@ -2289,7 +2296,14 @@ export function describeJmapConformance(
           email: '*@team.example.com',
           name: '',
         }),
+        expect.objectContaining({
+          id: 'catchall',
+          email: 'me@catch.example.com',
+        }),
       ]);
+      // Which other addresses an identity may send as is the server's business, not the client's.
+      expect(JSON.stringify(list)).not.toContain('allowedFrom');
+      expect(JSON.stringify(list)).not.toContain('legacy@old.example.com');
       expect(
         await h.call('Identity/get', {
           ids: ['team', 'nope'],
@@ -2527,6 +2541,61 @@ export function describeJmapConformance(
       );
       expect(explicit).not.toHaveProperty('envelope');
       expect(h.sent.at(-1)?.envelope.rcptTo).toEqual(['only@example.org']);
+    });
+
+    it('lets an identity send as the further addresses it is allowed, and never as a wildcard', async () => {
+      const submit = async (from: string) => {
+        const email = await create({ from: [{ email: from }] });
+        const result = await h.call('EmailSubmission/set', {
+          create: { s: { identityId: 'catchall', emailId: email.id } },
+        });
+        return result.notCreated?.s?.type ?? 'sent';
+      };
+      expect(await submit('me@catch.example.com')).toBe('sent');
+      expect(await submit('anything@catch.example.com')).toBe('sent');
+      expect(await submit('legacy@old.example.com')).toBe('sent');
+      expect(await submit('other@old.example.com')).toBe('forbiddenFrom');
+      expect(await submit('me@example.com')).toBe('forbiddenFrom');
+      // A client that copies the pattern into From must be stopped: such mail is treated as spam.
+      expect(await submit('*@catch.example.com')).toBe('invalidEmail');
+      expect(await submit('*@team.example.com')).toBe('invalidEmail');
+      expect(h.sent).toHaveLength(3);
+    });
+
+    it('threads a reply that refers to the id the transport gave the message', async () => {
+      const sent = await create({ subject: 'Dinner on Friday?' });
+      await h.call('EmailSubmission/set', {
+        create: { s: { identityId: 'me', emailId: sent.id } },
+      });
+      expect(h.sent).toHaveLength(1);
+
+      const inbox = await h.mailbox('inbox');
+      const reply = await h.deliver(inbox, {
+        from: 'Bob <bob@example.org>',
+        subject: 'Re: Dinner on Friday?',
+        inReplyTo: '<relay-1@relay.example>',
+        references: '<relay-1@relay.example>',
+      });
+      expect(reply.threadId).toBe(sent.threadId);
+      expect(
+        (await h.call('Thread/get', { ids: [sent.threadId] })).list[0].emailIds,
+      ).toEqual([sent.id, reply.id]);
+
+      // The substituted id is bookkeeping: the message keeps its own id, and clients see only that.
+      const { list } = await h.call('Email/get', {
+        ids: [sent.id],
+        properties: ['messageId'],
+      });
+      expect(list[0].messageId).toHaveLength(1);
+      expect(list[0].messageId[0]).not.toContain('relay');
+      expect(
+        (
+          await h.fail('Email/get', {
+            ids: [sent.id],
+            properties: ['transportMessageIds'],
+          })
+        ).type,
+      ).toBe('invalidArguments');
     });
 
     it('rejects submissions that cannot be delivered', async () => {

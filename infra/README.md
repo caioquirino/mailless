@@ -146,17 +146,53 @@ the domain. Sign in with the name and password.
 curl -u <name> https://mail.example.com/.well-known/jmap
 ```
 
-Two ways to authenticate are accepted:
+You can type either the name or any email address that delivers to the
+account; an address is mapped to its account.
 
-- **Username and password** (HTTP Basic). Works with any client. The client
-  keeps your password, so use one you can change, and remove it from clients
-  you stop using.
+### App passwords
+
+Rather than giving a mail client your real password, give each one its own:
+
+```sh
+pnpm infra app-password create "Mailtemi on phone"
+pnpm infra app-password list
+pnpm infra app-password revoke <id>
+```
+
+`create` prints a long random password once. Enter it in the client, with your
+email address, in place of your real password. Only a hash is stored, so it
+cannot be shown again; make a new one if it is lost. `list` shows each
+password's label, when it was created and when it was last used (to the hour).
+Revoking one signs that client out within a minute and affects nothing else.
+
+Once every client uses an app password, set this in `terraform.tfvars` and
+apply:
+
+```hcl
+allow_password_sign_in = false
+```
+
+Mail clients can then no longer sign in with the account password at all, so a
+lost or compromised device never holds it. The account password remains what
+`pnpm infra password` sets, and is still what issues bearer tokens.
+
+These commands need your AWS credentials: app passwords are created from the
+command line, not through the API, so nothing reachable from the internet can
+mint one.
+
+### What is accepted
+
+- **Email address or name, with an app password** (HTTP Basic). The
+  recommended way for mail clients.
+- **Email address or name, with the account password** (HTTP Basic), unless
+  `allow_password_sign_in` is false.
 - **Bearer token**: a Cognito access token for this user pool.
 
 Things to know:
 
-- **No multi-factor authentication yet.** A password is all that protects the
-  mailbox, and it cannot be combined with username-and-password sign-in.
+- **No multi-factor authentication yet.** With `allow_password_sign_in =
+false` and app passwords in clients, the account password is only used to
+  obtain tokens, which is what makes adding it possible later.
 - **Sizes.** A request body can be at most 5 MB and an upload 4 MB, because of
   Lambda's limits. Downloads have no such limit: large ones are redirected to
   a private, signed S3 link that is valid for five minutes.

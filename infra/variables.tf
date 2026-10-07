@@ -31,6 +31,21 @@ variable "mailboxes" {
   }
 }
 
+variable "account_names" {
+  description = <<-EOT
+    Display name for each account, shown as the sender of its mail, for
+    example { me = "Ada Lovelace" }. Mail without a sender name is more likely
+    to be treated as spam.
+  EOT
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for name in values(var.account_names) : length(trimspace(name)) > 0 && !can(regex("[\\r\\n]", name))])
+    error_message = "Names must be non-empty and on one line."
+  }
+}
+
 variable "activate_receipt_rule_set" {
   description = <<-EOT
     Make this stack's receipt rule set the active one. SES has exactly one
@@ -82,6 +97,16 @@ variable "alarm_email" {
     condition     = var.alarm_email == null ? true : can(regex("^[^@\\s]+@[^@\\s]+$", var.alarm_email))
     error_message = "alarm_email must be an email address or null."
   }
+}
+
+variable "allow_password_sign_in" {
+  description = <<-EOT
+    Whether mail clients may sign in with the account's own password. Set to
+    false once every client uses an app password (`pnpm infra app-password
+    create`), so that a client can no longer hold the real password.
+  EOT
+  type        = bool
+  default     = true
 }
 
 variable "api_hostname" {

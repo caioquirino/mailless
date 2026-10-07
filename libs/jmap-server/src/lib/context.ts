@@ -36,8 +36,11 @@ export interface MethodContext {
   /** Present when the server can send mail. */
   transport?: MailTransport;
   /** The addresses the caller may send from. */
-  identities(): Promise<Identity[]>;
+  identities(): Promise<ResolvedIdentity[]>;
 }
+
+/** An identity together with the further addresses it may send as, which clients never see. */
+export type ResolvedIdentity = Identity & { allowedFrom: string[] };
 
 export type MethodHandler = (
   args: Record<string, unknown>,

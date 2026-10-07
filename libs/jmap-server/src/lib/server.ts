@@ -9,7 +9,6 @@ import {
   RequestSchema,
   resolveResultReferences,
   type CoreCapability,
-  type Identity,
   type Invocation,
   type JmapResponse,
   type MailAccountCapability,
@@ -21,6 +20,7 @@ import {
   type AuthContext,
   type MethodContext,
   type MethodDefinition,
+  type ResolvedIdentity,
 } from './context.js';
 import {
   EMAIL_SORT_OPTIONS,
@@ -92,8 +92,17 @@ export interface JmapServerOptions {
 
 export interface IdentityInput {
   id: string;
+  /**
+   * The address clients offer as the sender. Use a real address here: clients
+   * put it in the From header as it is.
+   */
   email: string;
   name?: string;
+  /**
+   * Further addresses this identity may send as, without listing each as an
+   * identity. `*@example.com` allows any address at that domain.
+   */
+  allowedFrom?: string[];
 }
 
 export interface JmapServer {
@@ -189,8 +198,9 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     createdIds: new Map(),
     extraResponses: [],
     ...(options.transport ? { transport: options.transport } : {}),
-    identities: async (): Promise<Identity[]> =>
+    identities: async (): Promise<ResolvedIdentity[]> =>
       ((await options.identities?.(auth)) ?? []).map((identity) => ({
+        allowedFrom: identity.allowedFrom ?? [],
         id: identity.id,
         name: identity.name ?? '',
         email: identity.email,

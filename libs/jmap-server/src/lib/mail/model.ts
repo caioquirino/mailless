@@ -63,6 +63,11 @@ export type EmailValue = {
   hasAttachment: boolean;
   preview: string;
   bodyStructure: StoredBodyPart;
+  /**
+   * Ids the transport gave this message when it was sent, in place of its own
+   * Message-ID. Not shown to clients; used so that replies find their thread.
+   */
+  transportMessageIds?: string[];
   /** Part ids, resolved against bodyStructure when read. */
   textBody: string[];
   htmlBody: string[];
@@ -88,10 +93,12 @@ export function threadKeys(value: {
   messageId: string[] | null;
   inReplyTo: string[] | null;
   references: string[] | null;
+  transportMessageIds?: string[];
 }): string[] {
   return [
     ...new Set([
       ...(value.messageId ?? []),
+      ...(value.transportMessageIds ?? []),
       ...(value.inReplyTo ?? []),
       ...[...(value.references ?? [])].reverse(),
     ]),

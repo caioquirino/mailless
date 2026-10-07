@@ -85,7 +85,8 @@ try {
   const from = identity.email.startsWith('*@')
     ? `${username}${identity.email.slice(1)}`
     : identity.email;
-  const subject = `mailless test ${new Date().toISOString()}`;
+  // The time keeps each run's subject unique, so its arrival can be recognised.
+  const subject = `Mailbox check, ${new Date().toISOString().slice(0, 19).replace('T', ' ')} UTC`;
   console.log(`Sending from ${from} to ${recipient} ...`);
 
   const [created, submitted] = await jmap([
@@ -97,12 +98,14 @@ try {
           d: {
             mailboxIds: { [drafts]: true },
             keywords: { $draft: true },
-            from: [{ email: from }],
+            from: [{ name: identity.name || null, email: from }],
             to: [{ email: recipient }],
             subject,
             bodyValues: {
               b: {
-                value: 'This message was sent through the mailless JMAP API.',
+                value:
+                  'Hello,\n\nThis is a test message from my own mailbox, sent through its JMAP API\n' +
+                  'to check that sending and receiving work.\n\nBest regards',
               },
             },
             textBody: [{ partId: 'b', type: 'text/plain' }],

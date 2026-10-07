@@ -72,6 +72,26 @@ It serves `GET /.well-known/jmap`, `POST /jmap/api`,
 Lambda ([`apps/mailless-service`](../../apps/mailless-service/src/api.ts)), or
 an edge runtime.
 
+### App passwords
+
+`@mailless/jmap-server/auth` keeps per-client passwords in the metadata store,
+for hosts that authenticate with HTTP Basic:
+
+```ts
+import {
+  createAppPasswordStore,
+  isAppPassword,
+} from '@mailless/jmap-server/auth';
+
+const passwords = createAppPasswordStore(storage.metadata);
+const { secret } = await passwords.create('account-1', 'Phone'); // shown once
+(await passwords.verify('account-1', secret)) !== null; // true until revoked
+```
+
+Secrets are 150 bits of randomness and only their SHA-256 hash is stored.
+`verify` compares against every stored hash in constant time, and records the
+time of use at most once an hour.
+
 ## Supported methods
 
 | Method                                              | Notes                                                                                                                                                |
