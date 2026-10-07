@@ -205,6 +205,19 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
     throw new InvalidMessageError('The message has no header fields');
   }
 
+  // The parser ends a body that is the whole message with a line break, whether
+  // or not the message had one, while a body inside a multipart has none. Take
+  // it off so that the same text reads the same either way.
+  const contentType =
+    headers
+      .filter((header) => header.name.toLowerCase() === 'content-type')
+      .at(-1)?.value ?? '';
+  const isMultipart = /^\s*multipart\//i.test(contentType);
+  const bodyOf = (content: string | undefined): string | undefined =>
+    content === undefined || isMultipart ? content : content.replace(/\n$/, '');
+  const text = bodyOf(email.text);
+  const html = bodyOf(email.html);
+
   const parts: ParsedPart[] = [];
   const addPart = (part: Omit<ParsedPart, 'partId'>): string => {
     const partId = String(parts.length + 1);
@@ -213,7 +226,7 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
   };
 
   const textPartId =
-    email.text === undefined
+    text === undefined
       ? null
       : addPart({
           type: 'text/plain',
@@ -221,10 +234,10 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
           name: null,
           disposition: null,
           cid: null,
-          data: encoder.encode(email.text),
+          data: encoder.encode(text),
         });
   const htmlPartId =
-    email.html === undefined
+    html === undefined
       ? null
       : addPart({
           type: 'text/html',
@@ -232,7 +245,7 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
           name: null,
           disposition: null,
           cid: null,
-          data: encoder.encode(email.html),
+          data: encoder.encode(html),
         });
   const attachmentPartIds = email.attachments.map((attachment) =>
     addPart({
@@ -264,7 +277,7 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
           !attachment.related &&
           !(attachment.disposition === 'inline' && attachment.contentId),
       ),
-      preview: makePreview(email.text, email.html),
+      preview: makePreview(text, html),
     },
     parts,
     textPartId,

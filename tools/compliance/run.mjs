@@ -137,7 +137,7 @@ function printSummary(files) {
 }
 
 /** The part of an outcome worth recording: everything that is not a plain pass. */
-function toBaseline(files) {
+function toBaseline(files, previous = {}) {
   const baseline = {};
   for (const path of Object.keys(files).sort()) {
     const file = files[path];
@@ -157,6 +157,8 @@ function toBaseline(files) {
             failed: [...file.failed].sort(),
             ...(file.broken ? { broken: true } : {}),
           };
+    // A note says why an entry is being left; it stays for as long as the entry does.
+    if (previous[path]?.note) baseline[path].note = previous[path].note;
   }
   return baseline;
 }
@@ -271,9 +273,15 @@ if (update) {
     console.error('\nThe baseline is only recorded from a full run.');
     process.exit(1);
   }
+  let previous = {};
+  try {
+    previous = JSON.parse(readFileSync(baselinePath, 'utf8'));
+  } catch {
+    // No baseline yet.
+  }
   writeFileSync(
     baselinePath,
-    `${JSON.stringify(toBaseline(files), null, 2)}\n`,
+    `${JSON.stringify(toBaseline(files, previous), null, 2)}\n`,
   );
   console.log(`\nBaseline recorded in ${baselinePath}`);
   process.exit(0);

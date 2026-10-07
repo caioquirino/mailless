@@ -36,6 +36,7 @@ import {
   provisionMailboxes,
 } from './mail/mailbox.js';
 import {
+  IDENTITY_SETTINGS,
   recordDelivery,
   submissionMethods,
   type DeliveryUpdate,
@@ -279,8 +280,21 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     createdIds: new Map(),
     extraResponses: [],
     ...(options.transport ? { transport: options.transport } : {}),
-    identities: async (): Promise<ResolvedIdentity[]> =>
-      ((await options.identities?.(auth)) ?? []).map((identity) => ({
+    identities: async (): Promise<ResolvedIdentity[]> => {
+      const configured = (await options.identities?.(auth)) ?? [];
+      // What the user changed (name, signatures, reply-to) is kept per identity.
+      const settings = new Map(
+        configured.length === 0
+          ? []
+          : (
+              await metadata.get(
+                auth.accountId,
+                IDENTITY_SETTINGS,
+                configured.map((identity) => identity.id),
+              )
+            ).map((record) => [record.id, record.value]),
+      );
+      return configured.map((identity) => ({
         allowedFrom: identity.allowedFrom ?? [],
         id: identity.id,
         name: identity.name ?? '',
@@ -289,8 +303,10 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
         bcc: null,
         textSignature: '',
         htmlSignature: '',
+        ...(settings.get(identity.id) as Partial<ResolvedIdentity> | undefined),
         mayDelete: false,
-      })),
+      }));
+    },
   });
 
   return {

@@ -39,7 +39,8 @@ need two accounts sharing data.
 
 A failure is not always a bug here. Each assertion in the suite cites the text
 it enforces; read that first. Where the suite expects something the RFC leaves
-open, say so next to the entry when deciding to leave it.
+open, add a `note` to the entry in `baseline.json` saying why it is being left;
+`--update` keeps notes for as long as their entry remains.
 
 ## How it is put together
 

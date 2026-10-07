@@ -182,7 +182,8 @@ export function paginate(
     accountId: ctx.auth.accountId,
     queryState,
     canCalculateChanges: false,
-    position: Math.min(position, ids.length),
+    // Past the end there is no first result to give the index of.
+    position: position >= ids.length ? 0 : position,
     ids: ids.slice(position, position + limit),
     ...(args.calculateTotal ? { total: ids.length } : {}),
     ...(limit < requestedLimit ? { limit } : {}),

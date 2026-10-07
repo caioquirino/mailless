@@ -5,3 +5,5 @@
 /.nx/workspace-data
 .nx/self-healing
 pnpm-lock.yaml
+# Written by `pnpm compliance --update`
+tools/compliance/baseline.json

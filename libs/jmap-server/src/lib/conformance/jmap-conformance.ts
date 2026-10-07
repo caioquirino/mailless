@@ -555,6 +555,70 @@ export function describeJmapConformance(
       h = await createHarness(factory);
     });
 
+    it('accepts server-set properties sent back unchanged, and names the ones that differ', async () => {
+      const { created } = await h.call('Mailbox/set', {
+        create: { m: { name: 'Projects' } },
+      });
+      const id = created.m.id;
+      const [mailbox] = (await h.call('Mailbox/get', { ids: [id] })).list;
+
+      // A client may send the whole object back with one thing changed.
+      const renamed = await h.call('Mailbox/set', {
+        update: { [id]: { ...mailbox, name: 'Projects 2026' } },
+      });
+      expect(renamed.updated).toEqual({ [id]: null });
+      expect((await h.call('Mailbox/get', { ids: [id] })).list[0]).toEqual({
+        ...mailbox,
+        name: 'Projects 2026',
+      });
+
+      const refused = await h.call('Mailbox/set', {
+        update: {
+          [id]: {
+            name: 'Not applied',
+            id: `${id}x`,
+            totalEmails: 52,
+            unreadThreads: 52,
+            myRights: {
+              ...mailbox.myRights,
+              mayDelete: false,
+              mayRename: false,
+            },
+            'myRights/maySubmit': false,
+            nonsense: true,
+          },
+        },
+        create: {
+          withId: { name: 'Has an id', id: 'chosen' },
+          sameDefaults: {
+            name: 'Same as the server would set',
+            totalEmails: 0,
+            myRights: mailbox.myRights,
+          },
+        },
+      });
+      expect(refused.notUpdated[id].type).toBe('invalidProperties');
+      expect([...refused.notUpdated[id].properties].sort()).toEqual([
+        'id',
+        'myRights/mayDelete',
+        'myRights/mayRename',
+        'myRights/maySubmit',
+        'nonsense',
+        'totalEmails',
+        'unreadThreads',
+      ]);
+      expect(refused.notCreated).toEqual({
+        withId: expect.objectContaining({
+          type: 'invalidProperties',
+          properties: ['id'],
+        }),
+      });
+      expect(Object.keys(refused.created)).toEqual(['sameDefaults']);
+      expect((await h.call('Mailbox/get', { ids: [id] })).list[0].name).toBe(
+        'Projects 2026',
+      );
+    });
+
     it('creates objects in the order their references need', async () => {
       // The child is listed first; it can only be created after its parent.
       const { created, notCreated } = await h.call('Mailbox/set', {
@@ -1599,6 +1663,36 @@ export function describeJmapConformance(
       expect((await counts(inbox)).totalEmails).toBe(1);
     });
 
+    it('reads the same body text whether or not the message is multipart', async () => {
+      const inbox = await h.mailbox('inbox');
+      const bodies: string[] = [];
+      for (const raw of [
+        'From: a@example.com\r\nSubject: Plain\r\nContent-Type: text/plain\r\n\r\nJust this line.\r\n',
+        'From: a@example.com\r\nSubject: Plain\r\nContent-Type: text/plain\r\n\r\nJust this line.',
+        'From: a@example.com\r\nSubject: Parts\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nJust this line.\r\n--b--\r\n',
+      ]) {
+        const blobId = await h.upload(raw);
+        const { created } = await h.call('Email/import', {
+          emails: { m: { blobId, mailboxIds: { [inbox]: true } } },
+        });
+        const [email] = (
+          await h.call('Email/get', {
+            ids: [created.m.id],
+            properties: ['textBody', 'bodyValues', 'preview'],
+            fetchTextBodyValues: true,
+          })
+        ).list;
+        expect(email.preview).toBe('Just this line.');
+        expect(email.textBody[0].size).toBe(15);
+        bodies.push(email.bodyValues[email.textBody[0].partId].value);
+      }
+      expect(bodies).toEqual([
+        'Just this line.',
+        'Just this line.',
+        'Just this line.',
+      ]);
+    });
+
     describe('Email/query', () => {
       let ids: Record<string, string>;
       beforeEach(async () => {
@@ -1878,6 +1972,10 @@ export function describeJmapConformance(
           await query({ sort: newestFirst, position: -99, limit: 1 }),
         ).toEqual(['third']);
         expect(await query({ sort: newestFirst, position: 10 })).toEqual([]);
+        // Past the end there is nothing, which is not an error.
+        expect(
+          await h.call('Email/query', { sort: newestFirst, position: 10 }),
+        ).toMatchObject({ ids: [], position: 0 });
         expect(await query({ sort: newestFirst, limit: 0 })).toEqual([]);
         expect(
           await query({
@@ -2499,17 +2597,116 @@ export function describeJmapConformance(
         (await h.fail('Identity/changes', { sinceState: 'old' })).type,
       ).toBe('cannotCalculateChanges');
 
+      // Which identities exist is the server's decision.
       const changed = await h.call('Identity/set', {
         create: { n: { email: 'other@example.com' } },
-        update: { me: { name: 'Changed' } },
         destroy: ['team'],
       });
       expect(changed.notCreated.n.type).toBe('forbidden');
-      expect(changed.notUpdated.me.type).toBe('forbidden');
       expect(changed.notDestroyed.team.type).toBe('forbidden');
-      expect((await h.call('Identity/get', { ids: ['me'] })).list[0].name).toBe(
-        'Me Myself',
+      expect(changed.newState).toBe(state);
+    });
+
+    it('lets a user change how an identity presents them, and nothing else', async () => {
+      const read = async (id = 'me') =>
+        (await h.call('Identity/get', { ids: [id] })).list[0];
+      const before = await h.call('Identity/get', {});
+
+      const result = await h.call('Identity/set', {
+        ifInState: before.state,
+        update: {
+          me: {
+            name: 'Me, at work',
+            replyTo: [{ name: 'Replies', email: 'replies@example.com' }],
+            textSignature: 'Regards,\nMe',
+            htmlSignature: '<p>Regards,<br>Me</p>',
+            // Sent back as received, which is allowed.
+            id: 'me',
+            email: 'me@example.com',
+            mayDelete: false,
+          },
+          team: { bcc: [{ email: 'archive@example.com' }] },
+          nope: { name: 'x' },
+        },
+      });
+      expect(result.updated).toEqual({ me: null, team: null });
+      expect(result.notUpdated).toEqual({ nope: { type: 'notFound' } });
+      expect(result.oldState).toBe(before.state);
+      expect(result.newState).not.toBe(before.state);
+      expect(await read()).toEqual({
+        id: 'me',
+        name: 'Me, at work',
+        email: 'me@example.com',
+        replyTo: [{ name: 'Replies', email: 'replies@example.com' }],
+        bcc: null,
+        textSignature: 'Regards,\nMe',
+        htmlSignature: '<p>Regards,<br>Me</p>',
+        mayDelete: false,
+      });
+      expect((await read('team')).bcc).toEqual([
+        { email: 'archive@example.com' },
+      ]);
+      expect((await h.call('Identity/get', {})).state).toBe(result.newState);
+      expect(
+        (await h.fail('Identity/changes', { sinceState: before.state })).type,
+      ).toBe('cannotCalculateChanges');
+
+      // A later change keeps what was set before, and can clear a value.
+      await h.call('Identity/set', {
+        update: { me: { name: 'Me again', replyTo: null } },
+      });
+      expect(await read()).toMatchObject({
+        name: 'Me again',
+        replyTo: null,
+        textSignature: 'Regards,\nMe',
+      });
+
+      // The address, and what may be sent as it, stay as the server set them.
+      for (const [property, value] of [
+        ['email', 'someone-else@example.org'],
+        ['id', 'other'],
+        ['mayDelete', true],
+        ['allowedFrom', ['*@example.org']],
+        ['name', 'Two\r\nLines'],
+        ['name', 7],
+        ['replyTo', [{ email: 'not an address' }]],
+        ['bcc', 'archive@example.com'],
+        ['textSignature', null],
+      ] as Array<[string, Json]>) {
+        const refused = await h.call('Identity/set', {
+          update: { me: { [property]: value } },
+        });
+        expect(refused.notUpdated?.me, property).toEqual({
+          type: 'invalidProperties',
+          properties: [property],
+        });
+      }
+      expect(await read()).toMatchObject({
+        name: 'Me again',
+        email: 'me@example.com',
+      });
+      expect(
+        (
+          await h.fail('Identity/set', {
+            ifInState: before.state,
+            update: { me: { name: 'Late' } },
+          })
+        ).type,
+      ).toBe('stateMismatch');
+
+      // Sending still goes by the address the server allows, whatever the name says.
+      const other = await h.server.handleRequest(
+        {
+          using: USING,
+          methodCalls: [['Identity/get', { accountId: 'acc2' }, 'a']],
+        },
+        { accountId: 'acc2', username: 'other@example.com' },
       );
+      expect(
+        (other.methodResponses[0]?.[1] as Json).list.map(
+          (identity: Json) => identity.name,
+        ),
+      ).toEqual(['Me Myself', '', '']);
     });
 
     it('creates, sends and files a message in one request', async () => {
@@ -2996,6 +3193,17 @@ export function describeJmapConformance(
           },
         ),
       ).toBe(false);
+    });
+
+    it('answers EmailSubmission/queryChanges, without calculating', async () => {
+      const { queryState } = await h.call('EmailSubmission/query', {});
+      expect(
+        (
+          await h.fail('EmailSubmission/queryChanges', {
+            sinceQueryState: queryState,
+          })
+        ).type,
+      ).toBe('cannotCalculateChanges');
     });
 
     it('offers no sending methods when no transport is configured', async () => {

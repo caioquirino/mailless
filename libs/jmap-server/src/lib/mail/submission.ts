@@ -1,12 +1,17 @@
 import {
+  applyPatch,
   GetArgumentsSchema,
   MethodError,
+  PatchError,
   QueryArgumentsSchema,
+  QueryChangesArgumentsSchema,
   SetArgumentsSchema,
   SetFailure,
   type Comparator,
   type DeliveryStatus,
+  type EmailAddress,
   type Identity,
+  type SetError,
 } from '@mailless/jmap-core';
 import { z } from 'zod';
 import {
@@ -75,6 +80,112 @@ const IDENTITY_PROPERTIES = [
   'htmlSignature',
   'mayDelete',
 ];
+
+/** What a user may change about an identity; the rest comes from the server's configuration. */
+export const IDENTITY_SETTINGS = 'IdentitySettings';
+const EDITABLE_IDENTITY_PROPERTIES = [
+  'name',
+  'replyTo',
+  'bcc',
+  'textSignature',
+  'htmlSignature',
+] as const;
+const MAX_SIGNATURE_LENGTH = 20_000;
+
+function isAddressList(value: unknown): boolean {
+  return (
+    value === null ||
+    (Array.isArray(value) &&
+      value.length <= 20 &&
+      value.every(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          Object.keys(item).every((key) => key === 'name' || key === 'email') &&
+          typeof (item as EmailAddress).email === 'string' &&
+          isValidAddress((item as EmailAddress).email) &&
+          ((item as EmailAddress).name === null ||
+            (item as EmailAddress).name === undefined ||
+            (typeof (item as EmailAddress).name === 'string' &&
+              !/[\r\n]/.test((item as EmailAddress).name as string))),
+      ))
+  );
+}
+
+async function updateIdentity(
+  ctx: MethodContext,
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const identity = (await ctx.identities()).find(
+    (candidate) => candidate.id === id,
+  );
+  if (!identity) throw new SetFailure('notFound');
+
+  const { allowedFrom: _allowedFrom, ...current } = identity;
+  let next: Identity;
+  try {
+    next = applyPatch({ ...current }, patch);
+  } catch (error) {
+    if (error instanceof PatchError) {
+      throw new SetFailure('invalidPatch', error.message);
+    }
+    throw error;
+  }
+
+  const refused = Object.keys(next).filter((property) => {
+    const value = (next as unknown as Record<string, unknown>)[property];
+    switch (property) {
+      case 'name':
+        return (
+          typeof value !== 'string' ||
+          value.length > 255 ||
+          /[\r\n]/.test(value)
+        );
+      case 'replyTo':
+      case 'bcc':
+        return !isAddressList(value);
+      case 'textSignature':
+      case 'htmlSignature':
+        return typeof value !== 'string' || value.length > MAX_SIGNATURE_LENGTH;
+      default:
+        // Everything else is fixed, but may be sent back unchanged.
+        return (
+          JSON.stringify(value) !==
+          JSON.stringify(
+            (current as unknown as Record<string, unknown>)[property],
+          )
+        );
+    }
+  });
+  if (refused.length > 0) {
+    throw new SetFailure('invalidProperties', undefined, {
+      properties: refused,
+    });
+  }
+
+  const settings = Object.fromEntries(
+    EDITABLE_IDENTITY_PROPERTIES.map((property) => [property, next[property]]),
+  );
+  await retryOnConflict(async () => {
+    const [record] = await ctx.store.get(
+      ctx.auth.accountId,
+      IDENTITY_SETTINGS,
+      [id],
+    );
+    await ctx.store.commit(ctx.auth.accountId, [
+      record
+        ? {
+            kind: 'update',
+            type: IDENTITY_SETTINGS,
+            id,
+            value: settings,
+            expectedVersion: record.version,
+          }
+        : { kind: 'create', type: IDENTITY_SETTINGS, id, value: settings },
+    ]);
+  });
+}
 
 function identityState(identities: readonly Identity[]): string {
   return fingerprint(JSON.stringify(identities));
@@ -446,33 +557,61 @@ export const submissionMethods: Record<string, MethodHandler> = {
   'Identity/set': async (rawArgs, ctx) => {
     const args = parseArguments(SetArgumentsSchema, rawArgs);
     const accountId = requireAccount(ctx, args.accountId);
-    const state = identityState(await ctx.identities());
-    if (args.ifInState && args.ifInState !== state) {
+    const oldState = identityState(await ctx.identities());
+    if (args.ifInState && args.ifInState !== oldState) {
       throw new MethodError('stateMismatch');
     }
-    const refuse = (keys: string[]) =>
+    const update = Object.entries(args.update ?? {});
+    if (
+      Object.keys(args.create ?? {}).length +
+        update.length +
+        (args.destroy ?? []).length >
+      ctx.limits.maxObjectsInSet
+    ) {
+      throw new MethodError(
+        'requestTooLarge',
+        `At most ${ctx.limits.maxObjectsInSet} objects may be changed in one call`,
+      );
+    }
+    // Which identities exist, and their addresses, is the server's decision.
+    const refuse = (keys: string[], description: string) =>
       keys.length === 0
         ? null
         : Object.fromEntries(
-            keys.map((key) => [
-              key,
-              {
-                type: 'forbidden',
-                description:
-                  'Identities are defined by the server configuration',
-              },
-            ]),
+            keys.map((key) => [key, { type: 'forbidden', description }]),
           );
+
+    const updated: Record<string, null> = {};
+    const notUpdated: Record<string, SetError> = {};
+    for (const [id, patch] of update) {
+      try {
+        if ((args.destroy ?? []).includes(id)) {
+          throw new SetFailure('willDestroy');
+        }
+        await updateIdentity(ctx, id, patch);
+        updated[id] = null;
+      } catch (error) {
+        if (!(error instanceof SetFailure)) throw error;
+        notUpdated[id] = error.error;
+      }
+    }
+
     return {
       accountId,
-      oldState: state,
-      newState: state,
+      oldState,
+      newState: identityState(await ctx.identities()),
       created: null,
-      updated: null,
+      updated: Object.keys(updated).length > 0 ? updated : null,
       destroyed: null,
-      notCreated: refuse(Object.keys(args.create ?? {})),
-      notUpdated: refuse(Object.keys(args.update ?? {})),
-      notDestroyed: refuse(args.destroy ?? []),
+      notCreated: refuse(
+        Object.keys(args.create ?? {}),
+        'The addresses an account may send from are set by the server',
+      ),
+      notUpdated: Object.keys(notUpdated).length > 0 ? notUpdated : null,
+      notDestroyed: refuse(
+        args.destroy ?? [],
+        'This identity cannot be deleted',
+      ),
     };
   },
 
@@ -498,6 +637,12 @@ export const submissionMethods: Record<string, MethodHandler> = {
   'EmailSubmission/changes': async (rawArgs, ctx) => ({
     ...toChangesResponse(await standardChanges(ctx, SUBMISSION, rawArgs)),
   }),
+
+  'EmailSubmission/queryChanges': async (rawArgs, ctx) => {
+    const args = parseArguments(QueryChangesArgumentsSchema, rawArgs);
+    requireAccount(ctx, args.accountId);
+    throw new MethodError('cannotCalculateChanges');
+  },
 
   'EmailSubmission/query': async (rawArgs, ctx) => {
     const args = parseArguments(QueryArgumentsSchema, rawArgs);

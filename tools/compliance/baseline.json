@@ -169,21 +169,11 @@
       "order of parts is correct and includes expected parts"
     ]
   },
-  "t/Email/get/fetch-all-body-values.t": {
-    "status": "fail",
-    "failed": ["explicit true fetchAllBodyValues supplied"]
-  },
-  "t/Email/get/fetch-html-body-values.t": {
-    "status": "fail",
-    "failed": ["explicit true fetchHTMLBodyValues supplied"]
-  },
-  "t/Email/get/fetch-text-body-values.t": {
-    "status": "fail",
-    "failed": ["explicit true fetchTextBodyValues supplied"]
-  },
   "t/Email/get/header-header-field-name.t": {
     "status": "fail",
-    "failed": ["asDate"]
+    "failed": [
+      "asDate"
+    ]
   },
   "t/Email/get/html-body.t": {
     "status": "fail",
@@ -203,19 +193,23 @@
   },
   "t/Email/import/bad-values.t": {
     "status": "fail",
-    "failed": ["EmailImport object -> required fields", "blobId"]
+    "failed": [
+      "EmailImport object -> required fields",
+      "blobId"
+    ]
   },
   "t/Email/import/good-imports.t": {
     "status": "fail",
     "failed": [
       "multiple mailboxes",
-      "single mailbox import, all values",
       "single mailbox import, default values"
     ]
   },
   "t/Email/import/one-fails-another-succeeds.t": {
     "status": "fail",
-    "failed": ["email looks good"]
+    "failed": [
+      "email looks good"
+    ]
   },
   "t/Email/query/filtering.t": {
     "status": "fail",
@@ -261,15 +255,21 @@
   },
   "t/Email/set/create/body-structure.t": {
     "status": "fail",
-    "failed": ["get looks good", "unnamed"]
+    "failed": [
+      "get looks good"
+    ]
   },
   "t/Email/set/create/content-transfer-encoding-not-allowed.t": {
     "status": "fail",
-    "failed": ["cannot specify Content-Transfer-Encoding"]
+    "failed": [
+      "cannot specify Content-Transfer-Encoding"
+    ]
   },
   "t/Email/set/create/email-body-value-restrictions.t": {
     "status": "fail",
-    "failed": ["explicit true"]
+    "failed": [
+      "explicit true"
+    ]
   },
   "t/Email/set/create/header-header-field-name.t": {
     "status": "fail",
@@ -284,47 +284,57 @@
   },
   "t/Email/set/create/headers-property-forbidden-in-body-structure.t": {
     "status": "fail",
-    "failed": ["got invalidProperties error"]
+    "failed": [
+      "got invalidProperties error"
+    ]
   },
   "t/Email/set/create/html-body-using-blob-id.t": {
     "status": "fail",
-    "failed": ["get looks good", "unnamed"]
+    "failed": [
+      "get looks good"
+    ]
   },
   "t/Email/set/create/html-body.t": {
     "status": "fail",
-    "failed": ["get looks good", "unnamed"]
+    "failed": [
+      "get looks good"
+    ]
   },
   "t/Email/set/create/no-duplicate-header-representations.t": {
     "status": "fail",
-    "failed": ["sanity check"]
+    "failed": [
+      "sanity check"
+    ]
   },
   "t/Email/set/create/no-duplicate-structural-representations.t": {
     "status": "fail",
-    "failed": ["got invalidProperties error"]
+    "failed": [
+      "got invalidProperties error"
+    ]
   },
   "t/Email/set/create/no-size-with-partid.t": {
     "status": "fail",
-    "failed": ["cannot have size with partId"]
+    "failed": [
+      "cannot have size with partId"
+    ]
   },
   "t/Email/set/create/text-body-using-blob-id.t": {
     "status": "fail",
-    "failed": ["body value content matches original blob", "get looks good"]
+    "failed": [
+      "get looks good"
+    ]
   },
   "t/Email/set/create/text-body.t": {
     "status": "fail",
-    "failed": ["get looks good", "unnamed"]
+    "failed": [
+      "get looks good"
+    ]
   },
   "t/Email/set/if-in-state.t": {
     "status": "fail",
-    "failed": ["got current state"]
-  },
-  "t/EmailSubmission/changes/basic.t": {
-    "status": "fail",
-    "failed": ["no changes from current state"]
-  },
-  "t/Identity/set/basic.t": {
-    "status": "fail",
-    "failed": ["update name"]
+    "failed": [
+      "got current state"
+    ]
   },
   "t/MDN/foreign-account.t": {
     "status": "skip",
@@ -336,21 +346,26 @@
   },
   "t/Mailbox/get/limiting-properties-in-response.t": {
     "status": "fail",
-    "failed": ["properties => null gives us all properties"]
+    "failed": [
+      "properties => null gives us all properties"
+    ],
+    "note": "The suite expects isSubscribed to be false on mailboxes the user owns. RFC 8621 section 2 says it SHOULD default to true for mailboxes the user creates, which is what this server does."
   },
   "t/Mailbox/get/some-entities.t": {
     "status": "fail",
-    "failed": ["Limit by id", "No arguments", "null ids"]
+    "failed": [
+      "Limit by id",
+      "No arguments",
+      "null ids"
+    ],
+    "note": "The suite expects isSubscribed to be false on mailboxes the user owns. RFC 8621 section 2 says it SHOULD default to true for mailboxes the user creates, which is what this server does."
   },
   "t/Mailbox/query/filtering-with-filter-operators.t": {
     "status": "fail",
-    "failed": ["OR - two conditions, diff conds"]
-  },
-  "t/Mailbox/query/sorting-and-limiting.t": {
-    "status": "fail",
     "failed": [
-      "sort by name, explicit ascending order, explicit position too high"
-    ]
+      "OR - two conditions, diff conds"
+    ],
+    "note": "The suite expects names sorted byte by byte, capitals first. RFC 8620 section 5.5 leaves the default collation to the server; this one ignores case, so 'aaa' sorts before 'Archive'."
   },
   "t/Mailbox/queryChanges/basic.t": {
     "status": "fail",
@@ -359,17 +374,6 @@
       "created mailbox appears in added",
       "destroyed mailbox appears in removed",
       "no changes"
-    ]
-  },
-  "t/Mailbox/set/create/immutable-fields.t": {
-    "status": "fail",
-    "failed": ["immutable properties with wrong values is not okay"]
-  },
-  "t/Mailbox/set/update/basic.t": {
-    "status": "fail",
-    "failed": [
-      "can hand in immutable fields if they are same",
-      "cannot change immutable fields"
     ]
   },
   "t/Principal/foreign-account.t": {
@@ -407,13 +411,5 @@
   "t/VacationResponse/set/basic.t": {
     "status": "skip",
     "reason": "server does not support urn:ietf:params:jmap:vacationresponse"
-  },
-  "t/getMessages-htmlBody.t": {
-    "status": "fail",
-    "failed": ["text body is correct"]
-  },
-  "t/previews.t": {
-    "status": "fail",
-    "failed": ["getMessageList", "getMessages"]
   }
 }

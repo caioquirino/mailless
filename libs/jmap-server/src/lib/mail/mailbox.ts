@@ -3,7 +3,6 @@ import {
   GetArgumentsSchema,
   MethodError,
   PatchError,
-  patchedProperties,
   QueryArgumentsSchema,
   QueryChangesArgumentsSchema,
   SetArgumentsSchema,
@@ -160,20 +159,62 @@ function validate(
   }
 }
 
-function rejectUnknownProperties(properties: string[]): void {
-  const unknown = properties.filter(
-    (property) => !(MUTABLE_PROPERTIES as readonly string[]).includes(property),
-  );
-  if (unknown.length > 0) {
-    throw invalid(unknown, 'These properties cannot be set by the client');
+/**
+ * Takes the properties only the server sets out of what a client sent. A
+ * client may send them back as it received them (RFC 8620 §5.3), so values
+ * equal to the server's own are dropped; anything else is refused, naming each
+ * property, or each right within myRights, that differs.
+ */
+function withoutServerSet(
+  input: Record<string, unknown>,
+  serverSet: Record<string, unknown>,
+): Record<string, unknown> {
+  const rest: Record<string, unknown> = {};
+  const refused: string[] = [];
+  for (const [path, value] of Object.entries(input)) {
+    const [property, ...deeper] = path.split('/') as [string, ...string[]];
+    if ((MUTABLE_PROPERTIES as readonly string[]).includes(property)) {
+      rest[path] = value;
+    } else if (!Object.prototype.hasOwnProperty.call(serverSet, property)) {
+      refused.push(path);
+    } else if (property === 'myRights') {
+      const rights = serverSet['myRights'] as Record<string, unknown>;
+      if (deeper.length === 1) {
+        if (rights[deeper[0] as string] !== value) refused.push(path);
+      } else if (
+        deeper.length > 1 ||
+        typeof value !== 'object' ||
+        value === null ||
+        Array.isArray(value)
+      ) {
+        refused.push(path);
+      } else {
+        for (const [right, allowed] of Object.entries(value)) {
+          if (rights[right] !== allowed) refused.push(`myRights/${right}`);
+        }
+      }
+    } else if (deeper.length > 0 || serverSet[property] !== value) {
+      refused.push(path);
+    }
   }
+  if (refused.length > 0) {
+    throw invalid(refused, 'These properties cannot be set by the client');
+  }
+  return rest;
 }
 
 async function createMailbox(
   ctx: MethodContext,
   input: Record<string, unknown>,
 ): Promise<{ id: string } & Record<string, unknown>> {
-  rejectUnknownProperties(Object.keys(input));
+  // The id is not known to the client beforehand, so any id given is wrong.
+  input = withoutServerSet(input, {
+    totalEmails: 0,
+    unreadEmails: 0,
+    totalThreads: 0,
+    unreadThreads: 0,
+    myRights: OWNER_RIGHTS,
+  });
 
   let parentId: unknown = input['parentId'] ?? null;
   if (typeof parentId === 'string') {
@@ -231,12 +272,18 @@ async function updateMailbox(
   id: string,
   patch: Record<string, unknown>,
 ): Promise<null> {
-  rejectUnknownProperties(patchedProperties(patch));
-
   await retryOnConflict(async () => {
     const all = await listMailboxes(ctx);
     const record = all.find((candidate) => candidate.id === id);
     if (!record) throw new SetFailure('notFound');
+    const mutablePatch = withoutServerSet(patch, {
+      id,
+      totalEmails: record.value.totalEmails,
+      unreadEmails: record.value.unreadEmails,
+      totalThreads: record.value.totalThreads,
+      unreadThreads: record.value.unreadThreads,
+      myRights: OWNER_RIGHTS,
+    });
 
     const current: MutableMailbox = {
       name: record.value.name,
@@ -247,7 +294,7 @@ async function updateMailbox(
     };
     let next: MutableMailbox;
     try {
-      next = applyPatch(current, patch);
+      next = applyPatch(current, mutablePatch);
     } catch (error) {
       if (error instanceof PatchError) {
         throw new SetFailure('invalidPatch', error.message);
