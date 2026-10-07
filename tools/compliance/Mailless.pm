@@ -35,6 +35,22 @@ sub pristine_account {
   return $self->_account("jt-$STARTTIME-$$-" . $USERNUM++);
 }
 
+# Two accounts whose users may each use the other's: signing in as
+# "one+other" is the user of "one", with "other" shared with them.
+sub pool_account_pair {
+  my ($self) = @_;
+  my $first  = "jt-$STARTTIME-$$-" . $USERNUM++;
+  my $second = "jt-$STARTTIME-$$-" . $USERNUM++;
+  return (
+    JMAP::TestSuite::Account::Mailless->new({
+      server => $self, accountId => $first, username => "$first+$second",
+    }),
+    JMAP::TestSuite::Account::Mailless->new({
+      server => $self, accountId => $second, username => "$second+$first",
+    }),
+  );
+}
+
 package JMAP::TestSuite::Account::Mailless {
   use Moose;
   with 'JMAP::TestSuite::Account';
@@ -59,7 +75,7 @@ package JMAP::TestSuite::Account::Mailless {
       . $res->status_line . "\n" unless $res->is_success;
     my $session = decode_json($res->decoded_content);
 
-    my ($account_id) = values %{ $session->{primaryAccounts} // {} };
+    my ($account_id) = $session->{primaryAccounts}{'urn:ietf:params:jmap:mail'};
     die "The session of " . $self->username . " is for account "
       . ($account_id // '(none)') . ", expected " . $self->accountId . "\n"
       unless defined $account_id && $account_id eq $self->accountId;

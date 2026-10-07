@@ -200,6 +200,22 @@ fetches what changed.
   in `/aws/lambda/<name>-push`. `sent` staying at 0 means no app has a verified
   subscription.
 
+### Shared accounts
+
+An account can be used by more than its own user, which is how a shared
+mailbox works. In `terraform.tfvars`:
+
+```hcl
+mailboxes       = { "ann@example.com" = "ann", "bob@example.com" = "bob", "team@example.com" = "team" }
+shared_accounts = { team = { members = ["ann", "bob"] } }
+```
+
+Ann and Bob each sign in as themselves and see the team mailbox next to their
+own in a mail app that supports several accounts. `members` may read, file,
+delete and send as the team's addresses; `readers` may only read. Mail can be
+copied or moved between a user's own account and a shared one. New mail in a
+shared account does not trigger push notifications for its members.
+
 ### Vacation response
 
 A mail app that supports it can turn on an out-of-office reply for the

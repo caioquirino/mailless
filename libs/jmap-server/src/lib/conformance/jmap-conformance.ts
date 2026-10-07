@@ -4946,7 +4946,7 @@ export function describeJmapConformance(
       expect(email['header:From:asRaw']).toContain('alice@example.com');
     });
 
-    it('has no second account to copy to or from', async () => {
+    it('has no second account to copy to or from, unless one is shared', async () => {
       const blobId = await h.upload('bytes');
       const { id } = await h.deliver(inbox);
       const copyEmail = (fromAccountId: string, accountId: string) =>
@@ -4970,6 +4970,409 @@ export function describeJmapConformance(
         );
       }
       expect((await h.call('Email/query', {})).ids).toEqual([id]);
+    });
+  });
+
+  describe(`${name}: shared accounts`, () => {
+    let h: Harness;
+    let inbox: string;
+    let teamInbox: string;
+    // A user with their own account, a team mailbox, and an archive they may only read.
+    const USER = {
+      ...AUTH,
+      sharedAccounts: {
+        team: { name: 'Team mailbox' },
+        records: { isReadOnly: true },
+      },
+    };
+    const TEAM = { accountId: 'team', username: 'team@example.com' };
+    const RECORDS = { accountId: 'records', username: 'records@example.com' };
+
+    /** Calls as the user, in whichever account each call names. */
+    const as = async (
+      who: Json,
+      calls: Array<[string, Json]>,
+    ): Promise<Json[]> =>
+      (
+        await h.server.handleRequest(
+          {
+            using: USING,
+            methodCalls: calls.map(([method, args], index) => [
+              method,
+              args,
+              `c${index}`,
+            ]),
+          },
+          who,
+        )
+      ).methodResponses;
+    const one = async (accountId: string, method: string, args: Json = {}) => {
+      const [response] = await as(USER, [[method, { accountId, ...args }]]);
+      expect(response[0], JSON.stringify(response[1])).toBe(method);
+      return response[1];
+    };
+    const mailboxOf = async (accountId: string, role: string) =>
+      (await one(accountId, 'Mailbox/query', { filter: { role } })).ids[0];
+    const deliverTo = async (who: Json, subject: string) =>
+      (
+        await h.server.importMessage(
+          who,
+          encoder.encode(buildMessage({ subject })),
+          { mailboxRole: 'inbox' },
+        )
+      ).id;
+
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      await h.server.provisionAccount(TEAM);
+      await h.server.provisionAccount(RECORDS);
+      inbox = await h.mailbox('inbox');
+      teamInbox = await mailboxOf('team', 'inbox');
+    });
+
+    it('lists the accounts a user may use in their session', () => {
+      const session = h.server.getSession(USER);
+      expect(session.accounts).toMatchObject({
+        [AUTH.accountId]: {
+          name: AUTH.username,
+          isPersonal: true,
+          isReadOnly: false,
+        },
+        team: { name: 'Team mailbox', isPersonal: false, isReadOnly: false },
+        records: { name: 'records', isPersonal: false, isReadOnly: true },
+      });
+      expect(Object.keys(session.accounts)).toHaveLength(3);
+      expect(
+        Object.keys(session.accounts['team']?.accountCapabilities ?? {}),
+      ).toContain(CAPABILITY_MAIL);
+      // The user's own account stays the one used by default.
+      expect(session.primaryAccounts[CAPABILITY_MAIL]).toBe(AUTH.accountId);
+      // Someone without the shared accounts sees a different session.
+      const alone = h.server.getSession(AUTH);
+      expect(Object.keys(alone.accounts)).toEqual([AUTH.accountId]);
+      expect(alone.state).not.toBe(session.state);
+    });
+
+    it('runs each call in the account it names, and keeps accounts apart', async () => {
+      const own = await deliverTo(AUTH, 'Mine');
+      const shared = await deliverTo(TEAM, 'Ours');
+
+      const responses = await as(USER, [
+        ['Email/query', { accountId: AUTH.accountId }],
+        ['Email/query', { accountId: 'team' }],
+        [
+          'Email/get',
+          { accountId: 'team', ids: [own, shared], properties: ['subject'] },
+        ],
+        [
+          'Mailbox/set',
+          { accountId: 'team', create: { m: { name: 'Projects' } } },
+        ],
+        ['Email/query', { accountId: 'nobody' }],
+      ]);
+      expect(responses[0][1].ids).toEqual([own]);
+      expect(responses[1][1]).toMatchObject({
+        accountId: 'team',
+        ids: [shared],
+      });
+      // An id from the user's own account means nothing in the shared one.
+      expect(responses[2][1]).toMatchObject({
+        list: [{ id: shared, subject: 'Ours' }],
+        notFound: [own],
+      });
+      expect(responses[3][1].created.m.id).toEqual(expect.any(String));
+      expect(responses[4]).toEqual([
+        'error',
+        { type: 'accountNotFound' },
+        'c4',
+      ]);
+      // The new mailbox is the team's, not the user's.
+      expect(
+        (await one('team', 'Mailbox/query', { filter: { name: 'Projects' } }))
+          .ids,
+      ).toHaveLength(1);
+      expect(
+        (await h.call('Mailbox/query', { filter: { name: 'Projects' } })).ids,
+      ).toHaveLength(0);
+
+      // Without the share, the team's account does not exist for this user.
+      expect(await as(AUTH, [['Email/query', { accountId: 'team' }]])).toEqual([
+        ['error', { type: 'accountNotFound' }, 'c0'],
+      ]);
+      // And the share goes one way: the team's own user does not get the user's account.
+      expect(
+        await as(TEAM, [['Email/query', { accountId: AUTH.accountId }]]),
+      ).toEqual([['error', { type: 'accountNotFound' }, 'c0']]);
+    });
+
+    it('lets a user read an account shared read-only, and change nothing in it', async () => {
+      const id = await deliverTo(RECORDS, 'Kept');
+      const recordsInbox = await mailboxOf('records', 'inbox');
+      expect(
+        (
+          await one('records', 'Email/get', {
+            ids: [id],
+            properties: ['subject'],
+          })
+        ).list[0].subject,
+      ).toBe('Kept');
+      expect(
+        (await one('records', 'Email/query', { filter: { text: 'kept' } })).ids,
+      ).toEqual([id]);
+
+      const blobId = await h.upload(buildMessage({ subject: 'New' }));
+      const refused = await as(USER, [
+        [
+          'Email/set',
+          {
+            accountId: 'records',
+            update: { [id]: { 'keywords/$seen': true } },
+          },
+        ],
+        ['Email/set', { accountId: 'records', destroy: [id] }],
+        [
+          'Mailbox/set',
+          { accountId: 'records', create: { m: { name: 'New' } } },
+        ],
+        [
+          'Email/copy',
+          {
+            fromAccountId: AUTH.accountId,
+            accountId: 'records',
+            create: { c: { id: 'x', mailboxIds: { [recordsInbox]: true } } },
+          },
+        ],
+        [
+          'Blob/copy',
+          {
+            fromAccountId: AUTH.accountId,
+            accountId: 'records',
+            blobIds: [blobId],
+          },
+        ],
+        [
+          'VacationResponse/set',
+          { accountId: 'records', update: { singleton: { isEnabled: true } } },
+        ],
+      ]);
+      // The first two fail per object, which is still a refusal; nothing was changed.
+      expect(
+        refused.map((response: Json) => response[1].type ?? 'ok'),
+      ).not.toContain('ok');
+      for (const response of refused) {
+        expect(response[1].type, JSON.stringify(response)).toBe(
+          'accountReadOnly',
+        );
+      }
+      await expect(
+        h.server.upload(USER, 'records', encoder.encode('x'), 'text/plain'),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(
+        (
+          await one('records', 'Email/get', {
+            ids: [id],
+            properties: ['keywords'],
+          })
+        ).list[0].keywords,
+      ).toEqual({});
+      expect((await one('records', 'Mailbox/query', {})).ids).toHaveLength(6);
+    });
+
+    it('copies emails between accounts, and can remove the original', async () => {
+      const blob = await h.upload(
+        buildMessage({ subject: 'For the team', text: 'Shared knowledge' }),
+      );
+      const { created: imported } = await h.call('Email/import', {
+        emails: {
+          m: {
+            blobId: blob,
+            mailboxIds: { [inbox]: true },
+            keywords: { $flagged: true },
+            receivedAt: '2026-09-01T08:00:00Z',
+          },
+        },
+      });
+      const original = imported.m.id;
+      const teamState = (await one('team', 'Email/get', { ids: [] })).state;
+      const ownState = (await h.call('Email/get', { ids: [] })).state;
+
+      const copy = await one('team', 'Email/copy', {
+        fromAccountId: AUTH.accountId,
+        ifInState: teamState,
+        ifFromInState: ownState,
+        create: {
+          kept: { id: original, mailboxIds: { [teamInbox]: true } },
+          changed: {
+            id: original,
+            mailboxIds: { [teamInbox]: true },
+            keywords: { $seen: true },
+            receivedAt: '2026-10-01T08:00:00Z',
+          },
+          missing: { id: 'nope', mailboxIds: { [teamInbox]: true } },
+          wrongBox: { id: original, mailboxIds: { [inbox]: true } },
+          extra: {
+            id: original,
+            mailboxIds: { [teamInbox]: true },
+            subject: 'x',
+          },
+        },
+      });
+      expect(copy).toMatchObject({
+        fromAccountId: AUTH.accountId,
+        accountId: 'team',
+        oldState: teamState,
+      });
+      expect(copy.newState).not.toBe(teamState);
+      expect(Object.keys(copy.created).sort()).toEqual(['changed', 'kept']);
+      expect(Object.keys(copy.created.kept).sort()).toEqual([
+        'blobId',
+        'id',
+        'size',
+        'threadId',
+      ]);
+      expect(copy.notCreated.missing).toEqual({ type: 'notFound' });
+      // A mailbox of the wrong account is not a mailbox of this one.
+      expect(copy.notCreated.wrongBox).toMatchObject({
+        type: 'invalidProperties',
+        properties: ['mailboxIds'],
+      });
+      expect(copy.notCreated.extra).toMatchObject({
+        type: 'invalidProperties',
+        properties: ['subject'],
+      });
+
+      const { list } = await one('team', 'Email/get', {
+        ids: [copy.created.kept.id, copy.created.changed.id],
+        properties: [
+          'subject',
+          'keywords',
+          'receivedAt',
+          'mailboxIds',
+          'preview',
+        ],
+      });
+      // Keywords and the time of arrival come from the original unless given.
+      expect(list).toEqual([
+        {
+          id: copy.created.kept.id,
+          subject: 'For the team',
+          keywords: { $flagged: true },
+          receivedAt: '2026-09-01T08:00:00Z',
+          mailboxIds: { [teamInbox]: true },
+          preview: 'Shared knowledge',
+        },
+        {
+          id: copy.created.changed.id,
+          subject: 'For the team',
+          keywords: { $seen: true },
+          receivedAt: '2026-10-01T08:00:00Z',
+          mailboxIds: { [teamInbox]: true },
+          preview: 'Shared knowledge',
+        },
+      ]);
+      // The copy is searchable where it landed, and the original is untouched.
+      expect(
+        (await one('team', 'Email/query', { filter: { body: 'knowledge' } }))
+          .ids,
+      ).toHaveLength(2);
+      expect((await h.call('Email/query', {})).ids).toEqual([original]);
+
+      // Moving: copy back to the user's own account and destroy where it came from.
+      const responses = await as(USER, [
+        [
+          'Email/copy',
+          {
+            fromAccountId: 'team',
+            accountId: AUTH.accountId,
+            create: {
+              back: { id: copy.created.kept.id, mailboxIds: { [inbox]: true } },
+              gone: { id: 'nope', mailboxIds: { [inbox]: true } },
+            },
+            onSuccessDestroyOriginal: true,
+          },
+        ],
+        // A later call can refer to what the copy created.
+        [
+          'Email/get',
+          {
+            accountId: AUTH.accountId,
+            ids: ['#back'],
+            properties: ['subject'],
+          },
+        ],
+      ]);
+      expect(
+        responses.map((response: Json) => [response[0], response[2]]),
+      ).toEqual([
+        ['Email/copy', 'c0'],
+        ['Email/set', 'c0'],
+        ['Email/get', 'c1'],
+      ]);
+      expect(Object.keys(responses[0][1].created)).toEqual(['back']);
+      expect(responses[1][1]).toMatchObject({
+        accountId: 'team',
+        destroyed: [copy.created.kept.id],
+      });
+      expect((await one('team', 'Email/query', {})).ids).toEqual([
+        copy.created.changed.id,
+      ]);
+      expect((await h.call('Email/query', {})).ids).toHaveLength(2);
+
+      expect(
+        (
+          await as(USER, [
+            [
+              'Email/copy',
+              {
+                fromAccountId: AUTH.accountId,
+                accountId: 'team',
+                ifInState: teamState,
+                create: {},
+              },
+            ],
+          ])
+        )[0][1],
+      ).toEqual({ type: 'stateMismatch' });
+    });
+
+    it('copies blobs between accounts, and serves them from the account they are in', async () => {
+      const blobId = await h.upload(buildMessage({ subject: 'Portable' }));
+      const result = await one('team', 'Blob/copy', {
+        fromAccountId: AUTH.accountId,
+        blobIds: [blobId, 'missing'],
+      });
+      expect(result).toMatchObject({
+        fromAccountId: AUTH.accountId,
+        accountId: 'team',
+        copied: { [blobId]: expect.any(String) },
+        notCopied: { missing: { type: 'notFound' } },
+      });
+      const copy = result.copied[blobId];
+      expect(copy).not.toBe(blobId);
+
+      // The copy can be used in the account it was copied to, and only there.
+      const imported = await one('team', 'Email/import', {
+        emails: { m: { blobId: copy, mailboxIds: { [teamInbox]: true } } },
+      });
+      expect(imported.created.m.id).toEqual(expect.any(String));
+      expect(await h.server.download(USER, 'team', copy)).not.toBeNull();
+      expect(await h.server.download(USER, AUTH.accountId, copy)).toBeNull();
+      expect(await h.server.download(AUTH, 'team', copy)).toBeNull();
+
+      // Uploading straight into a shared account works the same way.
+      const uploaded = await h.server.upload(
+        USER,
+        'team',
+        encoder.encode('for the team'),
+        'text/plain',
+      );
+      expect(uploaded.accountId).toBe('team');
+      expect(
+        await h.server.download(USER, 'team', uploaded.blobId),
+      ).not.toBeNull();
+      await expect(
+        h.server.upload(AUTH, 'team', encoder.encode('x'), 'text/plain'),
+      ).rejects.toMatchObject({ status: 404 });
     });
   });
 

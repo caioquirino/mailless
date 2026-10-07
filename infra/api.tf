@@ -127,6 +127,7 @@ resource "aws_lambda_function" "api" {
         # Decides which addresses each account may send from.
         MAILBOXES         = jsonencode(var.mailboxes)
         ACCOUNT_NAMES     = jsonencode(var.account_names)
+        ACCOUNT_SHARES    = jsonencode(var.shared_accounts)
         CONFIGURATION_SET = aws_sesv2_configuration_set.main.configuration_set_name
         # "false" makes mail clients use app passwords; the account password then only works for tokens.
         ALLOW_PASSWORD_SIGN_IN = tostring(var.allow_password_sign_in)

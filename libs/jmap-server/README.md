@@ -111,7 +111,7 @@ time of use at most once an hour.
 | `PushSubscription/get`, `/set`                                               | With the `push` option; see [Push](#push). Without it, there are no subscriptions and none can be made.                                                                                                                                    |
 | `Mailbox/queryChanges`, `Email/queryChanges`, `EmailSubmission/queryChanges` | Calculated from the change log, so a client can bring a cached result list up to date instead of fetching it again. Everything that changed is reported as removed and, if still a result, added back at its place, which the spec allows. |
 | `VacationResponse/get`, `/set`                                               | Offered when the server can send; see [Vacation response](#vacation-response).                                                                                                                                                             |
-| `Email/copy`, `Blob/copy`                                                    | Answer with the errors the spec defines: a user has one account, so there is never a second one to copy between.                                                                                                                           |
+| `Email/copy`, `Blob/copy`                                                    | Between two accounts the user may use; see [Shared accounts](#shared-accounts). With `onSuccessDestroyOriginal`, a copy is a move.                                                                                                         |
 
 Also implemented: result references, creation-id references across calls,
 `ifInState`, `maxChanges` paging, request and object limits, and mailbox
@@ -224,6 +224,29 @@ personal mailboxes. Emails stored before search existed are caught up on by
 the first search that covers them. Only about the first 60,000 characters of a
 message's text are searchable.
 
+### Shared accounts
+
+A user has one account of their own. The host may give them others, such as a
+mailbox a team shares, by listing them in what `authenticate` returns:
+
+```ts
+const auth = {
+  accountId: 'ann',
+  username: 'ann@example.com',
+  sharedAccounts: {
+    team: { name: 'Team mailbox' },
+    records: { isReadOnly: true },
+  },
+};
+```
+
+The accounts appear in the session, and any method call that names one in
+`accountId` runs there: its mailboxes, its mail, its identities. An account
+not listed does not exist as far as that user can tell. In a read-only account
+every method that changes something answers `accountReadOnly`, as does an
+upload. Push subscriptions are told about changes to the user's own account
+only.
+
 ### Vacation response
 
 With a `transport`, the server offers the vacation response capability: one
@@ -245,8 +268,6 @@ mail from being delivered; `onAutoReply` is told what happened.
 
 - Delayed sending and cancelling: messages are handed over at once, so
   `undoStatus` is always `final`.
-- Copying between accounts: there is no sharing of accounts, so `Email/copy`
-  and `Blob/copy` have nothing to copy between.
 - Push over EventSource or WebSocket; push subscriptions are supported.
 
 ### Known simplifications

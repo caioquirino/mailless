@@ -16,6 +16,7 @@ import {
   type Comparator,
   type EmailAddress,
   type EmailHeader,
+  type SetError,
   type SetResponse,
 } from '@mailless/jmap-core';
 import { z } from 'zod';
@@ -1500,7 +1501,106 @@ export const emailMethods: Record<string, MethodHandler> = {
 
   'Email/copy': async (rawArgs, ctx) => {
     const args = parseArguments(EmailCopyArgumentsSchema, rawArgs);
-    return requireCopyAccounts(ctx, args.fromAccountId, args.accountId);
+    const { from, to } = requireCopyAccounts(
+      ctx,
+      args.fromAccountId,
+      args.accountId,
+    );
+    // Checked before anything is copied: a move must not end as a copy.
+    if (args.onSuccessDestroyOriginal && from.isReadOnly) {
+      throw new MethodError(
+        'accountReadOnly',
+        'The originals cannot be destroyed: their account is read-only',
+      );
+    }
+    const create = Object.entries(args.create);
+    if (create.length > ctx.limits.maxObjectsInSet) {
+      throw new MethodError(
+        'requestTooLarge',
+        `At most ${ctx.limits.maxObjectsInSet} emails may be copied in one call`,
+      );
+    }
+    const oldState = await to.store.getState(args.accountId, EMAIL);
+    if (
+      (args.ifInState !== null &&
+        args.ifInState !== undefined &&
+        args.ifInState !== oldState) ||
+      (args.ifFromInState !== null &&
+        args.ifFromInState !== undefined &&
+        args.ifFromInState !==
+          (await from.store.getState(args.fromAccountId, EMAIL)))
+    ) {
+      throw new MethodError('stateMismatch');
+    }
+
+    const created: Record<string, ImportedEmail> = {};
+    const notCreated: Record<string, SetError> = {};
+    const copiedFrom: string[] = [];
+    for (const [creationId, input] of create) {
+      try {
+        const unknown = Object.keys(input).filter(
+          (property) =>
+            !['id', 'mailboxIds', 'keywords', 'receivedAt'].includes(property),
+        );
+        if (unknown.length > 0) {
+          throw invalid(unknown, 'These properties cannot be set on a copy');
+        }
+        if (typeof input['id'] !== 'string') {
+          throw invalid(['id'], 'id must be the id of the email to copy');
+        }
+        if (
+          input['receivedAt'] !== undefined &&
+          !UTCDateSchema.safeParse(input['receivedAt']).success
+        ) {
+          throw invalid(['receivedAt'], 'receivedAt must be a UTC date');
+        }
+        const source = await getEmail(from, input['id']);
+        const raw = source
+          ? await from.blobs.get(args.fromAccountId, source.value.blobId)
+          : null;
+        if (!source || !raw) throw new SetFailure('notFound');
+
+        // The copy is the same message; what is not given comes from the original.
+        created[creationId] = await importMessage(to, raw, {
+          mailboxIds: (input['mailboxIds'] ?? {}) as Record<string, true>,
+          keywords: (input['keywords'] ?? source.value.keywords) as Record<
+            string,
+            true
+          >,
+          receivedAt:
+            (input['receivedAt'] as string | undefined) ??
+            source.value.receivedAt,
+        });
+        to.createdIds.set(creationId, created[creationId].id);
+        copiedFrom.push(source.id);
+      } catch (error) {
+        if (!(error instanceof SetFailure)) throw error;
+        notCreated[creationId] = error.error;
+      }
+    }
+
+    if (args.onSuccessDestroyOriginal && copiedFrom.length > 0) {
+      // Reported as the Email/set it is, after the copy's own response.
+      ctx.extraResponses.push([
+        'Email/set',
+        {
+          ...(await runEmailSet(from, {
+            accountId: args.fromAccountId,
+            ifInState: args.destroyFromIfInState,
+            destroy: copiedFrom,
+          })),
+        },
+      ]);
+    }
+
+    return {
+      fromAccountId: args.fromAccountId,
+      accountId: args.accountId,
+      oldState,
+      newState: await to.store.getState(args.accountId, EMAIL),
+      created: Object.keys(created).length > 0 ? created : null,
+      notCreated: Object.keys(notCreated).length > 0 ? notCreated : null,
+    };
   },
 
   'Email/queryChanges': async (rawArgs, ctx) => {

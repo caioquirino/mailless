@@ -111,6 +111,7 @@ variables {
 
   allow_password_sign_in = true
   account_names          = { me = "Me Myself" }
+  shared_accounts        = {}
 }
 
 run "defaults" {
@@ -542,6 +543,41 @@ run "push_notifications" {
     condition     = length(aws_lambda_function.push.vpc_config) == 0
     error_message = "The push function must stay outside any VPC: it calls push services named by clients and must not be able to reach private addresses."
   }
+}
+
+run "accounts_can_be_shared" {
+  command = plan
+
+  variables {
+    shared_accounts = { catchall = { members = ["me"] } }
+  }
+
+  assert {
+    condition = jsondecode(aws_lambda_function.api.environment[0].variables["ACCOUNT_SHARES"]) == {
+      catchall = { members = ["me"], readers = [] }
+    }
+    error_message = "The API must be told which accounts are shared, and with whom."
+  }
+}
+
+run "rejects_sharing_with_unknown_accounts" {
+  command = plan
+
+  variables {
+    shared_accounts = { catchall = { members = ["nobody"] } }
+  }
+
+  expect_failures = [var.shared_accounts]
+}
+
+run "rejects_sharing_an_unknown_account" {
+  command = plan
+
+  variables {
+    shared_accounts = { elsewhere = { readers = ["me"] } }
+  }
+
+  expect_failures = [var.shared_accounts]
 }
 
 run "alarms_can_email_someone" {

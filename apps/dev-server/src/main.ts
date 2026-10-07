@@ -6,6 +6,8 @@
  * There is one account, `dev`, to begin with. Signing in over Basic with a
  * plain user name (letters, digits, "-" and "_") gives that name an account of
  * its own, created on the spot; this is how tests get an empty account each.
+ * Further names after a "+" are accounts shared with the user: `ann+team`
+ * signs in as `ann`, who may also use the account `team`.
  */
 import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage } from 'node:http';
@@ -27,18 +29,37 @@ const auth: AuthContext = { accountId: 'dev', username: `dev@${DOMAIN}` };
 const ACCOUNT_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const provisioned = new Map<string, Promise<void>>();
 
-/** The account a user name signs in to. Anything that is not a plain name is the dev account. */
-async function accountFor(username: string): Promise<AuthContext> {
-  const account = ACCOUNT_NAME.test(username)
-    ? { accountId: username, username: `${username.toLowerCase()}@${DOMAIN}` }
-    : auth;
+async function provision(account: AuthContext): Promise<void> {
   let ready = provisioned.get(account.accountId);
   if (!ready) {
     ready = jmap.provisionAccount(account);
     provisioned.set(account.accountId, ready);
   }
   await ready;
-  return account;
+}
+
+/** The account a user name signs in to. Anything that is not a plain name is the dev account. */
+async function accountFor(username: string): Promise<AuthContext> {
+  const [own = '', ...shared] = username.split('+');
+  const named = (name: string): AuthContext => ({
+    accountId: name,
+    username: `${name.toLowerCase()}@${DOMAIN}`,
+  });
+  if (![own, ...shared].every((name) => ACCOUNT_NAME.test(name))) {
+    await provision(auth);
+    return auth;
+  }
+  const account = named(own);
+  await provision(account);
+  for (const name of shared) await provision(named(name));
+  return shared.length === 0
+    ? account
+    : {
+        ...account,
+        sharedAccounts: Object.fromEntries(
+          shared.map((name) => [name, { name }]),
+        ),
+      };
 }
 
 const jmap: JmapServer = createJmapServer({

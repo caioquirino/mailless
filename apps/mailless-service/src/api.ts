@@ -24,6 +24,7 @@ import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { createAuthenticator } from './api/authenticator.js';
 import { identitiesFor } from './api/identities.js';
 import { createLambdaHttpHandler } from './api/lambda-http.js';
+import { parseAccountShares, sharedAccountsFor } from './api/shares.js';
 import { parseMailboxMap, resolveAccount } from './ingest/recipients.js';
 
 function required(name: string): string {
@@ -83,6 +84,8 @@ const REFUSALS = new Set([
 ]);
 
 const appPasswords = createAppPasswordStore(storage.metadata);
+// Accounts more than one user may use, such as a shared mailbox.
+const accountShares = parseAccountShares(process.env['ACCOUNT_SHARES']);
 
 const authenticate = createAuthenticator({
   isAppPassword,
@@ -147,7 +150,19 @@ export const handler = createLambdaHttpHandler({
             }),
           ),
       }),
-      authenticate,
+      // Who someone is comes from the sign-in; what is shared with them, from configuration.
+      authenticate: async (request) => {
+        const auth = await authenticate(request);
+        if (!auth) return null;
+        const sharedAccounts = sharedAccountsFor(
+          accountShares,
+          auth.accountId,
+          accountNames,
+        );
+        return Object.keys(sharedAccounts).length > 0
+          ? { ...auth, sharedAccounts }
+          : auth;
+      },
       challenge: 'Basic realm="mailless", Bearer',
       onError: (error) =>
         console.error(JSON.stringify({ error: String(error) })),

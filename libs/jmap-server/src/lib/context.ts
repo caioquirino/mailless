@@ -15,12 +15,36 @@ import type { MailTransport } from './transport.js';
 
 /** Who is making the request. Authentication happens in the host, before the server is called. */
 export interface AuthContext {
+  /** The user's own account. */
   accountId: string;
   username: string;
+  /**
+   * Other accounts this user may use, such as a mailbox shared by a team,
+   * by account id. They appear in the session next to the user's own.
+   */
+  sharedAccounts?: Record<string, SharedAccount>;
+}
+
+export interface SharedAccount {
+  /** How the account is shown to the user. Defaults to its id. */
+  name?: string;
+  /** Whether the user may only read it. */
+  isReadOnly?: boolean;
 }
 
 export interface MethodContext {
+  /**
+   * The account a method call acts on, which is the user's own unless the call
+   * named one shared with them. `username` is always the user's.
+   */
   auth: AuthContext;
+  /**
+   * The context for another account the user may use, or undefined when they
+   * may not. For methods that work across two accounts, such as `/copy`.
+   */
+  forAccount(accountId: string): MethodContext | undefined;
+  /** Whether the user may only read this account. */
+  isReadOnly: boolean;
   store: MetadataStore;
   blobs: BlobStore;
   limits: CoreCapability;
@@ -77,26 +101,25 @@ export function requireAccount(ctx: MethodContext, accountId: string): string {
 }
 
 /**
- * Checks the two accounts of a `/copy` call (RFC 8620 §5.4). They must differ
- * and the caller must have access to both. A user here has access to one
- * account only, so no pair can pass: this always throws, with the error the
- * arguments call for. Copying itself is for the day accounts can be shared.
+ * The two accounts of a `/copy` call (RFC 8620 §5.4): the caller must have
+ * access to both, and they must differ. `ctx` is the context of the account
+ * copied to, which is the one the call's `accountId` names.
  */
 export function requireCopyAccounts(
   ctx: MethodContext,
   fromAccountId: string,
   accountId: string,
-): never {
-  if (accountId !== ctx.auth.accountId) {
-    throw new MethodError('accountNotFound');
-  }
+): { from: MethodContext; to: MethodContext } {
+  requireAccount(ctx, accountId);
   if (fromAccountId === accountId) {
     throw new MethodError(
       'invalidArguments',
       'fromAccountId and accountId must be different accounts',
     );
   }
-  throw new MethodError('fromAccountNotFound');
+  const from = ctx.forAccount(fromAccountId);
+  if (!from) throw new MethodError('fromAccountNotFound');
+  return { from, to: ctx };
 }
 
 /** Writes a batch, attaching the pending `ifInState` check to the first commit of a `/set` call. */

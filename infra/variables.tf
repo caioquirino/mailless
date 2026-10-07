@@ -46,6 +46,41 @@ variable "account_names" {
   }
 }
 
+variable "shared_accounts" {
+  description = <<-EOT
+    Accounts that other users may use besides their own, such as a mailbox a
+    team shares. The key is the account; `members` may read and change it,
+    `readers` may only read it. For example:
+
+      shared_accounts = { family = { members = ["ann", "bob"] } }
+
+    Every name must be an account in `mailboxes`. The shared account shows up
+    in each user's mail app next to their own.
+  EOT
+  type = map(object({
+    members = optional(list(string), [])
+    readers = optional(list(string), [])
+  }))
+  default = {}
+
+  validation {
+    condition = alltrue([
+      for account, share in var.shared_accounts :
+      contains(values(var.mailboxes), account) && alltrue([
+        for user in concat(share.members, share.readers) : contains(values(var.mailboxes), user)
+      ])
+    ])
+    error_message = "Shared accounts, and the users they are shared with, must all be accounts in mailboxes."
+  }
+
+  validation {
+    condition = alltrue([
+      for account, share in var.shared_accounts : length(share.members) + length(share.readers) > 0
+    ])
+    error_message = "A shared account needs at least one member or reader."
+  }
+}
+
 variable "activate_receipt_rule_set" {
   description = <<-EOT
     Make this stack's receipt rule set the active one. SES has exactly one

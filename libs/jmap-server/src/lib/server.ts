@@ -55,7 +55,7 @@ import {
   type PushOptions,
   type PushReport,
 } from './push/subscription.js';
-import type { MetadataStore, StorageAdapter } from './storage.js';
+import type { BlobStore, MetadataStore, StorageAdapter } from './storage.js';
 import type { MailTransport } from './transport.js';
 
 export const DEFAULT_LIMITS: CoreCapability = {
@@ -259,6 +259,16 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     emailQuerySortOptions: EMAIL_SORT_OPTIONS,
     mayCreateTopLevelMailbox: true,
   };
+  const accountCapabilities = {
+    [CAPABILITY_CORE]: {},
+    [CAPABILITY_MAIL]: mailAccountCapability,
+    ...(canSend
+      ? {
+          [CAPABILITY_SUBMISSION]: submissionCapability,
+          [CAPABILITY_VACATION]: {},
+        }
+      : {}),
+  };
   const sessionState = hash(
     JSON.stringify([capabilities, mailAccountCapability, options.urls]),
   );
@@ -266,6 +276,12 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
   const metadata = options.onStateChange
     ? reportingCommits(options.storage.metadata, options.onStateChange)
     : options.storage.metadata;
+
+  /** The session changes when the server's abilities do, or the accounts a user may use. */
+  const sessionStateFor = (auth: AuthContext): string =>
+    auth.sharedAccounts && Object.keys(auth.sharedAccounts).length > 0
+      ? hash(sessionState + JSON.stringify(auth.sharedAccounts))
+      : sessionState;
 
   const methods = new Map<string, MethodDefinition>();
   methods.set('Core/echo', {
@@ -275,7 +291,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
   methods.set('Blob/copy', {
     capability: CAPABILITY_CORE,
     handler: async (args, ctx) => {
-      const { fromAccountId, accountId } = parseArguments(
+      const { fromAccountId, accountId, blobIds } = parseArguments(
         z.strictObject({
           fromAccountId: z.string(),
           accountId: z.string(),
@@ -283,7 +299,34 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
         }),
         args,
       );
-      return requireCopyAccounts(ctx, fromAccountId, accountId);
+      const { from, to } = requireCopyAccounts(ctx, fromAccountId, accountId);
+      const ids = [...new Set(blobIds)];
+      if (ids.length > limits.maxObjectsInSet) {
+        throw new MethodError(
+          'requestTooLarge',
+          `At most ${limits.maxObjectsInSet} blobs may be copied in one call`,
+        );
+      }
+      const copied: Record<string, string> = {};
+      const notCopied: Record<string, { type: string }> = {};
+      for (const blobId of ids) {
+        const data = IdSchema.safeParse(blobId).success
+          ? await readBlob(from, blobId)
+          : null;
+        if (!data) {
+          notCopied[blobId] = { type: 'notFound' };
+          continue;
+        }
+        const copy = generateId('bu');
+        await to.blobs.put(accountId, copy, data);
+        copied[blobId] = copy;
+      }
+      return {
+        fromAccountId,
+        accountId,
+        copied: Object.keys(copied).length > 0 ? copied : null,
+        notCopied: Object.keys(notCopied).length > 0 ? notCopied : null,
+      };
     },
   });
   const push = options.push ? resolvePushOptions(options.push) : undefined;
@@ -307,43 +350,111 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     }
   }
 
-  const makeContext = (auth: AuthContext): MethodContext => ({
-    auth,
-    store: metadata,
-    blobs: options.storage.blobs,
-    limits,
-    createdIds: new Map(),
-    extraResponses: [],
-    ...(options.transport ? { transport: options.transport } : {}),
-    ...(options.onAutoReply ? { onAutoReply: options.onAutoReply } : {}),
-    identities: async (): Promise<ResolvedIdentity[]> => {
-      const configured = (await options.identities?.(auth)) ?? [];
-      // What the user changed (name, signatures, reply-to) is kept per identity.
-      const settings = new Map(
-        configured.length === 0
-          ? []
-          : (
-              await metadata.get(
-                auth.accountId,
-                IDENTITY_SETTINGS,
-                configured.map((identity) => identity.id),
-              )
-            ).map((record) => [record.id, record.value]),
-      );
-      return configured.map((identity) => ({
-        allowedFrom: identity.allowedFrom ?? [],
-        id: identity.id,
-        name: identity.name ?? '',
-        email: identity.email,
-        replyTo: null,
-        bcc: null,
-        textSignature: '',
-        htmlSignature: '',
-        ...(settings.get(identity.id) as Partial<ResolvedIdentity> | undefined),
-        mayDelete: false,
-      }));
+  /** A store that refuses to write, for an account the user may only read. */
+  const readOnly = (store: MetadataStore): MetadataStore => ({
+    getState: (accountId, type) => store.getState(accountId, type),
+    get: (accountId, type, ids) => store.get(accountId, type, ids),
+    list: (accountId, type, index) => store.list(accountId, type, index),
+    getChanges: (accountId, type, sinceState) =>
+      store.getChanges(accountId, type, sinceState),
+    commit: async () => {
+      throw new MethodError('accountReadOnly');
     },
   });
+  const readOnlyBlobs = (blobs: BlobStore): BlobStore => ({
+    get: (accountId, blobId) => blobs.get(accountId, blobId),
+    put: async () => {
+      throw new MethodError('accountReadOnly');
+    },
+    delete: async () => {
+      throw new MethodError('accountReadOnly');
+    },
+  });
+
+  /**
+   * The user's access to an account: their own, or one shared with them.
+   * Undefined for any other account, whether or not it exists.
+   */
+  const accessTo = (
+    user: AuthContext,
+    accountId: string,
+  ): { isReadOnly: boolean; name: string; isPersonal: boolean } | undefined => {
+    if (accountId === user.accountId) {
+      return { isReadOnly: false, name: user.username, isPersonal: true };
+    }
+    const shared = Object.prototype.hasOwnProperty.call(
+      user.sharedAccounts ?? {},
+      accountId,
+    )
+      ? user.sharedAccounts?.[accountId]
+      : undefined;
+    return shared
+      ? {
+          isReadOnly: shared.isReadOnly === true,
+          name: shared.name ?? accountId,
+          isPersonal: false,
+        }
+      : undefined;
+  };
+
+  /**
+   * The context for one account of a user. Every method works on
+   * `ctx.auth.accountId`, so pointing that at a shared account is all it
+   * takes for a method to act there.
+   */
+  const makeContext = (
+    user: AuthContext,
+    accountId: string = user.accountId,
+    createdIds: Map<string, string> = new Map(),
+  ): MethodContext => {
+    const access = accessTo(user, accountId);
+    const auth: AuthContext = { accountId, username: user.username };
+    return {
+      auth,
+      store: access?.isReadOnly ? readOnly(metadata) : metadata,
+      blobs: access?.isReadOnly
+        ? readOnlyBlobs(options.storage.blobs)
+        : options.storage.blobs,
+      limits,
+      createdIds,
+      extraResponses: [],
+      isReadOnly: access?.isReadOnly === true,
+      forAccount: (other) =>
+        accessTo(user, other)
+          ? makeContext(user, other, createdIds)
+          : undefined,
+      ...(options.transport ? { transport: options.transport } : {}),
+      ...(options.onAutoReply ? { onAutoReply: options.onAutoReply } : {}),
+      identities: async (): Promise<ResolvedIdentity[]> => {
+        const configured = (await options.identities?.(auth)) ?? [];
+        // What the user changed (name, signatures, reply-to) is kept per identity.
+        const settings = new Map(
+          configured.length === 0
+            ? []
+            : (
+                await metadata.get(
+                  auth.accountId,
+                  IDENTITY_SETTINGS,
+                  configured.map((identity) => identity.id),
+                )
+              ).map((record) => [record.id, record.value]),
+        );
+        return configured.map((identity) => ({
+          allowedFrom: identity.allowedFrom ?? [],
+          id: identity.id,
+          name: identity.name ?? '',
+          email: identity.email,
+          replyTo: null,
+          bcc: null,
+          textSignature: '',
+          htmlSignature: '',
+          ...(settings.get(identity.id) as
+            Partial<ResolvedIdentity> | undefined),
+          mayDelete: false,
+        }));
+      },
+    };
+  };
 
   return {
     limits,
@@ -351,23 +462,26 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     getSession(auth) {
       return {
         capabilities,
-        accounts: {
-          [auth.accountId]: {
-            name: auth.username,
-            isPersonal: true,
-            isReadOnly: false,
-            accountCapabilities: {
-              [CAPABILITY_CORE]: {},
-              [CAPABILITY_MAIL]: mailAccountCapability,
-              ...(canSend
-                ? {
-                    [CAPABILITY_SUBMISSION]: submissionCapability,
-                    [CAPABILITY_VACATION]: {},
-                  }
-                : {}),
+        accounts: Object.fromEntries(
+          [auth.accountId, ...Object.keys(auth.sharedAccounts ?? {})].flatMap(
+            (accountId) => {
+              const access = accessTo(auth, accountId);
+              return access
+                ? [
+                    [
+                      accountId,
+                      {
+                        name: access.name,
+                        isPersonal: access.isPersonal,
+                        isReadOnly: access.isReadOnly,
+                        accountCapabilities,
+                      },
+                    ],
+                  ]
+                : [];
             },
-          },
-        },
+          ),
+        ),
         primaryAccounts: {
           [CAPABILITY_CORE]: auth.accountId,
           [CAPABILITY_MAIL]: auth.accountId,
@@ -383,7 +497,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
         downloadUrl: options.urls.download,
         uploadUrl: options.urls.upload,
         eventSourceUrl: options.urls.eventSource,
-        state: sessionState,
+        state: sessionStateFor(auth),
       };
     },
 
@@ -427,13 +541,28 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
             throw new MethodError('unknownMethod');
           }
           const args = resolveResultReferences(rawArgs, methodResponses);
-          ctx.extraResponses = [];
+          // A call that names an account shared with the user runs in that
+          // account. Any other id is left for the method to refuse.
+          const named = args['accountId'];
+          const callCtx =
+            (typeof named === 'string' && named !== auth.accountId
+              ? ctx.forAccount(named)
+              : undefined) ?? ctx;
+          // Refused up front, so that a call which happens to change nothing
+          // is not mistaken for one that was allowed.
+          if (
+            /\/(set|import|copy)$/.test(name) &&
+            accessTo(auth, callCtx.auth.accountId)?.isReadOnly
+          ) {
+            throw new MethodError('accountReadOnly');
+          }
+          callCtx.extraResponses = [];
           methodResponses.push([
             name,
-            await definition.handler(args, ctx),
+            await definition.handler(args, callCtx),
             callId,
           ]);
-          for (const [extraName, extraArgs] of ctx.extraResponses) {
+          for (const [extraName, extraArgs] of callCtx.extraResponses) {
             methodResponses.push([extraName, extraArgs, callId]);
           }
         } catch (error) {
@@ -475,14 +604,20 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
         ...(createdIds
           ? { createdIds: Object.fromEntries(ctx.createdIds) }
           : {}),
-        sessionState,
+        sessionState: sessionStateFor(auth),
       };
     },
 
     async upload(auth, accountId, data, type) {
-      if (accountId !== auth.accountId) {
+      const access = accessTo(auth, accountId);
+      if (!access) {
         throw new RequestError('about:blank', 'Account not found', {
           status: 404,
+        });
+      }
+      if (access.isReadOnly) {
+        throw new RequestError('about:blank', 'The account is read-only', {
+          status: 403,
         });
       }
       if (data.length > limits.maxSizeUpload) {
@@ -498,9 +633,9 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     },
 
     async download(auth, accountId, blobId) {
-      if (accountId !== auth.accountId) return null;
+      if (!accessTo(auth, accountId)) return null;
       if (!IdSchema.safeParse(blobId).success) return null;
-      return readBlob(makeContext(auth), blobId);
+      return readBlob(makeContext(auth, accountId), blobId);
     },
 
     importMessage(auth, raw, importOptions) {

@@ -33,7 +33,7 @@
   },
   "t/Blob/copy/basic.t": {
     "status": "skip",
-    "reason": "test requires implementation of pool_account_pair"
+    "reason": "server does not support urn:ietf:params:jmap:blob"
   },
   "t/Blob/foreign-account.t": {
     "status": "skip",
@@ -73,7 +73,7 @@
   },
   "t/CalendarEvent/copy/basic.t": {
     "status": "skip",
-    "reason": "test requires implementation of pool_account_pair"
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
   },
   "t/CalendarEvent/foreign-account.t": {
     "status": "skip",
@@ -113,7 +113,7 @@
   },
   "t/ContactCard/copy/basic.t": {
     "status": "skip",
-    "reason": "test requires implementation of pool_account_pair"
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
   },
   "t/ContactCard/foreign-account.t": {
     "status": "skip",
@@ -142,10 +142,6 @@
   "t/ContactCard/set/update.t": {
     "status": "skip",
     "reason": "server does not support urn:ietf:params:jmap:contacts"
-  },
-  "t/Email/copy/basic.t": {
-    "status": "skip",
-    "reason": "test requires implementation of pool_account_pair"
   },
   "t/Email/foreign-account.t": {
     "status": "fail",
