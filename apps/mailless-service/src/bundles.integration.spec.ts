@@ -104,6 +104,48 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
   });
 });
 
+describe.skipIf(!reachable)('delivery events Lambda bundle', () => {
+  it('loads and skips events it cannot use', async () => {
+    Object.assign(process.env, {
+      AWS_REGION: 'us-east-1',
+      AWS_ACCESS_KEY_ID: credentials.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: credentials.secretAccessKey,
+      AWS_ENDPOINT_URL_DYNAMODB: dynamoEndpoint,
+      AWS_ENDPOINT_URL_S3: s3Endpoint,
+      TABLE_NAME: tableName,
+      BUCKET: bucket,
+    });
+    const bundle = new URL('../dist/events.mjs', import.meta.url).href;
+    const { handler } = (await import(
+      /* @vite-ignore */ bundle
+    )) as typeof import('./events.js');
+
+    const sns = (message: string) =>
+      ({
+        Records: [{ Sns: { Message: message, MessageId: 'sns-1' } }],
+      }) as unknown as Parameters<typeof handler>[0];
+    await expect(handler(sns('not json'))).resolves.toBeUndefined();
+    await expect(
+      handler(sns(JSON.stringify({ eventType: 'Send' }))),
+    ).resolves.toBeUndefined();
+    // A tracked event for a submission that does not exist reaches DynamoDB and is skipped.
+    await expect(
+      handler(
+        sns(
+          JSON.stringify({
+            eventType: 'Delivery',
+            mail: {
+              messageId: 'm',
+              tags: { account: ['acc-1'], submission: ['es-missing'] },
+            },
+            delivery: { recipients: ['a@example.org'] },
+          }),
+        ),
+      ),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe.skipIf(!reachable)('ingest Lambda entry point', () => {
   it('imports a message SES stored in the bucket', async () => {
     Object.assign(process.env, {

@@ -45,6 +45,14 @@ data "aws_iam_policy_document" "ingest" {
     resources = ["${aws_s3_bucket.mail.arn}/${local.inbound_prefix}*"]
   }
 
+  # Without this, S3 answers "access denied" for an object that does not exist, so a
+  # message that was already processed would look like a failure and be retried.
+  statement {
+    sid       = "TellMissingFromForbidden"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.mail.arn]
+  }
+
   statement {
     sid       = "StoreMessages"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]

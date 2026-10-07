@@ -57,11 +57,31 @@ data "aws_iam_policy_document" "api" {
     resources = [aws_dynamodb_table.metadata.arn]
   }
 
-  # Sending is allowed only as the domain this stack verified.
+  # Sending is allowed only with a From address at this stack's domain, and only
+  # through the configuration set that reports what became of each message.
+  # The identity is a wildcard because, while an account is in the SES sandbox,
+  # AWS also checks this permission against the recipient's verified identity.
   statement {
-    sid       = "SendMail"
-    actions   = ["ses:SendEmail", "ses:SendRawEmail"]
-    resources = [aws_sesv2_email_identity.domain.arn]
+    sid     = "SendMail"
+    actions = ["ses:SendEmail", "ses:SendRawEmail"]
+    resources = [
+      "arn:${local.partition}:ses:${var.region}:${local.account_id}:identity/*",
+      local.configuration_set_arn,
+    ]
+
+    condition {
+      test     = "StringLike"
+      variable = "ses:FromAddress"
+      values   = ["*@${var.domain}"]
+    }
+  }
+
+  # Without this, S3 answers "access denied" for an object that does not exist, and a
+  # missing attachment looks like a failure of the service. It reveals object names only.
+  statement {
+    sid       = "TellMissingFromForbidden"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.mail.arn]
   }
 
   dynamic "statement" {
@@ -105,7 +125,8 @@ resource "aws_lambda_function" "api" {
         USER_POOL_ID        = aws_cognito_user_pool.main.id
         USER_POOL_CLIENT_ID = aws_cognito_user_pool_client.jmap.id
         # Decides which addresses each account may send from.
-        MAILBOXES = jsonencode(var.mailboxes)
+        MAILBOXES         = jsonencode(var.mailboxes)
+        CONFIGURATION_SET = aws_sesv2_configuration_set.main.configuration_set_name
       },
       # Without a hostname of our own the function uses the host each request arrived on.
       local.api_custom_domain ? { PUBLIC_URL = "https://${local.api_hostname}" } : {},

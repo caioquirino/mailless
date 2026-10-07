@@ -25,6 +25,11 @@ output "ingest_dead_letter_queue" {
   value       = aws_sqs_queue.ingest_dead_letters.url
 }
 
+output "events_dead_letter_queue" {
+  description = "Delivery reports that could not be processed. It should stay empty."
+  value       = aws_sqs_queue.events_dead_letters.url
+}
+
 output "receiving_active" {
   description = "Whether SES is routing inbound mail through this stack."
   value       = var.activate_receipt_rule_set

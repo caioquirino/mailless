@@ -115,10 +115,17 @@ removed from what is sent and kept on the stored copy. Header values supplied
 by clients are rejected if they contain line breaks, so a draft cannot be used
 to add or override headers.
 
+Each message is handed to the transport with `tags` naming its account and
+submission. When the transport later learns what happened, the host calls
+`jmap.recordDelivery(auth, submissionId, { 'bob@example.org': { delivered:
+'no', smtpReply: '550 no such user' } })`, which updates the submission's
+`deliveryStatus`. A known outcome is never undone by a late or repeated report,
+except that a failure overrides an earlier success.
+
 ### Not implemented yet
 
 - Delayed sending and cancelling: messages are handed over at once, so
-  `undoStatus` is always `final` and delivery status is not tracked.
+  `undoStatus` is always `final`.
 - `Email/copy`, `Email/parse`, `SearchSnippet/get`, `VacationResponse`.
 - Per-part headers, and non-text content from `bodyValues`, when creating.
 - Push (EventSource or WebSocket).

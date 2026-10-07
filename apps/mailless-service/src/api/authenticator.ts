@@ -5,7 +5,22 @@ export interface AuthenticatorOptions {
   verifyAccessToken(token: string): Promise<string>;
   /** Signs in with a password and returns an access token, or null when the credentials are refused. */
   passwordLogin(username: string, password: string): Promise<string | null>;
+  /**
+   * Maps what was typed as the username to the sign-in name. Mail clients ask
+   * for an email address, so this is where an address becomes its account.
+   */
+  resolveUsername?(username: string): string;
+  /** Told why a request was not authenticated. Never receives the credentials themselves. */
+  onFailure?(reason: AuthFailure): void;
   now?(): number;
+}
+
+export interface AuthFailure {
+  /** The Authorization scheme used, or "none" when the header was absent. */
+  scheme: string;
+  reason: 'missing' | 'malformed' | 'unsupported-scheme' | 'refused';
+  /** For Basic: whether the username was an email address or a plain name. */
+  usernameKind?: 'address' | 'name';
 }
 
 const ACCOUNT_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -81,7 +96,8 @@ export function createAuthenticator(
     if (!pending) {
       pending = (async () => {
         const token = await options.passwordLogin(
-          credentials.username,
+          options.resolveUsername?.(credentials.username) ??
+            credentials.username,
           credentials.password,
         );
         // Verifying the token yields the canonical username, whatever spelling was typed.
@@ -103,14 +119,38 @@ export function createAuthenticator(
 
   return async (request) => {
     const header = request.headers.get('authorization') ?? '';
-    const space = header.indexOf(' ');
-    if (space <= 0) return null;
-    const scheme = header.slice(0, space).toLowerCase();
-    const value = header.slice(space + 1).trim();
-    if (!value) return null;
+    const fail = (failure: AuthFailure): null => {
+      options.onFailure?.(failure);
+      return null;
+    };
+    if (!header) return fail({ scheme: 'none', reason: 'missing' });
 
-    if (scheme === 'bearer') return bearer(value);
-    if (scheme === 'basic') return basic(value);
-    return null;
+    const space = header.indexOf(' ');
+    const scheme = (space <= 0 ? header : header.slice(0, space)).toLowerCase();
+    const value = space <= 0 ? '' : header.slice(space + 1).trim();
+    // Only the scheme name is ever reported, and only when it is one of the usual ones.
+    const reported = ['basic', 'bearer', 'digest', 'negotiate'].includes(scheme)
+      ? scheme
+      : 'other';
+    if (!value) return fail({ scheme: reported, reason: 'malformed' });
+
+    if (scheme === 'bearer') {
+      return (
+        (await bearer(value)) ?? fail({ scheme: reported, reason: 'refused' })
+      );
+    }
+    if (scheme === 'basic') {
+      const credentials = parseBasic(value);
+      if (!credentials) return fail({ scheme: reported, reason: 'malformed' });
+      return (
+        (await basic(value)) ??
+        fail({
+          scheme: reported,
+          reason: 'refused',
+          usernameKind: credentials.username.includes('@') ? 'address' : 'name',
+        })
+      );
+    }
+    return fail({ scheme: reported, reason: 'unsupported-scheme' });
   };
 }

@@ -120,11 +120,11 @@ export async function readBlob(
   blobId: string,
 ): Promise<Uint8Array | null> {
   const accountId = ctx.auth.accountId;
-  const direct = await ctx.blobs.get(accountId, blobId);
-  if (direct) return direct;
-
+  // Ids made here never contain "-", so an id of that shape can only name a part.
+  // Deciding by shape avoids asking storage for an object that cannot exist.
   const partReference = splitPartBlobId(blobId);
-  if (!partReference) return null;
+  if (!partReference) return ctx.blobs.get(accountId, blobId);
+
   const message = await ctx.blobs.get(accountId, partReference.messageBlobId);
   if (!message) return null;
   try {

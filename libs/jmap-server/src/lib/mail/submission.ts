@@ -5,6 +5,7 @@ import {
   SetArgumentsSchema,
   SetFailure,
   type Comparator,
+  type DeliveryStatus,
   type Identity,
 } from '@mailless/jmap-core';
 import { z } from 'zod';
@@ -14,6 +15,7 @@ import {
   generateId,
   parseArguments,
   requireAccount,
+  retryOnConflict,
   toUtcDate,
   type MethodContext,
   type MethodHandler,
@@ -53,7 +55,7 @@ type SubmissionValue = {
   };
   sendAt: string;
   undoStatus: 'final';
-  deliveryStatus: null;
+  deliveryStatus: Record<string, DeliveryStatus>;
   dsnBlobIds: string[];
   mdnBlobIds: string[];
 };
@@ -179,9 +181,15 @@ async function createSubmission(
   const raw = await ctx.blobs.get(ctx.auth.accountId, email.value.blobId);
   if (!raw) throw invalid(['emailId'], 'The content of the email is missing');
 
+  const id = generateId('es');
   try {
     // Bcc recipients are in the envelope; the header must not travel with the message.
-    await transport.send(removeHeader(raw, 'Bcc'), { mailFrom, rcptTo });
+    await transport.send(removeHeader(raw, 'Bcc'), {
+      mailFrom,
+      rcptTo,
+      // Lets delivery events find their way back to this submission.
+      tags: { account: ctx.auth.accountId, submission: id },
+    });
   } catch (error) {
     if (error instanceof MailRejectedError) {
       throw new SetFailure('forbiddenToSend', error.message);
@@ -189,7 +197,6 @@ async function createSubmission(
     throw error;
   }
 
-  const id = generateId('es');
   const value: SubmissionValue = {
     identityId: identity.id,
     emailId: email.id,
@@ -200,7 +207,17 @@ async function createSubmission(
     },
     sendAt: toUtcDate(new Date()),
     undoStatus: 'final',
-    deliveryStatus: null,
+    // Accepted by the transport; what happens next arrives through recordDelivery.
+    deliveryStatus: Object.fromEntries(
+      rcptTo.map((address) => [
+        address,
+        {
+          smtpReply: '250 Accepted',
+          delivered: 'queued',
+          displayed: 'unknown',
+        },
+      ]),
+    ),
     dsnBlobIds: [],
     mdnBlobIds: [],
   };
@@ -508,3 +525,74 @@ export const submissionMethods: Record<string, MethodHandler> = {
     return { ...result };
   },
 };
+
+/** What became of a message for one recipient, as reported by the transport afterwards. */
+export interface DeliveryUpdate {
+  delivered: DeliveryStatus['delivered'];
+  smtpReply?: string;
+}
+
+// A failure is final, and a late "queued" must not undo a known outcome.
+const CERTAINTY: Record<DeliveryStatus['delivered'], number> = {
+  unknown: 0,
+  queued: 1,
+  yes: 2,
+  no: 3,
+};
+
+/**
+ * Records delivery outcomes on a submission. Recipients are matched without
+ * regard to case; unknown ones are ignored. Returns false when the submission
+ * does not exist.
+ */
+export async function recordDelivery(
+  ctx: MethodContext,
+  submissionId: string,
+  updates: Record<string, DeliveryUpdate>,
+): Promise<boolean> {
+  return retryOnConflict(async () => {
+    const [record] = (await ctx.store.get(ctx.auth.accountId, SUBMISSION, [
+      submissionId,
+    ])) as unknown as SubmissionRecord[];
+    if (!record) return false;
+
+    const deliveryStatus = { ...record.value.deliveryStatus };
+    let changed = false;
+    for (const [recipient, update] of Object.entries(updates)) {
+      const key = Object.keys(deliveryStatus).find(
+        (candidate) => candidate.toLowerCase() === recipient.toLowerCase(),
+      );
+      const current = key === undefined ? undefined : deliveryStatus[key];
+      if (key === undefined || !current) continue;
+      if (CERTAINTY[update.delivered] < CERTAINTY[current.delivered]) continue;
+
+      const next = {
+        ...current,
+        delivered: update.delivered,
+        ...(update.smtpReply === undefined
+          ? {}
+          : { smtpReply: update.smtpReply }),
+      };
+      if (
+        next.delivered !== current.delivered ||
+        next.smtpReply !== current.smtpReply
+      ) {
+        deliveryStatus[key] = next;
+        changed = true;
+      }
+    }
+    if (!changed) return true;
+
+    await commit(ctx, [
+      {
+        kind: 'update',
+        type: SUBMISSION,
+        id: submissionId,
+        value: asJson({ ...record.value, deliveryStatus }),
+        expectedVersion: record.version,
+        changedProperties: ['deliveryStatus'],
+      },
+    ]);
+    return true;
+  });
+}

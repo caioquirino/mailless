@@ -1,4 +1,4 @@
-import { createAuthenticator } from './authenticator.js';
+import { createAuthenticator, type AuthFailure } from './authenticator.js';
 
 const basic = (username: string, password: string) =>
   `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
@@ -11,7 +11,11 @@ function setup() {
   let time = 1_000_000;
   const logins: Array<[string, string]> = [];
   const verified: string[] = [];
+  const failures: AuthFailure[] = [];
   const authenticate = createAuthenticator({
+    onFailure: (failure) => failures.push(failure),
+    resolveUsername: (username) =>
+      username.toLowerCase().endsWith('@example.com') ? 'me' : username,
     now: () => time,
     verifyAccessToken: async (token) => {
       verified.push(token);
@@ -31,6 +35,7 @@ function setup() {
     authenticate,
     logins,
     verified,
+    failures,
     advance: (ms: number) => (time += ms),
   };
 }
@@ -125,6 +130,66 @@ describe('createAuthenticator', () => {
     );
     expect(results.every((result) => result?.accountId === 'me')).toBe(true);
     expect(logins).toHaveLength(1);
+  });
+
+  it('signs in with an email address as the account that owns it', async () => {
+    const { authenticate, logins } = setup();
+    expect(
+      await authenticate(
+        request(basic('Anything@Example.com', 'correct horse')),
+      ),
+    ).toEqual({
+      accountId: 'me',
+      username: 'me',
+    });
+    expect(logins).toEqual([['me', 'correct horse']]);
+
+    // An address nobody owns is tried as typed, and refused by the provider.
+    expect(
+      await authenticate(request(basic('x@elsewhere.org', 'wrong'))),
+    ).toBeNull();
+    expect(logins[1]).toEqual(['x@elsewhere.org', 'wrong']);
+    // The address still needs the right password.
+    expect(
+      await authenticate(request(basic('me@example.com', 'wrong'))),
+    ).toBeNull();
+  });
+
+  it('reports why a request was not authenticated, without the credentials', async () => {
+    const { authenticate, failures } = setup();
+    await authenticate(request());
+    await authenticate(request('Bearer forged-token-value'));
+    await authenticate(request(basic('me', 'secret-wrong-password')));
+    await authenticate(
+      request(basic('me@example.com', 'secret-wrong-password')),
+    );
+    await authenticate(request('Basic !!!'));
+    await authenticate(request('Digest abc'));
+    await authenticate(request('SuperSecretScheme abc'));
+    await authenticate(request('Bearer'));
+    expect(failures).toEqual([
+      { scheme: 'none', reason: 'missing' },
+      { scheme: 'bearer', reason: 'refused' },
+      { scheme: 'basic', reason: 'refused', usernameKind: 'name' },
+      { scheme: 'basic', reason: 'refused', usernameKind: 'address' },
+      { scheme: 'basic', reason: 'malformed' },
+      { scheme: 'digest', reason: 'unsupported-scheme' },
+      { scheme: 'other', reason: 'unsupported-scheme' },
+      { scheme: 'bearer', reason: 'malformed' },
+    ]);
+    const text = JSON.stringify(failures);
+    for (const secret of [
+      'forged-token-value',
+      'secret-wrong-password',
+      'SuperSecretScheme',
+      'me@example.com',
+    ]) {
+      expect(text).not.toContain(secret);
+    }
+
+    const before = failures.length;
+    await authenticate(request(basic('me', 'correct horse')));
+    expect(failures).toHaveLength(before);
   });
 
   it('surfaces provider failures and does not cache them', async () => {

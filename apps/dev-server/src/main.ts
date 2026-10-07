@@ -21,8 +21,27 @@ const jmap: JmapServer = createJmapServer({
   onError: (error, method) => console.error(`${method} failed:`, error),
   // There is nowhere to send mail to from here, so everything sent comes back to the inbox.
   transport: {
-    send: async (message) => {
+    send: async (message, envelope) => {
       await jmap.importMessage(auth, message, { mailboxRole: 'inbox' });
+      // Report the delivery a moment later, as a real transport would.
+      const submissionId = envelope.tags?.['submission'];
+      if (submissionId) {
+        setTimeout(() => {
+          void jmap.recordDelivery(
+            auth,
+            submissionId,
+            Object.fromEntries(
+              envelope.rcptTo.map((recipient) => [
+                recipient,
+                {
+                  delivered: 'yes' as const,
+                  smtpReply: '250 Delivered to the dev inbox',
+                },
+              ]),
+            ),
+          );
+        }, 1000);
+      }
     },
   },
   identities: () => [{ id: 'dev', email: '*@mailless.test' }],

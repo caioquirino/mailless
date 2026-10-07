@@ -27,6 +27,7 @@ export {
   type WriteOp,
 } from './lib/storage.js';
 export { type ImportedEmail, type ImportOptions } from './lib/mail/email.js';
+export { type DeliveryUpdate } from './lib/mail/submission.js';
 export {
   MailRejectedError,
   type MailEnvelope,

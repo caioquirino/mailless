@@ -136,34 +136,61 @@ try {
   }
   console.log('Accepted for delivery, and filed under Sent.');
 
-  if (!recipient.toLowerCase().endsWith(`@${domain}`)) {
-    console.log(
-      'The recipient is outside this domain, so arrival cannot be checked from here.',
-    );
-    process.exit(0);
-  }
+  const submissionId = submitted.created.s.id;
+  const checksArrival = recipient.toLowerCase().endsWith(`@${domain}`);
+  let arrived = !checksArrival;
+  let report;
 
-  process.stdout.write('Waiting for it to arrive in the inbox ');
+  process.stdout.write(
+    checksArrival
+      ? 'Waiting for it to arrive and for the delivery report '
+      : 'Waiting for the delivery report ',
+  );
   const deadline = Date.now() + 90_000;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !(arrived && report)) {
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     process.stdout.write('.');
-    const [found] = await jmap([
+    const [found, submissions] = await jmap([
       [
         'Email/query',
         { accountId, filter: { inMailbox: inbox, subject } },
         'q',
       ],
+      [
+        'EmailSubmission/get',
+        { accountId, ids: [submissionId], properties: ['deliveryStatus'] },
+        'e',
+      ],
     ]);
-    if (found.ids.length > 0) {
-      console.log('\nArrived. Sending and receiving both work.');
-      process.exit(0);
-    }
+    if (found.ids.length > 0) arrived = true;
+    const status = Object.values(submissions.list[0]?.deliveryStatus ?? {})[0];
+    if (status && status.delivered !== 'queued') report = status;
   }
-  throw new Error(
-    '\nIt was sent but has not arrived after 90 seconds. Check the ingest logs:\n' +
-      '  aws logs tail /aws/lambda/mailless-ingest --since 10m',
-  );
+  console.log('');
+
+  if (report?.delivered === 'no') {
+    throw new Error(`The message was not delivered: ${report.smtpReply}`);
+  }
+  if (checksArrival) {
+    if (!arrived) {
+      throw new Error(
+        'It was sent but has not arrived after 90 seconds. Check the ingest logs:\n' +
+          '  aws logs tail /aws/lambda/mailless-ingest --since 10m',
+      );
+    }
+    console.log('Arrived in the inbox.');
+  }
+  if (report) {
+    console.log(`Delivery report: delivered (${report.smtpReply}).`);
+    console.log('Sending, receiving and delivery reporting all work.');
+  } else {
+    console.log(
+      'No delivery report yet. The message was sent, but its outcome has not been\n' +
+        'recorded; check the delivery events function if this persists:\n' +
+        '  aws logs tail /aws/lambda/mailless-delivery-events --since 10m',
+    );
+  }
+  process.exit(0);
 } catch (error) {
   console.error(`\n${error.message}\n`);
   process.exit(1);

@@ -235,6 +235,40 @@ describe('createFetchHandler', () => {
     expect(oddType.headers.get('x-evil')).toBeNull();
   });
 
+  it('never asks storage for an object that cannot exist', async () => {
+    // Some stores answer "forbidden" for a missing object. A part download must not trip over that.
+    const storage = new InMemoryStorageAdapter();
+    const asked: string[] = [];
+    const get = storage.blobs.get.bind(storage.blobs);
+    storage.blobs.get = async (accountId, blobId) => {
+      asked.push(blobId);
+      const found = await get(accountId, blobId);
+      if (!found) throw new Error('AccessDenied');
+      return found;
+    };
+    const server = createJmapServer({ storage, urls: jmapUrls(BASE) });
+    await server.provisionAccount(AUTH);
+    const imported = await server.importMessage(
+      AUTH,
+      new TextEncoder().encode(buildMessage({ text: 'part one' })),
+      { mailboxRole: 'inbox' },
+    );
+    asked.length = 0;
+
+    const part = await server.download(
+      AUTH,
+      AUTH.accountId,
+      `${imported.blobId}-1`,
+    );
+    expect(new TextDecoder().decode(part ?? new Uint8Array()).trim()).toBe(
+      'part one',
+    );
+    expect(
+      await server.download(AUTH, AUTH.accountId, `${imported.blobId}-9`),
+    ).toBeNull();
+    expect(asked).toEqual([imported.blobId, imported.blobId]);
+  });
+
   it('answers 404 for unknown paths, blobs and accounts', async () => {
     const { call, handle } = setup();
     for (const path of [

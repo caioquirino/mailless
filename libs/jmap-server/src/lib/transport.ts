@@ -1,6 +1,12 @@
 export interface MailEnvelope {
   mailFrom: string;
   rcptTo: string[];
+  /**
+   * Labels to attach to the message where the transport supports it, so that
+   * later delivery events can be matched to what was sent. Keys and values
+   * use only letters, digits, "-" and "_".
+   */
+  tags?: Record<string, string>;
 }
 
 /**

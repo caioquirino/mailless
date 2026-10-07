@@ -35,7 +35,8 @@
           },
           "thirdParty": true,
           "additionalEntryPoints": [
-            "apps/mailless-service/src/api.ts"
+            "apps/mailless-service/src/api.ts",
+            "apps/mailless-service/src/events.ts"
           ]
         },
         "configurations": {

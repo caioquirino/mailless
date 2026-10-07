@@ -35,7 +35,11 @@ import {
   MAX_MAILBOX_DEPTH,
   provisionMailboxes,
 } from './mail/mailbox.js';
-import { submissionMethods } from './mail/submission.js';
+import {
+  recordDelivery,
+  submissionMethods,
+  type DeliveryUpdate,
+} from './mail/submission.js';
 import { threadMethods } from './mail/thread.js';
 import type { StorageAdapter } from './storage.js';
 import type { MailTransport } from './transport.js';
@@ -66,6 +70,12 @@ export interface JmapServerOptions {
   limits?: Partial<CoreCapability>;
   /** Called with errors that were reported to the client only as `serverFail`. */
   onError?: (error: unknown, method: string) => void;
+  /**
+   * Called when a method call is answered with an error such as
+   * `unknownMethod` or `invalidArguments`. Useful for seeing what clients ask
+   * for that the server does not do.
+   */
+  onMethodError?: (method: string, type: string, description?: string) => void;
   /**
    * How outgoing mail leaves. When set, the server offers the submission
    * capability (Identity and EmailSubmission methods).
@@ -112,6 +122,16 @@ export interface JmapServer {
   ): Promise<ImportedEmail>;
   /** Creates the standard mailboxes for an account that has none. */
   provisionAccount(auth: AuthContext): Promise<void>;
+  /**
+   * Records what became of a sent message for some of its recipients, as
+   * learned from the transport later (delivered, bounced, delayed). Returns
+   * false when the submission does not exist.
+   */
+  recordDelivery(
+    auth: AuthContext,
+    submissionId: string,
+    updates: Record<string, DeliveryUpdate>,
+  ): Promise<boolean>;
   registerMethod(name: string, definition: MethodDefinition): void;
 }
 
@@ -267,6 +287,11 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
           }
         } catch (error) {
           if (error instanceof MethodError) {
+            options.onMethodError?.(
+              name,
+              error.type,
+              error.message === error.type ? undefined : error.message,
+            );
             methodResponses.push(['error', error.toJSON(), callId]);
           } else {
             options.onError?.(error, name);
@@ -314,6 +339,10 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
 
     provisionAccount(auth) {
       return provisionMailboxes(makeContext(auth));
+    },
+
+    recordDelivery(auth, submissionId, updates) {
+      return recordDelivery(makeContext(auth), submissionId, updates);
     },
 
     registerMethod(name, definition) {

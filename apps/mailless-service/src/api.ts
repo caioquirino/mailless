@@ -20,7 +20,7 @@ import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { createAuthenticator } from './api/authenticator.js';
 import { identitiesFor } from './api/identities.js';
 import { createLambdaHttpHandler } from './api/lambda-http.js';
-import { parseMailboxMap } from './ingest/recipients.js';
+import { parseMailboxMap, resolveAccount } from './ingest/recipients.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -34,7 +34,11 @@ const clientId = required('USER_POOL_CLIENT_ID');
 const downloadPrefix = process.env['DOWNLOAD_PREFIX'] ?? 'downloads/';
 const DOWNLOAD_URL_SECONDS = 300;
 const mailboxes = parseMailboxMap(process.env['MAILBOXES']);
-const transport = new SesMailTransport({ client: new SESv2Client({}) });
+const configurationSetName = process.env['CONFIGURATION_SET'];
+const transport = new SesMailTransport({
+  client: new SESv2Client({}),
+  ...(configurationSetName ? { configurationSetName } : {}),
+});
 
 // The SDK reads AWS_ENDPOINT_URL_S3 and AWS_ENDPOINT_URL_DYNAMODB itself, which is how tests
 // point these clients at local stand-ins.
@@ -70,6 +74,13 @@ const REFUSALS = new Set([
 ]);
 
 const authenticate = createAuthenticator({
+  // Mail clients ask for an email address. Sign in as the account that address delivers to.
+  resolveUsername: (username) =>
+    username.includes('@')
+      ? (resolveAccount(mailboxes, username) ?? username)
+      : username,
+  onFailure: (failure) =>
+    console.log(JSON.stringify({ event: 'sign-in-failed', ...failure })),
   verifyAccessToken: async (token) => (await verifier.verify(token)).username,
   passwordLogin: async (username, password) => {
     try {
@@ -103,6 +114,16 @@ export const handler = createLambdaHttpHandler({
         identities: (auth) => identitiesFor(mailboxes, auth.accountId),
         onError: (error, method) =>
           console.error(JSON.stringify({ method, error: String(error) })),
+        // Method names and error types only; descriptions name properties, never values.
+        onMethodError: (method, type, description) =>
+          console.log(
+            JSON.stringify({
+              event: 'method-error',
+              method,
+              type,
+              description,
+            }),
+          ),
       }),
       authenticate,
       challenge: 'Basic realm="mailless", Bearer',

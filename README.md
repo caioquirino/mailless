@@ -4,11 +4,11 @@ A mailbox without a mail server to run: serverless email on AWS, reached over
 [JMAP](https://jmap.io) instead of IMAP, built from reusable TypeScript
 libraries.
 
-> **Status: early.** Receiving and reading work on real AWS: mail sent to the
-> domain is accepted by SES, stored in S3 and DynamoDB, and served over a JMAP
-> API with Cognito sign-in. Composing and sending through SES are written and
-> tested locally but not yet tried on AWS. There is no client library, and
-> nothing has been published to npm.
+> **Status: early.** Receiving, reading and sending work on real AWS: mail
+> for the domain is accepted by SES, stored in S3 and DynamoDB, served over a
+> JMAP API with Cognito sign-in, and sent back out through SES. Delivery and
+> bounce reporting is written and tested locally but not yet tried on AWS.
+> There is no client library, and nothing has been published to npm.
 
 ## Why JMAP
 
@@ -32,7 +32,8 @@ be served by functions that only run while a request is in flight.
 Also in this repository:
 
 - [`apps/mailless-service`](apps/mailless-service): the Lambda functions: the
-  SES ingest function, which imports inbound mail, and the JMAP API.
+  SES ingest function, which imports inbound mail; the JMAP API; and the
+  function that records delivery, bounce and complaint reports.
 - [`apps/dev-server`](apps/dev-server): a small local JMAP server over
   in-memory storage for trying things out.
 - [`infra/`](infra): Terraform for SES receiving, S3, DynamoDB and the ingest
@@ -125,11 +126,12 @@ wrapper around `handleRequest`.
 1. ~~Workspace, `jmap-core`, `jmap-server` on in-memory storage~~
 2. ~~DynamoDB, S3 and filesystem adapters; SES ingest function; Terraform~~
 3. ~~JMAP API behind API Gateway with Cognito sign-in~~
-4. Composing and sending through SES (written, being tried out)
-5. App passwords and multi-factor sign-in; bounce and complaint handling
-6. `jmap-client`
-7. Push over WebSocket, `/queryChanges`, first npm release
-8. Self-hosted build with docker-compose
+4. ~~Composing and sending through SES~~
+5. Delivery, bounce and complaint reporting (written, being tried out)
+6. App passwords and multi-factor sign-in
+7. `jmap-client`
+8. Push over WebSocket, `/queryChanges`, first npm release
+9. Self-hosted build with docker-compose
 
 ## License
 

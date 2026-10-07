@@ -42,6 +42,17 @@ export class SesMailTransport implements MailTransport {
           ...(this.configurationSetName
             ? { ConfigurationSetName: this.configurationSetName }
             : {}),
+          // Tags come back on SES events, which is how a bounce is matched to what was sent.
+          ...(envelope.tags && Object.keys(envelope.tags).length > 0
+            ? {
+                EmailTags: Object.entries(envelope.tags).map(
+                  ([Name, Value]) => ({
+                    Name,
+                    Value,
+                  }),
+                ),
+              }
+            : {}),
         }),
       );
     } catch (error) {

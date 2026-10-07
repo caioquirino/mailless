@@ -56,6 +56,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:eu-west-1:123456789012:mock-topic"
+    }
+  }
+
   mock_resource "aws_sqs_queue" {
     defaults = {
       arn = "arn:aws:sqs:eu-west-1:123456789012:mock-queue"
@@ -89,6 +95,7 @@ variables {
   activate_receipt_rule_set = false
   ingest_bundle             = "tests/fixture-bundle.mjs"
   api_bundle                = "tests/fixture-bundle.mjs"
+  events_bundle             = "tests/fixture-bundle.mjs"
 
   # Every other variable is pinned too: Terraform loads a local terraform.tfvars
   # into tests, and these must not depend on whoever runs them.
@@ -98,6 +105,7 @@ variables {
   use_customer_kms_key = true
   mail_from_subdomain  = "bounce"
   dmarc_policy         = "quarantine"
+  alarm_email          = null
 }
 
 run "defaults" {
@@ -227,7 +235,7 @@ run "defaults" {
   assert {
     condition = toset([
       for statement in data.aws_iam_policy_document.ingest.statement : statement.sid
-    ]) == toset(["Logs", "ReadAndRemoveInbound", "StoreMessages", "Metadata", "DeadLetters", "Encryption"])
+    ]) == toset(["Logs", "ReadAndRemoveInbound", "TellMissingFromForbidden", "StoreMessages", "Metadata", "DeadLetters", "Encryption"])
     error_message = "Unexpected statements in the ingest role policy."
   }
 
@@ -303,12 +311,26 @@ run "api_and_sign_in" {
     error_message = "The API role must not use wildcard actions or resources."
   }
 
+  # Sending is limited by the From address, not by the identity: in the SES sandbox the
+  # recipient's identity is checked too, so the identity has to be a wildcard.
+  assert {
+    condition = one([
+      for statement in data.aws_iam_policy_document.api.statement :
+      [for condition in statement.condition : "${condition.test} ${condition.variable} ${join(",", condition.values)}"]
+      if statement.sid == "SendMail"
+    ]) == ["StringLike ses:FromAddress *@example.com"]
+    error_message = "The API may send only with a From address at the stack's own domain."
+  }
+
   assert {
     condition = one([
       for statement in data.aws_iam_policy_document.api.statement : statement.resources
       if statement.sid == "SendMail"
-    ]) == toset(["arn:aws:ses:eu-west-1:123456789012:identity/example.com"])
-    error_message = "The API may send only as the verified domain."
+      ]) == toset([
+      "arn:aws:ses:eu-west-1:123456789012:identity/*",
+      "arn:aws:ses:eu-west-1:123456789012:configuration-set/mailless",
+    ])
+    error_message = "Sending must go through this stack's configuration set."
   }
 
   assert {
@@ -372,6 +394,74 @@ run "api_hostname_can_be_chosen" {
   assert {
     condition     = output.jmap_session_url == "https://jmap.example.com/.well-known/jmap"
     error_message = "A chosen hostname must be used throughout."
+  }
+}
+
+run "delivery_reporting" {
+  command = plan
+
+  assert {
+    condition = (
+      toset(aws_sesv2_configuration_set.main.suppression_options[0].suppressed_reasons) == toset(["BOUNCE", "COMPLAINT"]) &&
+      aws_sesv2_configuration_set.main.reputation_options[0].reputation_metrics_enabled &&
+      aws_lambda_function.api.environment[0].variables["CONFIGURATION_SET"] == "mailless"
+    )
+    error_message = "Mail must be sent through a configuration set that suppresses bounced and complaining addresses."
+  }
+
+  assert {
+    condition = toset(one(aws_sesv2_configuration_set_event_destination.delivery.event_destination).matching_event_types) == toset([
+      "BOUNCE", "COMPLAINT", "DELIVERY", "DELIVERY_DELAY", "REJECT",
+    ])
+    error_message = "Bounces, complaints, deliveries, delays and rejections must all be reported."
+  }
+
+  # Only SES, and only for this stack's configuration set, may publish delivery events.
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.delivery_events_topic.statement :
+      toset([for condition in statement.condition : condition.variable]) == toset(["aws:SourceAccount", "aws:SourceArn"])
+    ])
+    error_message = "Publishing to the delivery events topic must be tied to this account and configuration set."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.events.statement :
+      !contains(statement.resources, "*") && alltrue([for action in statement.actions : !endswith(action, ":*") && action != "*" && !startswith(action, "s3:")])
+    ])
+    error_message = "The delivery events role must have no wildcards and no access to mail content."
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_cloudwatch_metric_alarm.reputation)) == toset(["bounce-rate", "complaint-rate"]) &&
+      aws_cloudwatch_metric_alarm.reputation["bounce-rate"].threshold < 0.05 &&
+      aws_cloudwatch_metric_alarm.reputation["complaint-rate"].threshold < 0.001 &&
+      toset(keys(aws_cloudwatch_metric_alarm.dead_letters)) == toset(["ingest", "delivery-events"])
+    )
+    error_message = "Alarms must fire before SES's own review thresholds, and on any unprocessed message."
+  }
+
+  assert {
+    condition     = length(aws_sns_topic_subscription.alarm_email) == 0
+    error_message = "Nobody is emailed unless an alarm address is given."
+  }
+}
+
+run "alarms_can_email_someone" {
+  command = plan
+
+  variables {
+    alarm_email = "ops@example.com"
+  }
+
+  assert {
+    condition = (
+      length(aws_sns_topic_subscription.alarm_email) == 1 &&
+      aws_sns_topic_subscription.alarm_email[0].endpoint == "ops@example.com"
+    )
+    error_message = "The alarm address must be subscribed."
   }
 }
 

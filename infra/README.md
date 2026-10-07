@@ -4,27 +4,30 @@ Terraform for the AWS side of mailless: receiving mail through SES, storing it
 in S3 and DynamoDB, serving it to mail clients over a JMAP API, and sending
 through SES.
 
-> **Receiving and reading are proven; sending is new.** Inbound delivery and
-> the JMAP API with Cognito sign-in have been confirmed on a real account.
-> Sending passes its tests and a real `plan`, but no message has left through
-> SES yet.
+> **Receiving, reading and sending are proven; delivery reporting is new.**
+> Inbound delivery, the JMAP API with Cognito sign-in, and sending through SES
+> have all been confirmed on a real account. Delivery, bounce and complaint
+> reporting passes its tests and a real `plan`, but has not processed a real
+> SES event yet.
 
 ## What it creates
 
-| Resource                                       | Purpose                                                                                                         |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| SES domain identity with DKIM                  | Proves ownership of the domain.                                                                                 |
-| SES receipt rule set and rule                  | Accepts mail for the domain over TLS, scans it, stores it in S3, then invokes the ingest function.              |
-| S3 bucket                                      | `inbound/` holds raw messages until imported; `blobs/` holds the mailbox content. Encrypted, private, TLS only. |
-| DynamoDB table                                 | Mailbox metadata and change log. On-demand billing, point-in-time recovery, deletion protection.                |
-| Ingest Lambda (`nodejs24.x`, arm64)            | Imports each message into the recipients' accounts.                                                             |
-| SQS dead-letter queue                          | Catches deliveries that still fail after two retries.                                                           |
-| KMS key (optional, on by default)              | Customer-managed encryption for the bucket and table.                                                           |
-| Cognito user pool                              | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed.                                     |
-| API Lambda and HTTP API                        | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                            |
-| Certificate and `mail.<domain>` (with Route53) | The API's own hostname, plus an SRV record so clients can find it from an address.                              |
-| MAIL FROM subdomain                            | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                   |
-| Route53 records (optional)                     | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.  |
+| Resource                                                 | Purpose                                                                                                                                  |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| SES domain identity with DKIM                            | Proves ownership of the domain.                                                                                                          |
+| SES receipt rule set and rule                            | Accepts mail for the domain over TLS, scans it, stores it in S3, then invokes the ingest function.                                       |
+| S3 bucket                                                | `inbound/` holds raw messages until imported; `blobs/` holds the mailbox content. Encrypted, private, TLS only.                          |
+| DynamoDB table                                           | Mailbox metadata and change log. On-demand billing, point-in-time recovery, deletion protection.                                         |
+| Ingest Lambda (`nodejs24.x`, arm64)                      | Imports each message into the recipients' accounts.                                                                                      |
+| SQS dead-letter queue                                    | Catches deliveries that still fail after two retries.                                                                                    |
+| KMS key (optional, on by default)                        | Customer-managed encryption for the bucket and table.                                                                                    |
+| Cognito user pool                                        | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed.                                                              |
+| API Lambda and HTTP API                                  | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                                                     |
+| Certificate and `mail.<domain>` (with Route53)           | The API's own hostname, plus an SRV record so clients can find it from an address.                                                       |
+| MAIL FROM subdomain                                      | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                                            |
+| SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message. |
+| CloudWatch alarms                                        | Bounce rate, complaint rate, and anything left in a dead-letter queue.                                                                   |
+| Route53 records (optional)                               | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.                           |
 
 Everything is pay-per-use except the KMS key, which costs about 1 USD a month.
 Set `use_customer_kms_key = false` to use the free AWS-managed encryption.
@@ -46,8 +49,19 @@ Each account may send from the addresses that deliver to it. With a
   that fails authentication. If the domain also sends through another service
   that does not sign with DKIM, set `dmarc_policy = "none"` or `null` first,
   or that mail may land in spam.
-- **Not handled yet:** bounces and complaints are not processed or shown, and
-  there is no outbound rate limiting beyond SES's own.
+- **Bounces and complaints.** Mail is sent through a configuration set that
+  reports what became of each message. The outcome per recipient is stored on
+  the sent message as its JMAP `deliveryStatus`, where a client can show it.
+  Addresses that hard-bounce or complain go on the SES suppression list and
+  are not sent to again. Complaints are logged and counted.
+- **Alarms** fire when the bounce rate passes 4% or the complaint rate 0.08%,
+  just below the levels at which SES puts an account under review, and when a
+  message or delivery report could not be processed. Set `alarm_email` to be
+  emailed (AWS sends a confirmation link first); otherwise they are visible in
+  CloudWatch only.
+- **Not handled yet:** there is no outbound rate limiting beyond SES's own,
+  and a bounce is not turned into a message in the inbox (SES's own bounce
+  notification email still arrives there).
 
 ## Before you apply
 
@@ -159,7 +173,9 @@ aws logs tail /aws/lambda/mailless-ingest --since 10m
 ```
 
 The logs carry SES message ids and outcomes only, never addresses or content.
-The dead-letter queue (`ingest_dead_letter_queue` output) should stay empty.
+The dead-letter queues (`ingest_dead_letter_queue` and
+`events_dead_letter_queue` outputs) should stay empty. Delivery reports are
+logged in `/aws/lambda/<name>-delivery-events`, again without addresses.
 API requests appear in `/aws/apigateway/<name>` (route, status, timing) and
 errors in `/aws/lambda/<name>-api`.
 

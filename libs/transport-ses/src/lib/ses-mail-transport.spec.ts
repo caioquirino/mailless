@@ -37,6 +37,26 @@ describe('SesMailTransport', () => {
     ]);
   });
 
+  it('attaches the envelope tags to the message', async () => {
+    const { client, sent } = fakeClient();
+    await new SesMailTransport({ client }).send(message, {
+      ...envelope,
+      tags: { account: 'me', submission: 'es123' },
+    });
+    expect(sent[0]?.input).toMatchObject({
+      EmailTags: [
+        { Name: 'account', Value: 'me' },
+        { Name: 'submission', Value: 'es123' },
+      ],
+    });
+
+    await new SesMailTransport({ client }).send(message, {
+      ...envelope,
+      tags: {},
+    });
+    expect(sent[1]?.input).not.toHaveProperty('EmailTags');
+  });
+
   it('uses a configuration set when given one', async () => {
     const { client, sent } = fakeClient();
     await new SesMailTransport({ client, configurationSetName: 'mail' }).send(

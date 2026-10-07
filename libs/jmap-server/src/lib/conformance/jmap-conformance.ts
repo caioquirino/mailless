@@ -2365,7 +2365,13 @@ export function describeJmapConformance(
       const submission = (responses[1]?.[1] as Json).created.s;
       expect(submission).toMatchObject({
         undoStatus: 'final',
-        deliveryStatus: null,
+        deliveryStatus: {
+          'bob@example.org': {
+            smtpReply: '250 Accepted',
+            delivered: 'queued',
+            displayed: 'unknown',
+          },
+        },
         envelope: {
           mailFrom: { email: 'me@example.com', parameters: null },
           rcptTo: [
@@ -2381,6 +2387,7 @@ export function describeJmapConformance(
       expect(h.sent[0]?.envelope).toEqual({
         mailFrom: 'me@example.com',
         rcptTo: ['bob@example.org', 'carol@example.org', 'hidden@example.org'],
+        tags: { account: AUTH.accountId, submission: submission.id },
       });
       const wire = h.sent[0]?.message ?? '';
       expect(wire).toContain('Subject: Hello Bob');
@@ -2662,6 +2669,87 @@ export function describeJmapConformance(
       expect(
         (await h.call('EmailSubmission/get', { ids: [a, b] })).notFound,
       ).toEqual([b]);
+    });
+
+    it('records delivery outcomes reported after sending', async () => {
+      const email = await create({
+        to: [{ email: 'bob@example.org' }, { email: 'Carol@Example.org' }],
+      });
+      const { id } = (
+        await h.call('EmailSubmission/set', {
+          create: { s: { identityId: 'me', emailId: email.id } },
+        })
+      ).created.s;
+      const state = (await h.call('EmailSubmission/get', { ids: [] })).state;
+      const status = async () =>
+        (
+          await h.call('EmailSubmission/get', {
+            ids: [id],
+            properties: ['deliveryStatus'],
+          })
+        ).list[0].deliveryStatus;
+
+      expect(
+        await h.server.recordDelivery(AUTH, id, {
+          'BOB@example.org': { delivered: 'yes', smtpReply: '250 2.0.0 OK' },
+          'carol@example.org': {
+            delivered: 'no',
+            smtpReply: '550 5.1.1 No such user',
+          },
+          'stranger@example.org': { delivered: 'yes' },
+        }),
+      ).toBe(true);
+      expect(await status()).toEqual({
+        'bob@example.org': {
+          smtpReply: '250 2.0.0 OK',
+          delivered: 'yes',
+          displayed: 'unknown',
+        },
+        'Carol@Example.org': {
+          smtpReply: '550 5.1.1 No such user',
+          delivered: 'no',
+          displayed: 'unknown',
+        },
+      });
+      expect(
+        (await h.call('EmailSubmission/changes', { sinceState: state }))
+          .updated,
+      ).toEqual([id]);
+
+      // A late or repeated report never undoes a known outcome.
+      const settled = (await h.call('EmailSubmission/get', { ids: [] })).state;
+      await h.server.recordDelivery(AUTH, id, {
+        'bob@example.org': { delivered: 'queued', smtpReply: '451 try later' },
+        'carol@example.org': { delivered: 'yes', smtpReply: '250 OK' },
+      });
+      await h.server.recordDelivery(AUTH, id, {
+        'bob@example.org': { delivered: 'yes', smtpReply: '250 2.0.0 OK' },
+      });
+      expect((await status())['bob@example.org'].delivered).toBe('yes');
+      expect((await status())['Carol@Example.org'].delivered).toBe('no');
+      expect((await h.call('EmailSubmission/get', { ids: [] })).state).toBe(
+        settled,
+      );
+
+      // Delivered, then bounced after all: the failure wins.
+      await h.server.recordDelivery(AUTH, id, {
+        'bob@example.org': { delivered: 'no', smtpReply: '550 mailbox gone' },
+      });
+      expect((await status())['bob@example.org']).toMatchObject({
+        delivered: 'no',
+        smtpReply: '550 mailbox gone',
+      });
+
+      expect(await h.server.recordDelivery(AUTH, 'missing', {})).toBe(false);
+      expect(
+        await h.server.recordDelivery(
+          { accountId: 'acc2', username: 'x' },
+          id,
+          {
+            'bob@example.org': { delivered: 'yes' },
+          },
+        ),
+      ).toBe(false);
     });
 
     it('offers no sending methods when no transport is configured', async () => {

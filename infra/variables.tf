@@ -73,6 +73,17 @@ variable "dmarc_policy" {
   }
 }
 
+variable "alarm_email" {
+  description = "Address that is told when bounce or complaint rates climb, or when mail could not be processed. AWS sends a confirmation link to it first. Leave null to have the alarms visible in CloudWatch only."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.alarm_email == null ? true : can(regex("^[^@\\s]+@[^@\\s]+$", var.alarm_email))
+    error_message = "alarm_email must be an email address or null."
+  }
+}
+
 variable "api_hostname" {
   description = "Hostname of the JMAP API. Defaults to mail.<domain>. Only used when route53_zone_id is set; otherwise the API is reachable on the address API Gateway generates."
   type        = string
@@ -130,4 +141,10 @@ variable "api_bundle" {
   description = "Path to the built API Lambda bundle. Build it with `pnpm nx build mailless-service`."
   type        = string
   default     = "../apps/mailless-service/dist/api.mjs"
+}
+
+variable "events_bundle" {
+  description = "Path to the built delivery events Lambda bundle. Build it with `pnpm nx build mailless-service`."
+  type        = string
+  default     = "../apps/mailless-service/dist/events.mjs"
 }
