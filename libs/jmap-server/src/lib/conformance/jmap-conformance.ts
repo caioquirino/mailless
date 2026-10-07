@@ -2,6 +2,7 @@ import {
   CAPABILITY_CORE,
   CAPABILITY_MAIL,
   CAPABILITY_SUBMISSION,
+  CAPABILITY_VACATION,
   REQUEST_ERROR,
   RequestError,
   type Invocation,
@@ -18,7 +19,12 @@ import type { StorageAdapterFactory } from './storage-contract.js';
 type Json = any;
 
 const AUTH = { accountId: 'acc1', username: 'user@example.com' };
-const USING = [CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION];
+const USING = [
+  CAPABILITY_CORE,
+  CAPABILITY_MAIL,
+  CAPABILITY_SUBMISSION,
+  CAPABILITY_VACATION,
+];
 const URLS = {
   api: 'https://jmap.example.com/api',
   download:
@@ -4745,6 +4751,631 @@ export function describeJmapConformance(
           })
         ).type,
       ).toBe('invalidArguments');
+    });
+  });
+
+  describe(`${name}: parsing and copying`, () => {
+    let h: Harness;
+    let inbox: string;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      inbox = await h.mailbox('inbox');
+    });
+
+    const forwarded = [
+      'From: Carol <carol@example.org>',
+      'To: me@example.com',
+      'Subject: Fwd: the original',
+      'Content-Type: multipart/mixed; boundary=outer',
+      '',
+      '--outer',
+      'Content-Type: text/plain',
+      '',
+      'See the attached message.',
+      '--outer',
+      'Content-Type: message/rfc822',
+      'Content-Disposition: attachment; filename=original.eml',
+      '',
+      'From: Dave <dave@example.net>',
+      'To: carol@example.org',
+      'Subject: The original',
+      'Date: Mon, 05 Oct 2026 09:00:00 +0100',
+      'Message-ID: <orig@example.net>',
+      'Content-Type: multipart/mixed; boundary=inner',
+      '',
+      '--inner',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Original body',
+      '--inner',
+      'Content-Type: text/plain; name=notes.txt',
+      'Content-Disposition: attachment; filename=notes.txt',
+      '',
+      'Attached notes',
+      '--inner--',
+      '--outer--',
+      '',
+    ].join('\r\n');
+
+    it('parses a message that is attached to another, without importing it', async () => {
+      const blobId = await h.upload(forwarded);
+      const { created } = await h.call('Email/import', {
+        emails: { m: { blobId, mailboxIds: { [inbox]: true } } },
+      });
+      const [outer] = (
+        await h.call('Email/get', {
+          ids: [created.m.id],
+          properties: ['attachments'],
+        })
+      ).list;
+      const attached = outer.attachments[0];
+      expect(attached).toMatchObject({
+        type: 'message/rfc822',
+        name: 'original.eml',
+      });
+      const before = (await h.call('Email/get', { ids: [] })).state;
+
+      const result = await h.call('Email/parse', {
+        blobIds: [attached.blobId, 'missing', blobId],
+        fetchTextBodyValues: true,
+      });
+      expect(result.notFound).toEqual(['missing']);
+      expect(result.notParsable).toBeNull();
+      expect(Object.keys(result.parsed)).toEqual([attached.blobId, blobId]);
+
+      const inner = result.parsed[attached.blobId];
+      // The properties RFC 8621 §4.9 lists as the default, and no others.
+      expect(Object.keys(inner).sort()).toEqual([
+        'attachments',
+        'bcc',
+        'bodyValues',
+        'cc',
+        'from',
+        'hasAttachment',
+        'htmlBody',
+        'inReplyTo',
+        'messageId',
+        'preview',
+        'references',
+        'replyTo',
+        'sender',
+        'sentAt',
+        'subject',
+        'textBody',
+        'to',
+      ]);
+      expect(inner).toMatchObject({
+        from: [{ name: 'Dave', email: 'dave@example.net' }],
+        subject: 'The original',
+        sentAt: '2026-10-05T09:00:00+01:00',
+        messageId: ['orig@example.net'],
+        hasAttachment: true,
+        preview: 'Original body',
+      });
+      expect(inner.bodyValues[inner.textBody[0].partId].value).toBe(
+        'Original body',
+      );
+      // A part of the attached message can be fetched like any other blob.
+      const notes = inner.attachments[0];
+      expect(notes.name).toBe('notes.txt');
+      expect(
+        decoder.decode(
+          (await h.server.download(
+            AUTH,
+            AUTH.accountId,
+            notes.blobId,
+          )) as Uint8Array,
+        ),
+      ).toBe('Attached notes');
+
+      // What only an email in the mail store has is null.
+      const [, , whole] = [0, 0, result.parsed[blobId]];
+      expect(whole.subject).toBe('Fwd: the original');
+      const state = await h.call('Email/parse', {
+        blobIds: [attached.blobId],
+        properties: [
+          'id',
+          'mailboxIds',
+          'keywords',
+          'receivedAt',
+          'threadId',
+          'blobId',
+          'size',
+          'header:Subject:asText',
+        ],
+      });
+      expect(state.parsed[attached.blobId]).toEqual({
+        id: null,
+        mailboxIds: null,
+        keywords: null,
+        receivedAt: null,
+        threadId: null,
+        blobId: attached.blobId,
+        size: expect.any(Number),
+        'header:Subject:asText': 'The original',
+      });
+      // Nothing was stored.
+      expect((await h.call('Email/get', { ids: [] })).state).toBe(before);
+      expect((await h.call('Email/query', {})).ids).toHaveLength(1);
+    });
+
+    it('says which blobs are not messages', async () => {
+      const notMail = await h.upload('\r\njust some bytes, no header fields');
+      const result = await h.call('Email/parse', { blobIds: [notMail] });
+      expect(result).toMatchObject({
+        parsed: null,
+        notParsable: [notMail],
+        notFound: null,
+      });
+      expect(
+        (await h.fail('Email/parse', { blobIds: [], properties: ['nope'] }))
+          .type,
+      ).toBe('invalidArguments');
+    });
+
+    it('refuses to read a header in a form it cannot take', async () => {
+      const { id } = await h.deliver(inbox);
+      for (const property of [
+        'header:From:asDate',
+        'header:Date:asAddresses',
+        'header:Subject:asMessageIds',
+        'header:Message-ID:asURLs',
+      ]) {
+        expect(
+          (await h.fail('Email/get', { ids: [id], properties: [property] }))
+            .type,
+          property,
+        ).toBe('invalidArguments');
+        expect(
+          (await h.fail('Email/parse', { blobIds: [], properties: [property] }))
+            .type,
+        ).toBe('invalidArguments');
+      }
+      // Any form is fine for a header the standards do not define, and raw always is.
+      const [email] = (
+        await h.call('Email/get', {
+          ids: [id],
+          properties: [
+            'header:X-Custom:asDate',
+            'header:X-Custom:asAddresses',
+            'header:From:asRaw',
+          ],
+        })
+      ).list;
+      expect(email['header:X-Custom:asDate']).toBeNull();
+      expect(email['header:From:asRaw']).toContain('alice@example.com');
+    });
+
+    it('has no second account to copy to or from', async () => {
+      const blobId = await h.upload('bytes');
+      const { id } = await h.deliver(inbox);
+      const copyEmail = (fromAccountId: string, accountId: string) =>
+        h.fail('Email/copy', {
+          fromAccountId,
+          accountId,
+          create: { c: { id, mailboxIds: { [inbox]: true } } },
+        });
+      const copyBlob = (fromAccountId: string, accountId: string) =>
+        h.fail('Blob/copy', { fromAccountId, accountId, blobIds: [blobId] });
+
+      for (const copy of [copyEmail, copyBlob]) {
+        expect((await copy(AUTH.accountId, 'acc2')).type).toBe(
+          'accountNotFound',
+        );
+        expect((await copy('acc2', AUTH.accountId)).type).toBe(
+          'fromAccountNotFound',
+        );
+        expect((await copy(AUTH.accountId, AUTH.accountId)).type).toBe(
+          'invalidArguments',
+        );
+      }
+      expect((await h.call('Email/query', {})).ids).toEqual([id]);
+    });
+  });
+
+  describe(`${name}: vacation response`, () => {
+    let h: Harness;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+    });
+
+    const arrive = async (
+      lines: string[],
+      options: Json = {},
+    ): Promise<string | undefined> => {
+      const before = h.sent.length;
+      await h.server.importMessage(
+        AUTH,
+        encoder.encode(
+          [
+            ...lines,
+            ...(lines.some((line) => /^message-id:/i.test(line))
+              ? []
+              : [
+                  `Message-ID: <${Math.random().toString(36).slice(2)}@example.org>`,
+                ]),
+            '',
+            'Are you there?',
+          ].join('\r\n'),
+        ),
+        { mailboxRole: 'inbox', delivery: true, ...options },
+      );
+      expect(h.sent.length - before).toBeLessThanOrEqual(1);
+      return h.sent[before]?.message;
+    };
+    const fromBob = [
+      'Return-Path: <bob@example.org>',
+      'From: Bob <bob@example.org>',
+      'To: Me <me@example.com>',
+      'Subject: Lunch?',
+    ];
+    const enable = (settings: Json = {}) =>
+      h.call('VacationResponse/set', {
+        update: {
+          singleton: {
+            isEnabled: true,
+            subject: 'Away until Monday',
+            textBody: 'Back on Monday.\nUrgent? Call the office.',
+            ...settings,
+          },
+        },
+      });
+
+    it('has exactly one settings object, which can only be updated', async () => {
+      const initial = await h.call('VacationResponse/get', {});
+      expect(initial.list).toEqual([
+        {
+          id: 'singleton',
+          isEnabled: false,
+          fromDate: null,
+          toDate: null,
+          subject: null,
+          textBody: null,
+          htmlBody: null,
+        },
+      ]);
+      expect(
+        await h.call('VacationResponse/get', {
+          ids: ['singleton', 'other'],
+          properties: ['isEnabled'],
+        }),
+      ).toMatchObject({
+        list: [{ id: 'singleton', isEnabled: false }],
+        notFound: ['other'],
+      });
+
+      const result = await h.call('VacationResponse/set', {
+        ifInState: initial.state,
+        create: { n: { isEnabled: true } },
+        update: {
+          singleton: {
+            id: 'singleton',
+            isEnabled: true,
+            fromDate: '2026-10-10T00:00:00Z',
+            htmlBody: '<p>Away</p>',
+          },
+          other: { isEnabled: true },
+        },
+        destroy: ['singleton'],
+      });
+      expect(result.updated).toEqual({ singleton: null });
+      expect(result.notCreated.n.type).toBe('singleton');
+      expect(result.notDestroyed.singleton.type).toBe('singleton');
+      expect(result.notUpdated.other.type).toBe('notFound');
+      expect(result.newState).not.toBe(result.oldState);
+
+      const after = await h.call('VacationResponse/get', {});
+      expect(after.state).toBe(result.newState);
+      expect(after.list[0]).toEqual({
+        id: 'singleton',
+        isEnabled: true,
+        fromDate: '2026-10-10T00:00:00Z',
+        toDate: null,
+        subject: null,
+        textBody: null,
+        htmlBody: '<p>Away</p>',
+      });
+
+      for (const [property, value] of [
+        ['isEnabled', 'yes'],
+        ['fromDate', 'tomorrow'],
+        ['toDate', '2026-10-10T00:00:00+02:00'],
+        ['subject', 'Two\r\nLines'],
+        ['textBody', 5],
+        ['id', 'another'],
+        ['nonsense', true],
+      ] as Array<[string, Json]>) {
+        const refused = await h.call('VacationResponse/set', {
+          update: { singleton: { [property]: value } },
+        });
+        expect(refused.notUpdated?.singleton, property).toEqual({
+          type: 'invalidProperties',
+          properties: [property],
+        });
+      }
+      expect(
+        (
+          await h.fail('VacationResponse/set', {
+            ifInState: initial.state,
+            update: { singleton: { isEnabled: false } },
+          })
+        ).type,
+      ).toBe('stateMismatch');
+    });
+
+    it('answers a person who wrote to the user, once', async () => {
+      // Nothing is sent while it is off.
+      expect(await arrive(fromBob)).toBeUndefined();
+
+      await enable();
+      const reply = (await arrive([
+        ...fromBob,
+        'Message-ID: <lunch@example.org>',
+        'References: <earlier@example.org>',
+      ])) as string;
+      expect(reply).toContain('From: "Me Myself" <me@example.com>');
+      expect(reply).toContain('To: bob@example.org');
+      expect(reply).toContain('Subject: Away until Monday');
+      expect(reply).toContain('In-Reply-To: <lunch@example.org>');
+      expect(reply).toContain(
+        'References: <earlier@example.org> <lunch@example.org>',
+      );
+      // Marks it as automatic, so that nothing answers it in turn.
+      expect(reply).toContain('Auto-Submitted: auto-replied');
+      expect(reply).toContain('Back on Monday.\r\nUrgent? Call the office.');
+      expect(h.sent.at(-1)?.envelope).toEqual({
+        mailFrom: 'me@example.com',
+        rcptTo: ['bob@example.org'],
+        tags: { account: AUTH.accountId },
+      });
+
+      // The same person is not answered again, however they spell their address.
+      expect(await arrive(fromBob)).toBeUndefined();
+      expect(
+        await arrive([
+          'Return-Path: <BOB@Example.org>',
+          'From: Bob <bob@example.org>',
+          'To: me@example.com',
+          'Subject: Hello?',
+        ]),
+      ).toBeUndefined();
+      // Someone else is.
+      expect(
+        await arrive([
+          'Return-Path: <carol@example.org>',
+          'From: Carol <carol@example.org>',
+          'Cc: me@example.com',
+          'Subject: FYI',
+        ]),
+      ).toContain('To: carol@example.org');
+
+      // A changed response is news to everyone, so they hear it once more.
+      await enable({
+        subject: 'Away until Tuesday',
+        htmlBody: '<p>Back <b>Tuesday</b></p>',
+        textBody: null,
+      });
+      const second = (await arrive(fromBob)) as string;
+      expect(second).toContain('Subject: Away until Tuesday');
+      expect(second).toContain('multipart/alternative');
+      expect(second).toContain('Back Tuesday');
+      expect(second).toContain('<p>Back <b>Tuesday</b></p>');
+      expect(await arrive(fromBob)).toBeUndefined();
+
+      // The replies are not kept as mail of the account, and the mail itself arrived.
+      expect((await h.call('Email/query', {})).ids).toHaveLength(7);
+      expect((await h.call('EmailSubmission/query', {})).ids).toHaveLength(0);
+    });
+
+    it('makes up a subject and a body when none are set', async () => {
+      await enable({ subject: null, textBody: null });
+      const reply = (await arrive(fromBob)) as string;
+      expect(reply).toContain('Subject: Auto: Lunch?');
+      expect(reply).toContain('This is an automatic reply.');
+    });
+
+    it('answers only between its dates', async () => {
+      await enable({
+        fromDate: '2099-01-01T00:00:00Z',
+        toDate: '2099-02-01T00:00:00Z',
+      });
+      expect(await arrive(fromBob)).toBeUndefined();
+      await enable({
+        fromDate: '2020-01-01T00:00:00Z',
+        toDate: '2020-02-01T00:00:00Z',
+      });
+      expect(await arrive(fromBob)).toBeUndefined();
+      await enable({
+        fromDate: '2020-01-01T00:00:00Z',
+        toDate: '2099-02-01T00:00:00Z',
+      });
+      expect(await arrive(fromBob)).toContain('To: bob@example.org');
+    });
+
+    it('never answers lists, bounces, robots, junk or mail not addressed to the user', async () => {
+      await enable();
+      const silent: Array<[string, string[], Json?]> = [
+        [
+          'a bounce',
+          [
+            'Return-Path: <>',
+            'From: Mail Delivery <mailer-daemon@example.org>',
+            'To: me@example.com',
+            'Subject: Undelivered',
+          ],
+        ],
+        [
+          'an automatic message',
+          [...fromBob, 'Auto-Submitted: auto-generated'],
+        ],
+        [
+          'another vacation reply',
+          [...fromBob, 'Auto-Submitted: auto-replied (vacation)'],
+        ],
+        ['a list, by List-Id', [...fromBob, 'List-Id: <announce.example.org>']],
+        [
+          'a list, by List-Unsubscribe',
+          [...fromBob, 'List-Unsubscribe: <mailto:leave@example.org>'],
+        ],
+        ['bulk mail', [...fromBob, 'Precedence: bulk']],
+        [
+          'mail asking not to be answered',
+          [...fromBob, 'X-Auto-Response-Suppress: OOF, AutoReply'],
+        ],
+        [
+          'a no-reply sender',
+          [
+            'Return-Path: <no-reply@shop.example>',
+            'From: Shop <no-reply@shop.example>',
+            'To: me@example.com',
+            'Subject: Receipt',
+          ],
+        ],
+        [
+          'a bounce address',
+          [
+            'Return-Path: <news-bounces+123@lists.example>',
+            'From: News <news@lists.example>',
+            'To: me@example.com',
+            'Subject: News',
+          ],
+        ],
+        [
+          'a blind copy',
+          [
+            'Return-Path: <dan@example.org>',
+            'From: Dan <dan@example.org>',
+            'To: someone-else@example.org',
+            'Subject: Hidden',
+          ],
+        ],
+        [
+          "mail to an address that is not the user's",
+          [
+            'Return-Path: <dan@example.org>',
+            'From: Dan <dan@example.org>',
+            'To: other@example.com',
+            'Subject: Wrong person',
+          ],
+        ],
+        [
+          "the user's own mail",
+          [
+            'Return-Path: <me@example.com>',
+            'From: Me <me@example.com>',
+            'To: me@example.com',
+            'Subject: Note to self',
+          ],
+        ],
+        [
+          'junk',
+          [
+            'Return-Path: <eve@example.org>',
+            'From: Eve <eve@example.org>',
+            'To: me@example.com',
+            'Subject: You won',
+          ],
+          { keywords: { $junk: true } },
+        ],
+        [
+          'a client upload',
+          [
+            'Return-Path: <frank@example.org>',
+            'From: Frank <frank@example.org>',
+            'To: me@example.com',
+            'Subject: Imported',
+          ],
+          { delivery: false },
+        ],
+      ];
+      for (const [label, lines, options] of silent) {
+        expect(await arrive(lines, options), label).toBeUndefined();
+      }
+      // "Auto-Submitted: no" says a person sent it.
+      expect(
+        await arrive([
+          'Return-Path: <grace@example.org>',
+          'From: Grace <grace@example.org>',
+          'To: me@example.com',
+          'Subject: Hi',
+          'Auto-Submitted: no',
+        ]),
+      ).toContain('To: grace@example.org');
+      // The reply goes to the envelope sender, not to whatever From claims.
+      expect(
+        await arrive([
+          'Return-Path: <real-sender@example.org>',
+          'From: Someone Else <victim@example.net>',
+          'To: me@example.com',
+          'Subject: Hi',
+        ]),
+      ).toContain('To: real-sender@example.org');
+      // An address the catch-all identity covers counts as the user's, and is what the reply comes from.
+      const viaAlias = (await arrive([
+        'Return-Path: <henry@example.org>',
+        'From: Henry <henry@example.org>',
+        'To: sales@catch.example.com',
+        'Subject: Quote',
+      ])) as string;
+      expect(viaAlias).toContain('From: sales@catch.example.com');
+    });
+
+    it('delivers the mail even when the reply cannot be sent', async () => {
+      const outcomes: Array<[string, boolean]> = [];
+      const server = createJmapServer({
+        storage: h.adapter,
+        urls: URLS,
+        transport: {
+          async send() {
+            throw new MailRejectedError('Email address is not verified');
+          },
+        },
+        identities: () => [{ id: 'me', email: 'me@example.com' }],
+        onAutoReply: (outcome, error) =>
+          outcomes.push([outcome, error !== undefined]),
+      });
+      await enable();
+      const raw = (subject: string, extra: string[] = []) =>
+        encoder.encode(
+          [
+            ...fromBob.slice(0, 3),
+            `Subject: ${subject}`,
+            ...extra,
+            '',
+            'x',
+          ].join('\r\n'),
+        );
+      const { id } = await server.importMessage(AUTH, raw('One'), {
+        mailboxRole: 'inbox',
+        delivery: true,
+      });
+      expect((await h.call('Email/get', { ids: [id] })).list).toHaveLength(1);
+      await server.importMessage(AUTH, raw('Two', ['List-Id: <l.example>']), {
+        mailboxRole: 'inbox',
+        delivery: true,
+      });
+      expect(outcomes).toEqual([
+        ['failed', true],
+        ['mailing-list', false],
+      ]);
+    });
+
+    it('is not offered by a server that cannot send', async () => {
+      const server = createJmapServer({ storage: h.adapter, urls: URLS });
+      expect(Object.keys(server.getSession(AUTH).capabilities)).not.toContain(
+        CAPABILITY_VACATION,
+      );
+      await enable();
+      // Mail arrives as usual; there is simply nothing to answer with.
+      await server.importMessage(
+        AUTH,
+        encoder.encode([...fromBob, '', 'x'].join('\r\n')),
+        {
+          mailboxRole: 'inbox',
+          delivery: true,
+        },
+      );
+      expect(h.sent).toHaveLength(0);
     });
   });
 }

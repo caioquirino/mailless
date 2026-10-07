@@ -18,6 +18,34 @@ const FORMS = [
 ] as const;
 type HeaderForm = (typeof FORMS)[number];
 
+/*
+ * The parsed forms each known header field may be read or written in
+ * (RFC 8621 §4.1.2). A field not listed is unknown to the standards and may
+ * take any form; the raw form is always allowed.
+ */
+const FORMS_BY_FIELD = new Map<string, HeaderForm[]>();
+for (const [fields, forms] of [
+  [
+    'from sender reply-to to cc bcc resent-from resent-sender resent-reply-to resent-to resent-cc resent-bcc',
+    ['asAddresses', 'asGroupedAddresses'],
+  ],
+  ['message-id in-reply-to references resent-message-id', ['asMessageIds']],
+  ['date resent-date', ['asDate']],
+  [
+    'list-help list-unsubscribe list-subscribe list-post list-owner list-archive',
+    ['asURLs'],
+  ],
+  ['subject comments keywords list-id', ['asText']],
+  ['return-path received', []],
+] as Array<[string, HeaderForm[]]>) {
+  for (const field of fields.split(' ')) FORMS_BY_FIELD.set(field, forms);
+}
+
+export function isFormAllowed(name: string, form: HeaderForm): boolean {
+  const allowed = FORMS_BY_FIELD.get(name.toLowerCase());
+  return form === 'asRaw' || !allowed || allowed.includes(form);
+}
+
 export interface HeaderProperty {
   name: string;
   form: HeaderForm;

@@ -200,6 +200,23 @@ fetches what changed.
   in `/aws/lambda/<name>-push`. `sent` staying at 0 means no app has a verified
   subscription.
 
+### Vacation response
+
+A mail app that supports it can turn on an out-of-office reply for the
+account. While it is on, the ingest function answers incoming mail once per
+sender per week, following the usual rules for automatic replies: nothing goes
+to mailing lists, bounces, automatic senders, junk, or mail not addressed to
+you.
+
+- Replies are sent as the address the message was written to, through the
+  same configuration set as other mail, so bounced addresses are not written
+  to again.
+- While SES is in the sandbox, replies to unverified addresses are refused by
+  SES. The mail is still delivered; the log shows
+  `{"event":"auto-reply","outcome":"failed"}`.
+- The ingest log records each decision by name only, such as `sent` or
+  `mailing-list`, never who wrote.
+
 ### What is accepted
 
 - **Email address or name, with an app password** (HTTP Basic). The

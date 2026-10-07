@@ -147,6 +147,13 @@
     "status": "skip",
     "reason": "test requires implementation of pool_account_pair"
   },
+  "t/Email/foreign-account.t": {
+    "status": "fail",
+    "failed": [
+      "Email/copy fromAccountId=OTHER accountId=SELF: accountNotFound"
+    ],
+    "note": "The suite expects accountNotFound when the account to copy from is not one the user has. RFC 8620 section 5.4 defines fromAccountNotFound for exactly that, which is what this server answers. (An accountId that is not the user's does get accountNotFound.)"
+  },
   "t/Email/query/filtering.t": {
     "status": "fail",
     "failed": [
@@ -217,17 +224,5 @@
   "t/Quota/query/basic.t": {
     "status": "skip",
     "reason": "server does not support urn:ietf:params:jmap:quota"
-  },
-  "t/VacationResponse/foreign-account.t": {
-    "status": "skip",
-    "reason": "server does not support urn:ietf:params:jmap:vacationresponse"
-  },
-  "t/VacationResponse/get/basic.t": {
-    "status": "skip",
-    "reason": "server does not support urn:ietf:params:jmap:vacationresponse"
-  },
-  "t/VacationResponse/set/basic.t": {
-    "status": "skip",
-    "reason": "server does not support urn:ietf:params:jmap:vacationresponse"
   }
 }

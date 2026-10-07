@@ -37,6 +37,8 @@ export interface MethodContext {
   transport?: MailTransport;
   /** The addresses the caller may send from. */
   identities(): Promise<ResolvedIdentity[]>;
+  /** Told what became of the vacation response for a delivered message. */
+  onAutoReply?: (outcome: string, error?: unknown) => void;
 }
 
 /** An identity together with the further addresses it may send as, which clients never see. */
@@ -72,6 +74,29 @@ export function requireAccount(ctx: MethodContext, accountId: string): string {
     throw new MethodError('accountNotFound');
   }
   return accountId;
+}
+
+/**
+ * Checks the two accounts of a `/copy` call (RFC 8620 §5.4). They must differ
+ * and the caller must have access to both. A user here has access to one
+ * account only, so no pair can pass: this always throws, with the error the
+ * arguments call for. Copying itself is for the day accounts can be shared.
+ */
+export function requireCopyAccounts(
+  ctx: MethodContext,
+  fromAccountId: string,
+  accountId: string,
+): never {
+  if (accountId !== ctx.auth.accountId) {
+    throw new MethodError('accountNotFound');
+  }
+  if (fromAccountId === accountId) {
+    throw new MethodError(
+      'invalidArguments',
+      'fromAccountId and accountId must be different accounts',
+    );
+  }
+  throw new MethodError('fromAccountNotFound');
 }
 
 /** Writes a batch, attaching the pending `ifInState` check to the first commit of a `/set` call. */

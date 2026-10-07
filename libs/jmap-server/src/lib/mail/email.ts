@@ -3,6 +3,7 @@ import {
   DEFAULT_BODY_PROPERTIES,
   DEFAULT_EMAIL_PROPERTIES,
   GetArgumentsSchema,
+  IdSchema,
   MethodError,
   PatchError,
   patchedProperties,
@@ -22,6 +23,7 @@ import {
   generateId,
   parseArguments,
   requireAccount,
+  requireCopyAccounts,
   toUtcDate,
   type MethodContext,
   type MethodHandler,
@@ -48,10 +50,12 @@ import {
 } from '../standard/set.js';
 import type { WriteOp } from '../storage.js';
 import { buildDraft } from './draft.js';
+import { sendVacationReply } from './vacation.js';
 import { destroyEmail, getEmail, mutateThread } from './email-store.js';
 import {
   headerAsText,
   headerValues,
+  isFormAllowed,
   parseHeaderProperty,
   readHeaderProperty,
   type HeaderProperty,
@@ -61,6 +65,7 @@ import {
   InvalidMessageError,
   parseMessage,
   partText,
+  type ParsedMessage,
   splitPartBlobId,
 } from './mime.js';
 import {
@@ -154,7 +159,8 @@ export async function readBlob(
   const partReference = splitPartBlobId(blobId);
   if (!partReference) return ctx.blobs.get(accountId, blobId);
 
-  const message = await ctx.blobs.get(accountId, partReference.messageBlobId);
+  // The message may itself be a part of another: a message attached to a message.
+  const message = await readBlob(ctx, partReference.messageBlobId);
   if (!message) return null;
   try {
     const parsed = await parseMessage(message);
@@ -183,8 +189,15 @@ function selectWithHeaders(
   const selection: PropertySelection = { plain: [], headers: new Map() };
   for (const property of new Set(requested)) {
     const header = parseHeaderProperty(property);
-    if (header) selection.headers.set(property, header);
-    else if (valid.includes(property)) selection.plain.push(property);
+    if (header) {
+      if (!isFormAllowed(header.name, header.form)) {
+        throw new MethodError(
+          'invalidArguments',
+          `The ${header.name} header cannot be read in the ${header.form} form`,
+        );
+      }
+      selection.headers.set(property, header);
+    } else if (valid.includes(property)) selection.plain.push(property);
     else {
       throw new MethodError(
         'invalidArguments',
@@ -250,12 +263,16 @@ async function loadBodyValues(
   email: EmailValue,
   partIds: ReadonlySet<string>,
   maxBytes: number,
+  /** The message, when the caller has it parsed already. */
+  known?: ParsedMessage,
 ): Promise<Record<string, unknown>> {
   if (partIds.size === 0) return {};
-  const raw = await ctx.blobs.get(ctx.auth.accountId, email.blobId);
-  if (!raw) return {};
-
-  const parsed = await parseMessage(raw);
+  let parsed = known;
+  if (!parsed) {
+    const raw = await ctx.blobs.get(ctx.auth.accountId, email.blobId);
+    if (!raw) return {};
+    parsed = await parseMessage(raw);
+  }
   const values: Record<string, unknown> = {};
   for (const part of parsed.parts) {
     if (part.partId === null || !partIds.has(part.partId)) continue;
@@ -283,6 +300,8 @@ async function toEmailObject(
   args: EmailGetArguments,
   selection: PropertySelection,
   bodySelection: PropertySelection,
+  /** The message, when the caller has it parsed already. */
+  parsed?: ParsedMessage,
 ): Promise<Record<string, unknown>> {
   let email = record.value;
   // An email stored under the older, simplified layout: read the real one from the message.
@@ -360,12 +379,13 @@ async function toEmailObject(
           email,
           wanted,
           args.maxBodyValueBytes ?? 0,
+          parsed,
         );
         break;
       }
       case 'receivedAt':
         // Kept to the millisecond so that mail arriving together stays in order; shown to the second.
-        result[property] = email.receivedAt.replace(/\.\d+Z$/, 'Z');
+        result[property] = email.receivedAt?.replace(/\.\d+Z$/, 'Z') ?? null;
         break;
       default:
         result[property] = email[property as keyof EmailValue];
@@ -1033,6 +1053,15 @@ export async function importMessage(
     await ctx.blobs.delete(accountId, blobId);
     throw error;
   }
+  if (options.delivery && ctx.transport) {
+    try {
+      const outcome = await sendVacationReply(ctx, parsed, { keywords });
+      ctx.onAutoReply?.(outcome);
+    } catch (error) {
+      // The mail is delivered; a reply that could not be sent must not undo that.
+      ctx.onAutoReply?.('failed', error);
+    }
+  }
   return { id, blobId, threadId, size: raw.length };
 }
 
@@ -1205,6 +1234,50 @@ async function emailQueryState(ctx: MethodContext): Promise<string> {
   return `${await ctx.store.getState(accountId, EMAIL)}.${await ctx.store.getState(accountId, THREAD)}`;
 }
 
+// ------------------------------------------------- Email/parse, Email/copy
+
+/** RFC 8621 §4.9: what Email/parse returns when no properties are asked for. */
+const DEFAULT_PARSE_PROPERTIES = [
+  'messageId',
+  'inReplyTo',
+  'references',
+  'sender',
+  'from',
+  'to',
+  'cc',
+  'bcc',
+  'replyTo',
+  'subject',
+  'sentAt',
+  'hasAttachment',
+  'preview',
+  'bodyValues',
+  'textBody',
+  'htmlBody',
+  'attachments',
+];
+
+const EmailParseArgumentsSchema = z.strictObject({
+  accountId: z.string(),
+  blobIds: z.array(z.string()),
+  properties: z.array(z.string()).nullish(),
+  bodyProperties: z.array(z.string()).nullish(),
+  fetchTextBodyValues: z.boolean().optional(),
+  fetchHTMLBodyValues: z.boolean().optional(),
+  fetchAllBodyValues: z.boolean().optional(),
+  maxBodyValueBytes: UnsignedIntSchema.optional(),
+});
+
+const EmailCopyArgumentsSchema = z.strictObject({
+  fromAccountId: z.string(),
+  ifFromInState: z.string().nullish(),
+  accountId: z.string(),
+  ifInState: z.string().nullish(),
+  create: z.record(z.string(), z.record(z.string(), z.unknown())),
+  onSuccessDestroyOriginal: z.boolean().optional(),
+  destroyFromIfInState: z.string().nullish(),
+});
+
 // -------------------------------------------------------- SearchSnippet/get
 
 const SearchSnippetArgumentsSchema = z.strictObject({
@@ -1351,6 +1424,83 @@ export const emailMethods: Record<string, MethodHandler> = {
       }),
       notFound: notFound.length > 0 ? notFound : null,
     };
+  },
+
+  'Email/parse': async (rawArgs, ctx) => {
+    const args = parseArguments(EmailParseArgumentsSchema, rawArgs);
+    const accountId = requireAccount(ctx, args.accountId);
+    const blobIds = [...new Set(args.blobIds)];
+    if (blobIds.length > ctx.limits.maxObjectsInGet) {
+      throw new MethodError(
+        'requestTooLarge',
+        `At most ${ctx.limits.maxObjectsInGet} blobs may be parsed at once`,
+      );
+    }
+    const selection = selectWithHeaders(
+      args.properties ?? DEFAULT_PARSE_PROPERTIES,
+      EMAIL_PROPERTIES,
+      'Email',
+    );
+    const bodySelection = selectWithHeaders(
+      args.bodyProperties ?? DEFAULT_BODY_PROPERTIES,
+      BODY_PROPERTIES,
+      'body part',
+    );
+
+    const parsedEmails: Record<string, unknown> = {};
+    const notParsable: string[] = [];
+    const notFound: string[] = [];
+    for (const blobId of blobIds) {
+      const raw = IdSchema.safeParse(blobId).success
+        ? await readBlob(ctx, blobId)
+        : null;
+      if (!raw) {
+        notFound.push(blobId);
+        continue;
+      }
+      let message: ParsedMessage;
+      try {
+        message = await parseMessage(raw);
+      } catch (error) {
+        if (!(error instanceof InvalidMessageError)) throw error;
+        notParsable.push(blobId);
+        continue;
+      }
+      // An email that is not in the mail store: it has no id, mailboxes,
+      // keywords or time of arrival, and is in no thread.
+      const value = {
+        ...message.metadata,
+        ...buildBodyLayout(message, blobId),
+        layout: BODY_LAYOUT_VERSION,
+        blobId,
+        threadId: null,
+        mailboxIds: null,
+        keywords: null,
+        size: raw.length,
+        receivedAt: null,
+      } as unknown as EmailValue;
+      parsedEmails[blobId] = await toEmailObject(
+        ctx,
+        { id: null as unknown as string, version: 0, value },
+        args,
+        selection,
+        bodySelection,
+        message,
+      );
+    }
+    const orNull = <T>(list: T[]): T[] | null =>
+      list.length > 0 ? list : null;
+    return {
+      accountId,
+      parsed: Object.keys(parsedEmails).length > 0 ? parsedEmails : null,
+      notParsable: orNull(notParsable),
+      notFound: orNull(notFound),
+    };
+  },
+
+  'Email/copy': async (rawArgs, ctx) => {
+    const args = parseArguments(EmailCopyArgumentsSchema, rawArgs);
+    return requireCopyAccounts(ctx, args.fromAccountId, args.accountId);
   },
 
   'Email/queryChanges': async (rawArgs, ctx) => {

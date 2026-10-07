@@ -103,12 +103,15 @@ time of use at most once an hour.
 | `Email/query`                                                                | Every RFC 8621 filter condition, including full-text `text` and `body`; sorting; `collapseThreads`; paging and anchors.                                                                                                                    |
 | `Email/set`                                                                  | Create drafts and messages to send, from `textBody` / `htmlBody` / `attachments` or any `bodyStructure`, with headers in every form on the message and on its parts; update `keywords` and `mailboxIds`; destroy.                          |
 | `Email/import`                                                               |                                                                                                                                                                                                                                            |
+| `Email/parse`                                                                | Reads a blob as a message without storing it, such as a message attached to another.                                                                                                                                                       |
 | `SearchSnippet/get`                                                          | Subject and body excerpts with matches wrapped in `<mark>`.                                                                                                                                                                                |
 | `Email/changes`, `Thread/get`, `Thread/changes`                              |                                                                                                                                                                                                                                            |
 | `Identity/get`, `/changes`, `/set`                                           | Which identities exist, and their addresses, come from the `identities` option. `Identity/set` changes the name, reply-to, bcc and signatures; it refuses to create or destroy.                                                            |
 | `EmailSubmission/set`, `/get`, `/changes`, `/query`, `/queryChanges`         | Sends immediately through the `transport` option, with `onSuccessUpdateEmail` and `onSuccessDestroyEmail`.                                                                                                                                 |
 | `PushSubscription/get`, `/set`                                               | With the `push` option; see [Push](#push). Without it, there are no subscriptions and none can be made.                                                                                                                                    |
 | `Mailbox/queryChanges`, `Email/queryChanges`, `EmailSubmission/queryChanges` | Calculated from the change log, so a client can bring a cached result list up to date instead of fetching it again. Everything that changed is reported as removed and, if still a result, added back at its place, which the spec allows. |
+| `VacationResponse/get`, `/set`                                               | Offered when the server can send; see [Vacation response](#vacation-response).                                                                                                                                                             |
+| `Email/copy`, `Blob/copy`                                                    | Answer with the errors the spec defines: a user has one account, so there is never a second one to copy between.                                                                                                                           |
 
 Also implemented: result references, creation-id references across calls,
 `ifInState`, `maxChanges` paging, request and object limits, and mailbox
@@ -221,11 +224,29 @@ personal mailboxes. Emails stored before search existed are caught up on by
 the first search that covers them. Only about the first 60,000 characters of a
 message's text are searchable.
 
+### Vacation response
+
+With a `transport`, the server offers the vacation response capability: one
+settings object per account (`isEnabled`, dates, subject, text and HTML
+bodies). When a message is imported with `delivery: true` and the response is
+due, the reply is sent through the transport, to the envelope sender recorded
+in `Return-Path`.
+
+Automatic replies are easy to get wrong, so the rules of RFC 3834 are applied
+before anything is sent. No reply goes to a bounce, to mail marked as
+automatic, to mailing lists or bulk mail, to addresses such as `no-reply` or
+`mailer-daemon`, to junk, to mail that does not name one of the user's
+addresses in To or Cc, or to the user themself. Each sender is answered once a
+week at most, and once more when the response is changed. Replies carry
+`Auto-Submitted: auto-replied`. A reply that cannot be sent never stops the
+mail from being delivered; `onAutoReply` is told what happened.
+
 ### Not implemented yet
 
 - Delayed sending and cancelling: messages are handed over at once, so
   `undoStatus` is always `final`.
-- `Email/copy`, `Email/parse`, `VacationResponse`.
+- Copying between accounts: there is no sharing of accounts, so `Email/copy`
+  and `Blob/copy` have nothing to copy between.
 - Push over EventSource or WebSocket; push subscriptions are supported.
 
 ### Known simplifications

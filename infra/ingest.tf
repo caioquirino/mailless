@@ -79,6 +79,24 @@ data "aws_iam_policy_document" "ingest" {
     resources = [aws_sqs_queue.ingest_dead_letters.arn]
   }
 
+  # Vacation responses: an automatic reply to incoming mail, sent only as an
+  # address of this domain. The identity is a wildcard for the same reason as
+  # in the API's policy: in the SES sandbox the recipient's identity is checked too.
+  statement {
+    sid     = "SendAutomaticReplies"
+    actions = ["ses:SendEmail", "ses:SendRawEmail"]
+    resources = [
+      "arn:${local.partition}:ses:${var.region}:${local.account_id}:identity/*",
+      local.configuration_set_arn,
+    ]
+
+    condition {
+      test     = "StringLike"
+      variable = "ses:FromAddress"
+      values   = ["*@${var.domain}"]
+    }
+  }
+
   dynamic "statement" {
     for_each = var.use_customer_kms_key ? [1] : []
 
@@ -117,6 +135,10 @@ resource "aws_lambda_function" "ingest" {
       INBOUND_PREFIX = local.inbound_prefix
       BLOB_PREFIX    = local.blob_prefix
       MAILBOXES      = jsonencode(var.mailboxes)
+      ACCOUNT_NAMES  = jsonencode(var.account_names)
+      # Automatic replies go through the configuration set too, so that an address
+      # that bounced or complained is not written to again.
+      CONFIGURATION_SET = aws_sesv2_configuration_set.main.configuration_set_name
     }
   }
 

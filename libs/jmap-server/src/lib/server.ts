@@ -2,6 +2,7 @@ import {
   CAPABILITY_CORE,
   CAPABILITY_MAIL,
   CAPABILITY_SUBMISSION,
+  CAPABILITY_VACATION,
   IdSchema,
   MethodError,
   REQUEST_ERROR,
@@ -15,8 +16,11 @@ import {
   type Session,
   type UploadResponse,
 } from '@mailless/jmap-core';
+import { z } from 'zod';
 import {
   generateId,
+  parseArguments,
+  requireCopyAccounts,
   type AuthContext,
   type MethodContext,
   type MethodDefinition,
@@ -42,6 +46,7 @@ import {
   type DeliveryUpdate,
 } from './mail/submission.js';
 import { threadMethods } from './mail/thread.js';
+import { vacationMethods } from './mail/vacation.js';
 import {
   pushMethods,
   pushMethodsWhenDisabled,
@@ -103,6 +108,13 @@ export interface JmapServerOptions {
   identities?: (
     auth: AuthContext,
   ) => IdentityInput[] | Promise<IdentityInput[]>;
+  /**
+   * Called for each delivered message with what became of the account's
+   * vacation response: `sent`, `failed` (with the error), or the reason none
+   * was due, such as `disabled` or `mailing-list`. For logs; it carries no
+   * addresses.
+   */
+  onAutoReply?: (outcome: string, error?: unknown) => void;
   /**
    * Lets clients register push subscriptions (RFC 8620 §7.2). The server then
    * makes HTTPS requests to URLs that clients name, so this is off unless
@@ -231,7 +243,13 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
   const capabilities: Record<string, unknown> = {
     [CAPABILITY_CORE]: limits,
     [CAPABILITY_MAIL]: {},
-    ...(canSend ? { [CAPABILITY_SUBMISSION]: submissionCapability } : {}),
+    ...(canSend
+      ? {
+          [CAPABILITY_SUBMISSION]: submissionCapability,
+          // Offered with sending: a vacation response is a message sent.
+          [CAPABILITY_VACATION]: {},
+        }
+      : {}),
   };
   const mailAccountCapability: MailAccountCapability = {
     maxMailboxesPerEmail: null,
@@ -254,6 +272,20 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     capability: CAPABILITY_CORE,
     handler: async (args) => args,
   });
+  methods.set('Blob/copy', {
+    capability: CAPABILITY_CORE,
+    handler: async (args, ctx) => {
+      const { fromAccountId, accountId } = parseArguments(
+        z.strictObject({
+          fromAccountId: z.string(),
+          accountId: z.string(),
+          blobIds: z.array(z.string()),
+        }),
+        args,
+      );
+      return requireCopyAccounts(ctx, fromAccountId, accountId);
+    },
+  });
   const push = options.push ? resolvePushOptions(options.push) : undefined;
   for (const [name, handler] of Object.entries(
     push ? pushMethods(push) : pushMethodsWhenDisabled,
@@ -270,6 +302,9 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     for (const [name, handler] of Object.entries(submissionMethods)) {
       methods.set(name, { capability: CAPABILITY_SUBMISSION, handler });
     }
+    for (const [name, handler] of Object.entries(vacationMethods)) {
+      methods.set(name, { capability: CAPABILITY_VACATION, handler });
+    }
   }
 
   const makeContext = (auth: AuthContext): MethodContext => ({
@@ -280,6 +315,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     createdIds: new Map(),
     extraResponses: [],
     ...(options.transport ? { transport: options.transport } : {}),
+    ...(options.onAutoReply ? { onAutoReply: options.onAutoReply } : {}),
     identities: async (): Promise<ResolvedIdentity[]> => {
       const configured = (await options.identities?.(auth)) ?? [];
       // What the user changed (name, signatures, reply-to) is kept per identity.
@@ -324,7 +360,10 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
               [CAPABILITY_CORE]: {},
               [CAPABILITY_MAIL]: mailAccountCapability,
               ...(canSend
-                ? { [CAPABILITY_SUBMISSION]: submissionCapability }
+                ? {
+                    [CAPABILITY_SUBMISSION]: submissionCapability,
+                    [CAPABILITY_VACATION]: {},
+                  }
                 : {}),
             },
           },
@@ -332,7 +371,12 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
         primaryAccounts: {
           [CAPABILITY_CORE]: auth.accountId,
           [CAPABILITY_MAIL]: auth.accountId,
-          ...(canSend ? { [CAPABILITY_SUBMISSION]: auth.accountId } : {}),
+          ...(canSend
+            ? {
+                [CAPABILITY_SUBMISSION]: auth.accountId,
+                [CAPABILITY_VACATION]: auth.accountId,
+              }
+            : {}),
         },
         username: auth.username,
         apiUrl: options.urls.api,

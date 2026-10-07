@@ -12,7 +12,11 @@ import {
   type ComposeHeader,
   type ComposePart,
 } from './compose.js';
-import { parseHeaderProperty, type HeaderProperty } from './headers.js';
+import {
+  isFormAllowed,
+  parseHeaderProperty,
+  type HeaderProperty,
+} from './headers.js';
 
 /*
  * Turns the object given to `Email/set` create into an RFC 5322 message,
@@ -67,30 +71,6 @@ const PART_PROPERTIES = new Set([
   'location',
   'subParts',
 ]);
-
-/*
- * The parsed forms each known header field may be given in (RFC 8621 §4.1.2).
- * A field not listed is unknown to the standards and may take any form.
- */
-const ADDRESS_FIELDS =
-  'from sender reply-to to cc bcc resent-from resent-sender resent-reply-to resent-to resent-cc resent-bcc';
-const MESSAGE_ID_FIELDS = 'message-id in-reply-to references resent-message-id';
-const DATE_FIELDS = 'date resent-date';
-const URL_FIELDS =
-  'list-help list-unsubscribe list-subscribe list-post list-owner list-archive';
-const TEXT_FIELDS = 'subject comments keywords list-id';
-const OTHER_KNOWN_FIELDS = 'return-path received';
-const FORMS_BY_FIELD = new Map<string, Form[]>();
-for (const [fields, forms] of [
-  [ADDRESS_FIELDS, ['asAddresses', 'asGroupedAddresses']],
-  [MESSAGE_ID_FIELDS, ['asMessageIds']],
-  [DATE_FIELDS, ['asDate']],
-  [URL_FIELDS, ['asURLs']],
-  [TEXT_FIELDS, ['asText']],
-  [OTHER_KNOWN_FIELDS, []],
-] as Array<[string, Form[]]>) {
-  for (const field of fields.split(' ')) FORMS_BY_FIELD.set(field, forms);
-}
 
 const MAX_PARTS = 100;
 const MAX_DEPTH = 10;
@@ -240,8 +220,7 @@ function readHeaders(
         continue;
       }
       ({ name, form, all } = parsed);
-      const allowed = FORMS_BY_FIELD.get(name.toLowerCase());
-      if (form !== 'asRaw' && allowed && !allowed.includes(form)) {
+      if (!isFormAllowed(name, form)) {
         problems.add(
           `${path}${property}`,
           `The ${name} header cannot be given in the ${form} form`,

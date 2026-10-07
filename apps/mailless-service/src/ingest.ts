@@ -4,11 +4,14 @@ import {
   GetObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { SESv2Client } from '@aws-sdk/client-sesv2';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { createJmapServer } from '@mailless/jmap-server';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import { S3BlobStore } from '@mailless/storage-s3';
+import { SesMailTransport } from '@mailless/transport-ses';
 import type { SESEvent } from 'aws-lambda';
+import { identitiesFor } from './api/identities.js';
 import { ingest, type InboundStore } from './ingest/ingest.js';
 import { parseMailboxMap, resolveAccount } from './ingest/recipients.js';
 
@@ -22,6 +25,12 @@ const bucket = required('BUCKET');
 const inboundPrefix = process.env['INBOUND_PREFIX'] ?? 'inbound/';
 const publicUrl = process.env['PUBLIC_URL'] ?? 'https://jmap.invalid';
 const mailboxes = parseMailboxMap(process.env['MAILBOXES']);
+// Display names for the From header of automatic replies, by account.
+const accountNames = JSON.parse(process.env['ACCOUNT_NAMES'] ?? '{}') as Record<
+  string,
+  string
+>;
+const configurationSetName = process.env['CONFIGURATION_SET'];
 
 // The SDK reads AWS_ENDPOINT_URL_S3 and AWS_ENDPOINT_URL_DYNAMODB itself, which is how tests
 // point these clients at local stand-ins.
@@ -47,6 +56,25 @@ const jmap = createJmapServer({
     download: `${publicUrl}/jmap/download/{accountId}/{blobId}/{name}?type={type}`,
     upload: `${publicUrl}/jmap/upload/{accountId}`,
     eventSource: `${publicUrl}/jmap/events?types={types}&closeafter={closeafter}&ping={ping}`,
+  },
+  // Incoming mail may be due a vacation response, which is mail going out.
+  transport: new SesMailTransport({
+    client: new SESv2Client({}),
+    ...(configurationSetName ? { configurationSetName } : {}),
+  }),
+  identities: (auth) => identitiesFor(mailboxes, auth.accountId, accountNames),
+  // The outcome only: who wrote, and to whom, stays out of the logs.
+  onAutoReply: (outcome, error) => {
+    if (outcome === 'disabled') return;
+    console.log(
+      JSON.stringify({
+        event: 'auto-reply',
+        outcome,
+        ...(error === undefined
+          ? {}
+          : { error: (error as { name?: string }).name ?? 'Error' }),
+      }),
+    );
   },
 });
 

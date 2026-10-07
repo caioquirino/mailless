@@ -34,6 +34,7 @@ export interface ResultReference {
 export const CAPABILITY_CORE = 'urn:ietf:params:jmap:core';
 export const CAPABILITY_MAIL = 'urn:ietf:params:jmap:mail';
 export const CAPABILITY_SUBMISSION = 'urn:ietf:params:jmap:submission';
+export const CAPABILITY_VACATION = 'urn:ietf:params:jmap:vacationresponse';
 export const CAPABILITY_WEBSOCKET = 'urn:ietf:params:jmap:websocket';
 
 export interface CoreCapability {

@@ -240,8 +240,28 @@ run "defaults" {
   assert {
     condition = toset([
       for statement in data.aws_iam_policy_document.ingest.statement : statement.sid
-    ]) == toset(["Logs", "ReadAndRemoveInbound", "TellMissingFromForbidden", "StoreMessages", "Metadata", "DeadLetters", "Encryption"])
+    ]) == toset(["Logs", "ReadAndRemoveInbound", "TellMissingFromForbidden", "StoreMessages", "Metadata", "DeadLetters", "SendAutomaticReplies", "Encryption"])
     error_message = "Unexpected statements in the ingest role policy."
+  }
+
+  # Vacation responses are the only mail the ingest function sends, and only as this domain.
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.ingest.statement :
+      length(statement.condition) == 1 &&
+      one(statement.condition).variable == "ses:FromAddress" &&
+      one(statement.condition).values == tolist(["*@example.com"])
+      if statement.sid == "SendAutomaticReplies"
+    ])
+    error_message = "The ingest function may only send as an address of the domain."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.ingest.environment[0].variables["CONFIGURATION_SET"] == "mailless" &&
+      jsondecode(aws_lambda_function.ingest.environment[0].variables["ACCOUNT_NAMES"]) != null
+    )
+    error_message = "Automatic replies must go through the configuration set, which suppresses bounced addresses."
   }
 
   # SES may write to the bucket only from this account and this receipt rule.
