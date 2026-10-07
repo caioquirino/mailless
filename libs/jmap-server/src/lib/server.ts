@@ -65,6 +65,8 @@ export interface JmapServerOptions {
 }
 
 export interface JmapServer {
+  /** The limits in force, as advertised in the session. */
+  readonly limits: CoreCapability;
   getSession(auth: AuthContext): Session;
   /** Runs a parsed JMAP request. Throws RequestError when the request as a whole is rejected. */
   handleRequest(request: unknown, auth: AuthContext): Promise<JmapResponse>;
@@ -138,6 +140,8 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
   });
 
   return {
+    limits,
+
     getSession(auth) {
       return {
         capabilities,

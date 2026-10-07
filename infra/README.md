@@ -1,26 +1,28 @@
 # Infrastructure
 
-Terraform for the AWS side of mailless: receiving mail through SES and storing
-it in S3 and DynamoDB.
+Terraform for the AWS side of mailless: receiving mail through SES, storing it
+in S3 and DynamoDB, and serving it to mail clients over a JMAP API.
 
-> **Applied once, not yet proven end to end.** The stack has been applied to a
-> real account: the state bucket is created automatically, the resources
-> exist, and SES verifies the domain through the Route53 records. What has not
-> been observed yet is a real message arriving, which is the first test of the
-> permissions SES needs to write to the encrypted bucket.
+> **Receiving is proven; the API is new.** Inbound delivery has been confirmed
+> with real mail on a real account. The JMAP API, its hostname and the Cognito
+> sign-in pass `terraform validate`, a mocked-provider test suite and a real
+> `plan`, but have not been exercised with a mail client yet.
 
 ## What it creates
 
-| Resource                            | Purpose                                                                                                         |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| SES domain identity with DKIM       | Proves ownership of the domain.                                                                                 |
-| SES receipt rule set and rule       | Accepts mail for the domain over TLS, scans it, stores it in S3, then invokes the ingest function.              |
-| S3 bucket                           | `inbound/` holds raw messages until imported; `blobs/` holds the mailbox content. Encrypted, private, TLS only. |
-| DynamoDB table                      | Mailbox metadata and change log. On-demand billing, point-in-time recovery, deletion protection.                |
-| Ingest Lambda (`nodejs24.x`, arm64) | Imports each message into the recipients' accounts.                                                             |
-| SQS dead-letter queue               | Catches deliveries that still fail after two retries.                                                           |
-| KMS key (optional, on by default)   | Customer-managed encryption for the bucket and table.                                                           |
-| Route53 records (optional)          | MX and three DKIM CNAMEs, when the domain's zone is in Route53.                                                 |
+| Resource                                       | Purpose                                                                                                         |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| SES domain identity with DKIM                  | Proves ownership of the domain.                                                                                 |
+| SES receipt rule set and rule                  | Accepts mail for the domain over TLS, scans it, stores it in S3, then invokes the ingest function.              |
+| S3 bucket                                      | `inbound/` holds raw messages until imported; `blobs/` holds the mailbox content. Encrypted, private, TLS only. |
+| DynamoDB table                                 | Mailbox metadata and change log. On-demand billing, point-in-time recovery, deletion protection.                |
+| Ingest Lambda (`nodejs24.x`, arm64)            | Imports each message into the recipients' accounts.                                                             |
+| SQS dead-letter queue                          | Catches deliveries that still fail after two retries.                                                           |
+| KMS key (optional, on by default)              | Customer-managed encryption for the bucket and table.                                                           |
+| Cognito user pool                              | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed.                                     |
+| API Lambda and HTTP API                        | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                            |
+| Certificate and `mail.<domain>` (with Route53) | The API's own hostname, plus an SRV record so clients can find it from an address.                              |
+| Route53 records (optional)                     | MX and three DKIM CNAMEs, when the domain's zone is in Route53.                                                 |
 
 Everything is pay-per-use except the KMS key, which costs about 1 USD a month.
 Set `use_customer_kms_key = false` to use the free AWS-managed encryption.
@@ -91,6 +93,44 @@ and mail starts arriving once the MX record does and the rule set is active.
 
 `terraform.tfvars` is ignored by git: it holds your domain and addresses.
 
+## Signing in and connecting a mail client
+
+Each account id in `mailboxes` gets a sign-in of the same name (the `users`
+output lists them). Set its password once:
+
+```sh
+pnpm infra password <name>
+```
+
+The password is typed at a hidden prompt and goes straight to Cognito; it is
+never an argument, and never in Terraform state. It must be at least 14
+characters.
+
+Then point a JMAP client at the `api_url` output (`https://mail.<domain>` with
+Route53), or, where the client supports discovery, just give it an address at
+the domain. Sign in with the name and password.
+
+```sh
+curl -u <name> https://mail.example.com/.well-known/jmap
+```
+
+Two ways to authenticate are accepted:
+
+- **Username and password** (HTTP Basic). Works with any client. The client
+  keeps your password, so use one you can change, and remove it from clients
+  you stop using.
+- **Bearer token**: a Cognito access token for this user pool.
+
+Things to know:
+
+- **No multi-factor authentication yet.** A password is all that protects the
+  mailbox, and it cannot be combined with username-and-password sign-in.
+- **Sizes.** A request body can be at most 5 MB and an upload 4 MB, because of
+  Lambda's limits. Downloads have no such limit: large ones are redirected to
+  a private, signed S3 link that is valid for five minutes.
+- **Without Route53** there is no `mail.<domain>`: the API is served on the
+  address API Gateway generates, shown in `api_url`.
+
 ## Checking it works
 
 After sending a test message to one of the configured addresses:
@@ -102,7 +142,8 @@ aws logs tail /aws/lambda/mailless-ingest --since 10m
 
 The logs carry SES message ids and outcomes only, never addresses or content.
 The dead-letter queue (`ingest_dead_letter_queue` output) should stay empty.
-The mail is not yet readable over HTTP; the JMAP API is the next milestone.
+API requests appear in `/aws/apigateway/<name>` (route, status, timing) and
+errors in `/aws/lambda/<name>-api`.
 
 ## Tests
 
@@ -116,7 +157,8 @@ pnpm nx run-many -t lint validate test -p infra
 credentials and creates nothing. It checks the conditional DNS records and rule
 set activation, the encryption toggle, that the function's role has no
 wildcard actions or resources, that SES access to the bucket and function is
-tied to this account and receipt rule, and that malformed input is rejected.
+tied to this account and receipt rule, that sign-up is closed, that only the
+JMAP routes are exposed, and that malformed input is rejected.
 It also runs the unit tests of the state bucket script.
 
 `pnpm run check` at the repository root includes all of these.

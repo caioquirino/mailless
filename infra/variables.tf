@@ -46,6 +46,24 @@ variable "route53_zone_id" {
   default     = null
 }
 
+variable "api_hostname" {
+  description = "Hostname of the JMAP API. Defaults to mail.<domain>. Only used when route53_zone_id is set; otherwise the API is reachable on the address API Gateway generates."
+  type        = string
+  default     = null
+}
+
+variable "api_throttle_rate" {
+  description = "Sustained requests per second the API accepts, across all clients."
+  type        = number
+  default     = 20
+}
+
+variable "api_throttle_burst" {
+  description = "Short burst of requests the API accepts above the sustained rate."
+  type        = number
+  default     = 50
+}
+
 variable "name" {
   description = "Prefix for resource names."
   type        = string
@@ -79,4 +97,10 @@ variable "ingest_bundle" {
   description = "Path to the built ingest Lambda bundle. Build it with `pnpm nx build mailless-service`."
   type        = string
   default     = "../apps/mailless-service/dist/ingest.mjs"
+}
+
+variable "api_bundle" {
+  description = "Path to the built API Lambda bundle. Build it with `pnpm nx build mailless-service`."
+  type        = string
+  default     = "../apps/mailless-service/dist/api.mjs"
 }

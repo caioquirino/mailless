@@ -28,6 +28,20 @@ mock_provider "aws" {
     }
   }
 
+  # The DNS records a certificate asks for are only known to AWS; give the plan something to iterate.
+  override_resource {
+    target = aws_acm_certificate.api
+    values = {
+      arn = "arn:aws:acm:eu-west-1:123456789012:certificate/mock"
+      domain_validation_options = [{
+        domain_name           = "mail.example.com"
+        resource_record_name  = "_validation.mail.example.com."
+        resource_record_type  = "CNAME"
+        resource_record_value = "_value.acm-validations.aws."
+      }]
+    }
+  }
+
   # ARNs that IAM policies reference, so the policies can be inspected while planning.
   mock_resource "aws_s3_bucket" {
     defaults = {
@@ -73,6 +87,14 @@ variables {
   mailboxes                 = { "me@example.com" = "me", "*@example.com" = "catchall" }
   activate_receipt_rule_set = false
   ingest_bundle             = "tests/fixture-bundle.mjs"
+  api_bundle                = "tests/fixture-bundle.mjs"
+
+  # Every other variable is pinned too: Terraform loads a local terraform.tfvars
+  # into tests, and these must not depend on whoever runs them.
+  name                 = "mailless"
+  route53_zone_id      = null
+  api_hostname         = null
+  use_customer_kms_key = true
 }
 
 run "defaults" {
@@ -204,6 +226,126 @@ run "defaults" {
       if statement.sid == "SesInboundMail"
     ])
     error_message = "The SES bucket statement must be restricted by source account and source ARN."
+  }
+}
+
+run "api_and_sign_in" {
+  command = plan
+
+  assert {
+    condition     = toset(keys(aws_cognito_user.account)) == toset(["catchall", "me"])
+    error_message = "There must be one user per distinct account id."
+  }
+
+  assert {
+    condition = (
+      aws_cognito_user_pool.main.admin_create_user_config[0].allow_admin_create_user_only &&
+      aws_cognito_user_pool.main.deletion_protection == "ACTIVE" &&
+      aws_cognito_user_pool.main.password_policy[0].minimum_length >= 14
+    )
+    error_message = "Sign-up must be closed, the pool protected, and passwords long."
+  }
+
+  assert {
+    condition = (
+      !aws_cognito_user_pool_client.jmap.generate_secret &&
+      aws_cognito_user_pool_client.jmap.prevent_user_existence_errors == "ENABLED" &&
+      aws_cognito_user_pool_client.jmap.explicit_auth_flows == toset(["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"])
+    )
+    error_message = "Unexpected app client configuration."
+  }
+
+  assert {
+    condition = toset(keys(aws_apigatewayv2_route.jmap)) == toset([
+      "GET /.well-known/jmap",
+      "GET /jmap/download/{proxy+}",
+      "POST /jmap/api",
+      "POST /jmap/upload/{accountId}",
+    ])
+    error_message = "Only the JMAP endpoints may be routed."
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_stage.default.default_route_settings[0].throttling_rate_limit == 20
+    error_message = "The API must be throttled."
+  }
+
+  # Without a hosted zone there is no hostname of our own, and the generated endpoint stays on.
+  assert {
+    condition = (
+      length(aws_acm_certificate.api) == 0 &&
+      length(aws_apigatewayv2_domain_name.api) == 0 &&
+      length(aws_route53_record.api) == 0 &&
+      !aws_apigatewayv2_api.jmap.disable_execute_api_endpoint &&
+      !contains(keys(aws_lambda_function.api.environment[0].variables), "PUBLIC_URL")
+    )
+    error_message = "No custom hostname may be set up without a hosted zone."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.api.statement :
+      !contains(statement.resources, "*") && alltrue([for action in statement.actions : !endswith(action, ":*") && action != "*"])
+    ])
+    error_message = "The API role must not use wildcard actions or resources."
+  }
+
+  # The API reads and writes mailbox content but has no business in the inbound queue.
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.api.statement :
+      alltrue([for resource in statement.resources : !strcontains(resource, "/inbound/")])
+    ])
+    error_message = "The API role must not reach inbound mail."
+  }
+}
+
+run "api_on_its_own_hostname" {
+  command = plan
+
+  variables {
+    route53_zone_id = "Z0123456789ABCDEFGHIJ"
+  }
+
+  assert {
+    condition = (
+      aws_acm_certificate.api[0].domain_name == "mail.example.com" &&
+      aws_apigatewayv2_domain_name.api[0].domain_name == "mail.example.com" &&
+      one(aws_apigatewayv2_domain_name.api[0].domain_name_configuration).security_policy == "TLS_1_2"
+    )
+    error_message = "The API must be served on mail.<domain> with TLS 1.2 or newer."
+  }
+
+  assert {
+    condition = (
+      aws_apigatewayv2_api.jmap.disable_execute_api_endpoint &&
+      aws_lambda_function.api.environment[0].variables["PUBLIC_URL"] == "https://mail.example.com" &&
+      output.api_url == "https://mail.example.com"
+    )
+    error_message = "With its own hostname, the API must advertise it and close the generated endpoint."
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_route53_record.api)) == toset(["A", "AAAA"]) &&
+      aws_route53_record.jmap_discovery[0].name == "_jmap._tcp.example.com" &&
+      aws_route53_record.jmap_discovery[0].records == toset(["0 1 443 mail.example.com"])
+    )
+    error_message = "The hostname and the JMAP discovery record must be published."
+  }
+}
+
+run "api_hostname_can_be_chosen" {
+  command = plan
+
+  variables {
+    route53_zone_id = "Z0123456789ABCDEFGHIJ"
+    api_hostname    = "jmap.example.com"
+  }
+
+  assert {
+    condition     = output.jmap_session_url == "https://jmap.example.com/.well-known/jmap"
+    error_message = "A chosen hostname must be used throughout."
   }
 }
 

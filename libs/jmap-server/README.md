@@ -45,8 +45,32 @@ Other entry points on the server object:
 | `importMessage(auth, raw, { mailboxIds, keywords?, receivedAt? })` | Store a raw RFC 5322 message as an Email. Use this for inbound delivery.                 |
 | `registerMethod(name, { capability, handler })`                    | Add or replace a method.                                                                 |
 
-The reference host is [`apps/dev-server`](../../apps/dev-server/src/main.ts),
-about two hundred lines of `node:http`.
+### HTTP
+
+`@mailless/jmap-server/http` turns a server into a function from a Fetch API
+`Request` to a `Response`, with the standard routes, size limits, error
+responses and safe download headers:
+
+```ts
+import { createFetchHandler, jmapUrls } from '@mailless/jmap-server/http';
+
+const jmap = createJmapServer({
+  storage,
+  urls: jmapUrls('https://mail.example.com'),
+});
+const handle = createFetchHandler({
+  server: jmap,
+  authenticate: async (request) => lookUp(request.headers.get('authorization')),
+});
+```
+
+It serves `GET /.well-known/jmap`, `POST /jmap/api`,
+`POST /jmap/upload/{accountId}` and
+`GET /jmap/download/{accountId}/{blobId}/{name}`. Because it only uses
+`Request` and `Response`, the same handler runs behind `node:http`
+([`apps/dev-server`](../../apps/dev-server/src/main.ts)), API Gateway and
+Lambda ([`apps/mailless-service`](../../apps/mailless-service/src/api.ts)), or
+an edge runtime.
 
 ## Supported methods
 

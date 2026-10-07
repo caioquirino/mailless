@@ -29,6 +29,12 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./http": {
+      "@mailless/source": "./src/http.ts",
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js",
+      "default": "./dist/http.js"
+    },
     "./memory": {
       "@mailless/source": "./src/memory.ts",
       "types": "./dist/memory.d.ts",

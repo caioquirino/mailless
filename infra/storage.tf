@@ -111,6 +111,20 @@ resource "aws_s3_bucket_lifecycle_configuration" "mail" {
     }
   }
 
+  # Copies of large downloads, each fetched once through a signed URL valid for minutes.
+  rule {
+    id     = "expire-offloaded-downloads"
+    status = "Enabled"
+
+    filter {
+      prefix = local.download_prefix
+    }
+
+    expiration {
+      days = 1
+    }
+  }
+
   rule {
     id     = "abort-incomplete-uploads"
     status = "Enabled"

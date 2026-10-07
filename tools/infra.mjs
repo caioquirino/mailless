@@ -8,6 +8,7 @@ if (!task || task.startsWith('-')) {
     'Usage: pnpm infra <task>\n\n' +
       '  plan      show what would change\n' +
       '  apply     deploy (Terraform asks before changing anything)\n' +
+      '  password  set the sign-in password of a mailbox user: pnpm infra password <name>\n' +
       '  init      create the state bucket if needed and initialise Terraform\n' +
       '  validate  check the configuration\n' +
       '  test      run the infrastructure tests\n' +
@@ -16,8 +17,13 @@ if (!task || task.startsWith('-')) {
   process.exit(1);
 }
 
-const result = spawnSync('nx', ['run', `infra:${task}`, ...rest], {
-  stdio: 'inherit',
-});
+// Typing a password needs the real terminal, which Nx does not pass on to a task.
+// It is not a build step either, so it runs directly.
+const result =
+  task === 'password'
+    ? spawnSync(process.execPath, ['infra/scripts/set-password.mjs', ...rest], {
+        stdio: 'inherit',
+      })
+    : spawnSync('nx', ['run', `infra:${task}`, ...rest], { stdio: 'inherit' });
 if (result.error) throw result.error;
 process.exit(result.status ?? 1);

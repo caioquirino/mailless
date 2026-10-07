@@ -59,6 +59,51 @@ afterAll(async () => {
     .catch(() => undefined);
 });
 
+describe.skipIf(!reachable)('API Lambda bundle', () => {
+  it('loads and refuses unauthenticated requests on every route', async () => {
+    Object.assign(process.env, {
+      AWS_REGION: 'us-east-1',
+      AWS_ACCESS_KEY_ID: credentials.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: credentials.secretAccessKey,
+      AWS_ENDPOINT_URL_DYNAMODB: dynamoEndpoint,
+      AWS_ENDPOINT_URL_S3: s3Endpoint,
+      S3_FORCE_PATH_STYLE: 'true',
+      TABLE_NAME: tableName,
+      BUCKET: bucket,
+      USER_POOL_ID: 'us-east-1_Example00',
+      USER_POOL_CLIENT_ID: 'exampleclientid',
+      PUBLIC_URL: 'https://mail.example.com',
+    });
+    const bundle = new URL('../dist/api.mjs', import.meta.url).href;
+    const { handler } = (await import(
+      /* @vite-ignore */ bundle
+    )) as typeof import('./api.js');
+
+    const call = (method: string, rawPath: string) =>
+      handler({
+        rawPath,
+        rawQueryString: '',
+        headers: {},
+        isBase64Encoded: false,
+        requestContext: { domainName: 'internal', http: { method } },
+      } as unknown as Parameters<typeof handler>[0]);
+
+    for (const [method, path] of [
+      ['GET', '/.well-known/jmap'],
+      ['POST', '/jmap/api'],
+      ['POST', '/jmap/upload/acc-1'],
+      ['GET', '/jmap/download/acc-1/blob/name'],
+    ] as const) {
+      const result = await call(method, path);
+      expect(result.statusCode, path).toBe(401);
+      expect(result.headers?.['www-authenticate']).toBe(
+        'Basic realm="mailless", Bearer',
+      );
+    }
+    expect((await call('GET', '/elsewhere')).statusCode).toBe(404);
+  });
+});
+
 describe.skipIf(!reachable)('ingest Lambda entry point', () => {
   it('imports a message SES stored in the bucket', async () => {
     Object.assign(process.env, {

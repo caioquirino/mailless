@@ -4,12 +4,11 @@ A mailbox without a mail server to run: serverless email on AWS, reached over
 [JMAP](https://jmap.io) instead of IMAP, built from reusable TypeScript
 libraries.
 
-> **Status: early.** Mail can be received and stored: the protocol core, the
-> server framework, the DynamoDB, S3 and filesystem storage adapters and the
-> SES ingest function all work and are tested locally, and the Terraform
-> stack applies cleanly to a real AWS account. Delivery of a real message
-> through SES has not been confirmed yet. There is no HTTP API on AWS, no
-> client library, and no sending. Nothing has been published to npm.
+> **Status: early.** Receiving works on real AWS: mail sent to the domain is
+> accepted by SES, stored in S3 and DynamoDB, and tested locally end to end.
+> A JMAP API with Cognito sign-in is written and deployable but has not been
+> used with a mail client yet. There is no sending and no client library.
+> Nothing has been published to npm.
 
 ## Why JMAP
 
@@ -31,8 +30,8 @@ be served by functions that only run while a request is in flight.
 
 Also in this repository:
 
-- [`apps/mailless-service`](apps/mailless-service): the Lambda functions.
-  Today that is the SES ingest function, which imports inbound mail.
+- [`apps/mailless-service`](apps/mailless-service): the Lambda functions: the
+  SES ingest function, which imports inbound mail, and the JMAP API.
 - [`apps/dev-server`](apps/dev-server): a small local JMAP server over
   in-memory storage for trying things out.
 - [`infra/`](infra): Terraform for SES receiving, S3, DynamoDB and the ingest
@@ -124,11 +123,11 @@ wrapper around `handleRequest`.
 
 1. ~~Workspace, `jmap-core`, `jmap-server` on in-memory storage~~
 2. ~~DynamoDB, S3 and filesystem adapters; SES ingest function; Terraform~~
-   (deployed; first real delivery still to be confirmed)
-3. `jmap-client`
-4. Lambda JMAP API behind API Gateway, authentication, sending through SES
-5. Push over WebSocket, `/queryChanges`, first npm release
-6. Self-hosted build with docker-compose
+3. JMAP API behind API Gateway with Cognito sign-in (written, being tried out)
+4. Sending through SES; drafts; app passwords and multi-factor sign-in
+5. `jmap-client`
+6. Push over WebSocket, `/queryChanges`, first npm release
+7. Self-hosted build with docker-compose
 
 ## License
 

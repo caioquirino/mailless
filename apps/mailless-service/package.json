@@ -33,7 +33,10 @@
               "js": "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);"
             }
           },
-          "thirdParty": true
+          "thirdParty": true,
+          "additionalEntryPoints": [
+            "apps/mailless-service/src/api.ts"
+          ]
         },
         "configurations": {
           "development": {},
@@ -58,13 +61,16 @@
     ]
   },
   "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.1146.0",
     "@aws-sdk/client-dynamodb": "^3.1146.0",
     "@aws-sdk/client-s3": "^3.1146.0",
     "@aws-sdk/lib-dynamodb": "^3.1146.0",
+    "@aws-sdk/s3-request-presigner": "^3.1146.0",
     "@mailless/jmap-core": "workspace:*",
     "@mailless/jmap-server": "workspace:*",
     "@mailless/storage-dynamodb": "workspace:*",
-    "@mailless/storage-s3": "workspace:*"
+    "@mailless/storage-s3": "workspace:*",
+    "aws-jwt-verify": "^5.2.1"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.164"

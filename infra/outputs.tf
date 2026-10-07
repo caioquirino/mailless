@@ -29,3 +29,25 @@ output "receiving_active" {
   description = "Whether SES is routing inbound mail through this stack."
   value       = var.activate_receipt_rule_set
 }
+
+output "api_url" {
+  description = "Base URL of the JMAP API. Give a mail client this URL, or just an address at the domain when the SRV record exists."
+  value       = local.api_custom_domain ? "https://${local.api_hostname}" : aws_apigatewayv2_api.jmap.api_endpoint
+}
+
+output "jmap_session_url" {
+  value = "${local.api_custom_domain ? "https://${local.api_hostname}" : aws_apigatewayv2_api.jmap.api_endpoint}/.well-known/jmap"
+}
+
+output "user_pool_id" {
+  value = aws_cognito_user_pool.main.id
+}
+
+output "user_pool_client_id" {
+  value = aws_cognito_user_pool_client.jmap.id
+}
+
+output "users" {
+  description = "Sign-in names. Set each one's password with `pnpm infra password <name>`."
+  value       = sort(keys(aws_cognito_user.account))
+}
