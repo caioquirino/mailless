@@ -360,6 +360,10 @@ async function toEmailObject(
         );
         break;
       }
+      case 'receivedAt':
+        // Kept to the millisecond so that mail arriving together stays in order; shown to the second.
+        result[property] = email.receivedAt.replace(/\.\d+Z$/, 'Z');
+        break;
       default:
         result[property] = email[property as keyof EmailValue];
     }
@@ -1048,18 +1052,25 @@ async function importOne(
 ): Promise<{ id: string } & Record<string, unknown>> {
   const parsed = EmailImportSchema.safeParse(input);
   if (!parsed.success) {
-    const issue = parsed.error.issues[0];
+    // Every property at fault, not only the first.
     throw invalid(
-      [String(issue?.path[0] ?? '')].filter(Boolean),
-      issue?.message ?? 'Invalid import object',
+      [
+        ...new Set(
+          parsed.error.issues.flatMap((issue) =>
+            issue.code === 'unrecognized_keys'
+              ? issue.keys
+              : [String(issue.path[0] ?? '')],
+          ),
+        ),
+      ].filter(Boolean),
+      parsed.error.issues[0]?.message ?? 'Invalid import object',
     );
   }
 
   const raw = await readBlob(ctx, parsed.data.blobId);
   if (!raw) {
-    throw new SetFailure('blobNotFound', undefined, {
-      notFound: [parsed.data.blobId],
-    });
+    // RFC 8621 §4.8: a blob id that is not found is an invalid property here.
+    throw invalid(['blobId'], 'There is no blob with this id');
   }
 
   const imported = await importMessage(ctx, raw, {

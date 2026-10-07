@@ -1321,9 +1321,10 @@ export function describeJmapConformance(
         },
       });
       expect(Object.keys(result.created)).toEqual(['good']);
-      expect(result.notCreated.noBlob).toEqual({
-        type: 'blobNotFound',
-        notFound: ['missing'],
+      // RFC 8621 §4.8: for an import, a blob that is not found is an invalid property.
+      expect(result.notCreated.noBlob).toMatchObject({
+        type: 'invalidProperties',
+        properties: ['blobId'],
       });
       expect(result.notCreated.noMailbox.properties).toEqual(['mailboxIds']);
       expect(result.notCreated.badMailbox.properties).toEqual(['mailboxIds']);
@@ -2491,6 +2492,164 @@ export function describeJmapConformance(
       expect(list[1].preview).toBe('');
     });
 
+    it('sets headers in every form, on the message and on its parts', async () => {
+      const blobId = await h.upload('%PDF-1.4 not really');
+      const created = await create({
+        from: undefined,
+        to: undefined,
+        subject: undefined,
+        textBody: undefined,
+        'header:From': 'Raw Sender <raw@example.com>',
+        'header:Subject:asText': 'Relatório ✓',
+        'header:To:asAddresses': [{ name: 'Bob', email: 'bob@example.org' }],
+        'header:Cc:asGroupedAddresses': [
+          {
+            name: 'Team',
+            addresses: [{ email: 'a@example.org' }, { email: 'b@example.org' }],
+          },
+          {
+            name: null,
+            addresses: [{ name: 'Carol', email: 'carol@example.org' }],
+          },
+        ],
+        'header:In-Reply-To:asMessageIds': ['parent@example.org'],
+        'header:Date:asDate': '2026-10-07T09:30:00-04:00',
+        'header:List-Unsubscribe:asURLs': [
+          'https://example.com/unsubscribe/with-a-fairly-long-path',
+          'mailto:leave@example.com',
+        ],
+        'header:X-Tag:all': ['one', 'two'],
+        'header:X-Raw': ' kept as it is',
+        bodyStructure: {
+          type: 'multipart/mixed',
+          'header:X-On-Root': 'belongs to the message',
+          subParts: [
+            {
+              partId: 'body',
+              language: ['en', 'pt-BR'],
+              location: 'https://example.com/body',
+              'header:Content-Description:asText': 'The text',
+            },
+            {
+              blobId,
+              type: 'application/pdf',
+              name: 'relatório.pdf',
+              disposition: 'attachment',
+              cid: 'report',
+              size: 1,
+            },
+            { partId: 'data', type: 'application/json', name: 'data.json' },
+          ],
+        },
+        bodyValues: {
+          body: { value: 'Hi Bob' },
+          data: { value: '{"n":1}' },
+        },
+      });
+
+      const [email] = (
+        await h.call('Email/get', {
+          ids: [created.id],
+          properties: [
+            'from',
+            'to',
+            'cc',
+            'subject',
+            'sentAt',
+            'inReplyTo',
+            'messageId',
+            'bodyStructure',
+            'textBody',
+            'attachments',
+            'hasAttachment',
+            'bodyValues',
+            'header:X-Tag:asRaw:all',
+            'header:X-Raw',
+            'header:X-On-Root:asText',
+            'header:List-Unsubscribe:asURLs',
+            'header:Cc:asGroupedAddresses',
+            'header:Date',
+          ],
+          bodyProperties: [
+            'partId',
+            'type',
+            'name',
+            'disposition',
+            'cid',
+            'language',
+            'location',
+            'charset',
+            'size',
+            'header:Content-Description:asText',
+          ],
+          fetchAllBodyValues: true,
+        })
+      ).list;
+
+      expect(email).toMatchObject({
+        from: [{ name: 'Raw Sender', email: 'raw@example.com' }],
+        to: [{ name: 'Bob', email: 'bob@example.org' }],
+        cc: [
+          { name: null, email: 'a@example.org' },
+          { name: null, email: 'b@example.org' },
+          { name: 'Carol', email: 'carol@example.org' },
+        ],
+        subject: 'Relatório ✓',
+        sentAt: '2026-10-07T09:30:00-04:00',
+        inReplyTo: ['parent@example.org'],
+        messageId: [expect.stringMatching(/@example\.com$/)],
+        hasAttachment: true,
+        'header:X-Tag:asRaw:all': [' one', ' two'],
+        'header:X-Raw': ' kept as it is',
+        'header:X-On-Root:asText': 'belongs to the message',
+        'header:List-Unsubscribe:asURLs': [
+          'https://example.com/unsubscribe/with-a-fairly-long-path',
+          'mailto:leave@example.com',
+        ],
+        'header:Cc:asGroupedAddresses': [
+          {
+            name: 'Team',
+            addresses: [
+              { name: null, email: 'a@example.org' },
+              { name: null, email: 'b@example.org' },
+            ],
+          },
+          {
+            name: null,
+            addresses: [{ name: 'Carol', email: 'carol@example.org' }],
+          },
+        ],
+        'header:Date': ' Wed, 07 Oct 2026 09:30:00 -0400',
+      });
+      expect(email.bodyStructure).toMatchObject({
+        type: 'multipart/mixed',
+        subParts: [
+          {
+            type: 'text/plain',
+            charset: 'utf-8',
+            language: ['en', 'pt-BR'],
+            location: 'https://example.com/body',
+            disposition: null,
+            'header:Content-Description:asText': 'The text',
+          },
+          {
+            type: 'application/pdf',
+            name: 'relatório.pdf',
+            disposition: 'attachment',
+            cid: 'report',
+            size: 19,
+          },
+          { type: 'application/json', name: 'data.json', disposition: null },
+        ],
+      });
+      expect(email.textBody).toHaveLength(1);
+      expect(email.attachments.map((part: Json) => part.type)).toEqual([
+        'application/pdf',
+        'application/json',
+      ]);
+      expect(email.bodyValues[email.textBody[0].partId].value).toBe('Hi Bob');
+    });
+
     it('rejects drafts it cannot turn into a message', async () => {
       expect((await refusal({ mailboxIds: undefined })).properties).toEqual([
         'mailboxIds',
@@ -2528,32 +2687,74 @@ export function describeJmapConformance(
             textBody: [{ partId: 'missing', type: 'text/plain' }],
           })
         ).properties,
-      ).toEqual(['bodyValues']);
+      ).toEqual(['textBody/0/partId']);
       expect(
         (await refusal({ textBody: [{ partId: 'body', type: 'text/html' }] }))
           .properties,
-      ).toEqual(['textBody']);
+      ).toEqual(['textBody/0/type']);
       expect(
         (await refusal({ textBody: [{ partId: 'body' }, { partId: 'body' }] }))
           .properties,
       ).toEqual(['textBody']);
       expect(
         (await refusal({ textBody: [{ type: 'text/plain' }] })).properties,
-      ).toEqual(['textBody']);
+      ).toEqual(['textBody/0/partId', 'textBody/0/blobId']);
+      // The body is given one way or the other, never both.
       expect(
         (
           await refusal({
             bodyStructure: { partId: 'body', type: 'text/plain' },
           })
         ).properties,
-      ).toEqual(['bodyStructure']);
+      ).toEqual(['textBody']);
       expect(
         (
           await refusal({
-            bodyValues: { body: { value: 'x', isTruncated: true } },
+            bodyValues: {
+              body: { value: 'x', isTruncated: true, isEncodingProblem: true },
+            },
           })
         ).properties,
-      ).toEqual(['bodyValues']);
+      ).toEqual([
+        'bodyValues/body/isTruncated',
+        'bodyValues/body/isEncodingProblem',
+      ]);
+      // Everything wrong with a part is reported together, by its path.
+      const blobId = await h.upload('some bytes');
+      expect(
+        (
+          await refusal({
+            textBody: null,
+            bodyStructure: {
+              type: 'multipart/mixed',
+              headers: [{ name: 'X-A', value: 'b' }],
+              subParts: [
+                { partId: 'body', size: 5, charset: 'utf-8' },
+                { partId: 'body', blobId },
+                { blobId, 'header:Content-Transfer-Encoding': 'base64' },
+                {
+                  blobId,
+                  type: 'text/plain',
+                  'header:Content-Type': 'text/html',
+                },
+                { blobId, nonsense: true },
+                { type: 'multipart/alternative' },
+              ],
+            },
+          })
+        ).properties,
+      ).toEqual([
+        'bodyStructure/headers',
+        'bodyStructure/subParts/0/charset',
+        'bodyStructure/subParts/0/size',
+        'bodyStructure/subParts/1/partId',
+        'bodyStructure/subParts/1/blobId',
+        'bodyStructure/subParts/2/header:Content-Transfer-Encoding',
+        'bodyStructure/subParts/3/header:Content-Type',
+        'bodyStructure/subParts/4/nonsense',
+        'bodyStructure/subParts/5/subParts',
+      ]);
+      expect((await refusal({ headers: [] })).properties).toEqual(['headers']);
       expect(
         await refusal({ attachments: [{ blobId: 'gone', type: 'image/png' }] }),
       ).toEqual({
@@ -2577,19 +2778,43 @@ export function describeJmapConformance(
       expect((await refusal({ 'header:X-Note': 'a\r\nX-Evil: 1' })).type).toBe(
         'invalidProperties',
       );
+      expect(
+        (await refusal({ 'header:X-Note:asText': 'a\r\nX-Evil: 1' }))
+          .properties,
+      ).toEqual(['header:X-Note']);
+      // A header already set through its own property cannot be set again, in any form.
       for (const header of [
-        'header:Bcc',
         'header:From',
-        'header:Content-Type',
-        'header:Date',
+        'header:from:asAddresses',
+        'header:Subject:asText',
+        'header:To',
       ]) {
-        expect((await refusal({ [header]: 'x' })).properties, header).toEqual([
+        expect(
+          (
+            await refusal({
+              [header]: header.endsWith('asAddresses') ? [] : 'x',
+            })
+          ).properties,
           header,
-        ]);
+        ).toEqual([header]);
       }
+      // Content headers describe a part, not the message.
+      expect(
+        (await refusal({ 'header:Content-Type': 'x' })).properties,
+      ).toEqual(['header:Content-Type']);
+      // A form the header does not allow, and a value of the wrong shape.
+      expect(
+        (await refusal({ 'header:Date:asAddresses': [] })).properties,
+      ).toEqual(['header:Date:asAddresses']);
       expect(
         (await refusal({ 'header:X-Note:asAddresses': 'x' })).properties,
-      ).toEqual(['header:X-Note:asAddresses']);
+      ).toEqual(['header:X-Note']);
+      expect(
+        (await refusal({ 'header:X-Note': ['a', 'b'] })).properties,
+      ).toEqual(['header:X-Note']);
+      expect((await refusal({ 'header:Bad Name': 'x' })).properties).toEqual([
+        'header:Bad Name',
+      ]);
       expect((await counts(drafts)).totalEmails).toBe(0);
     });
 
@@ -2830,7 +3055,7 @@ export function describeJmapConformance(
       });
       const wire = h.sent[0]?.message ?? '';
       expect(wire).toContain('Subject: Hello Bob');
-      expect(wire).toContain('To: Bob <bob@example.org>');
+      expect(wire).toContain('To: "Bob" <bob@example.org>');
       expect(wire).toContain('Cc: carol@example.org');
       expect(wire.toLowerCase()).not.toContain('bcc');
       expect(wire).not.toContain('hidden@example.org');
@@ -2896,6 +3121,34 @@ export function describeJmapConformance(
 
       expect(
         (await submit('me', { from: [{ email: 'boss@example.com' }] })).type,
+      ).toBe('forbiddenFrom');
+      // Setting the header in raw form, or on the outermost body part, changes nothing.
+      expect(
+        (
+          await submit('me', {
+            from: undefined,
+            'header:From': 'The Boss <boss@example.com>',
+          })
+        ).type,
+      ).toBe('forbiddenFrom');
+      expect(
+        (
+          await submit('me', {
+            from: undefined,
+            textBody: undefined,
+            bodyStructure: {
+              partId: 'body',
+              'header:From:asAddresses': [{ email: 'boss@example.com' }],
+            },
+          })
+        ).type,
+      ).toBe('forbiddenFrom');
+      expect(
+        (
+          await submit('me', {
+            'header:Sender': 'boss@example.com',
+          })
+        ).type,
       ).toBe('forbiddenFrom');
       expect(
         (await submit('me', { from: [{ email: 'me@example.com.evil.org' }] }))

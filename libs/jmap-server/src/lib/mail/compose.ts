@@ -7,6 +7,10 @@ export interface ComposePart {
   name?: string | null;
   disposition?: string | null;
   cid?: string | null;
+  language?: string[] | null;
+  location?: string | null;
+  /** Further header fields of this part, after the ones made from the properties above. */
+  headers?: ComposeHeader[];
   content?: Uint8Array;
   subParts?: ComposePart[];
 }
@@ -15,6 +19,8 @@ export interface ComposeHeader {
   name: string;
   /** Already formatted for the wire, apart from folding. */
   value: string;
+  /** Written exactly as given, without folding: the client supplied the raw form. */
+  raw?: boolean;
 }
 
 export class ComposeError extends Error {
@@ -82,7 +88,7 @@ export function encodeText(text: string, property?: string): string {
 function encodePhrase(name: string, property?: string): string {
   assertSingleLine(name, property);
   if (!isAscii(name)) return encodedWords(name);
-  if (/^[A-Za-z0-9!#$%&'*+/=?^_`{|}~ -]+$/.test(name)) return name;
+  // Always quoted: that is valid for any name, and needs no rule for which may go bare.
   return `"${name.replace(/(["\\])/g, '\\$1')}"`;
 }
 
@@ -128,6 +134,61 @@ export function formatMessageIds(
 
 export function formatDate(date: Date): string {
   return date.toUTCString().replace(/GMT$/, '+0000');
+}
+
+/**
+ * A JMAP date, which may carry a time zone offset, as an RFC 5322 date with
+ * the same offset. Null when the text is not such a date.
+ */
+export function formatDateWithOffset(text: string): string | null {
+  const match =
+    /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)$/i.exec(
+      text,
+    );
+  if (!match || Number.isNaN(Date.parse(text))) return null;
+  const [, year, month, day, hour, minute, second, zone] =
+    match as unknown as string[];
+  // The date as the sender's clock showed it, to name the right day of the week.
+  const local = new Date(
+    Date.UTC(Number(year), Number(month) - 1, Number(day)),
+  );
+  const [weekday, , monthName] = local.toUTCString().split(/[ ,]+/) as [
+    string,
+    string,
+    string,
+  ];
+  const offset =
+    (zone as string).toUpperCase() === 'Z'
+      ? '+0000'
+      : (zone as string).replace(':', '');
+  return `${weekday}, ${day} ${monthName} ${year} ${hour}:${minute}:${second} ${offset}`;
+}
+
+/** Groups of addresses, as in `Team: a@example.com, b@example.com;`. A group without a name is a plain list. */
+export function formatGroupedAddresses(
+  groups: ReadonlyArray<{ name: string | null; addresses: EmailAddress[] }>,
+  property?: string,
+): string {
+  return groups
+    .map((group) => {
+      const list = formatAddresses(group.addresses, property);
+      return group.name === null
+        ? list
+        : `${encodePhrase(group.name, property)}: ${list};`;
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+export function formatUrls(urls: readonly string[], property?: string): string {
+  return urls
+    .map((url) => {
+      if (typeof url !== 'string' || !/^[^\s<>]+$/.test(url)) {
+        throw new ComposeError(`"${String(url)}" is not a valid URL`, property);
+      }
+      return `<${url}>`;
+    })
+    .join(', ');
 }
 
 /** Breaks a header onto continuation lines at whitespace so that lines stay short. */
@@ -230,6 +291,44 @@ function randomBoundary(): string {
   return `=_mailless_${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
 }
 
+function renderHeader({ name, value, raw }: ComposeHeader): string {
+  if (!HEADER_NAME.test(name)) {
+    throw new ComposeError(`"${name}" is not a valid header name`);
+  }
+  if (!raw) {
+    assertSingleLine(value);
+    return fold(name, value);
+  }
+  // A raw value may be folded already; any other line break would start a new header.
+  if (/\0|\r(?!\n)|(?<!\r)\n|\r\n(?![ \t])/.test(value)) {
+    throw new ComposeError('Header values may not contain line breaks');
+  }
+  return `${name}:${/^[ \t]/.test(value) ? '' : ' '}${value}`;
+}
+
+/** The header fields that say what a part is, other than its type and disposition. */
+function describingHeaders(part: ComposePart): string[] {
+  const headers: string[] = [];
+  if (part.cid) {
+    assertSingleLine(part.cid);
+    headers.push(fold('Content-ID', `<${part.cid.replace(/^<|>$/g, '')}>`));
+  }
+  if (part.language && part.language.length > 0) {
+    for (const tag of part.language) {
+      if (typeof tag !== 'string' || !/^[A-Za-z0-9-]+$/.test(tag)) {
+        throw new ComposeError(`"${String(tag)}" is not a language tag`);
+      }
+    }
+    headers.push(fold('Content-Language', part.language.join(', ')));
+  }
+  if (part.location) {
+    assertSingleLine(part.location);
+    headers.push(fold('Content-Location', part.location));
+  }
+  headers.push(...(part.headers ?? []).map(renderHeader));
+  return headers;
+}
+
 function renderPart(part: ComposePart): string {
   const type = part.type.toLowerCase();
   if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type)) {
@@ -243,6 +342,7 @@ function renderPart(part: ComposePart): string {
     const boundary = randomBoundary();
     return [
       fold('Content-Type', `${type}; ${parameter('boundary', boundary)}`),
+      ...describingHeaders(part),
       '',
       ...part.subParts.flatMap((child) => [`--${boundary}`, renderPart(child)]),
       `--${boundary}--`,
@@ -256,12 +356,14 @@ function renderPart(part: ComposePart): string {
   const isText = type.startsWith('text/');
   const contentType = [type];
   if (isText) contentType.push(parameter('charset', part.charset ?? 'utf-8'));
-  if (part.name && isAscii(part.name))
+  // Without a disposition the name can only go here; with one, older software still looks here.
+  if (part.name && (isAscii(part.name) || !part.disposition)) {
     contentType.push(parameter('name', part.name));
+  }
 
   const headers = [fold('Content-Type', contentType.join('; '))];
-  if (part.disposition || part.name) {
-    const disposition = (part.disposition ?? 'attachment').toLowerCase();
+  if (part.disposition) {
+    const disposition = part.disposition.toLowerCase();
     if (!TOKEN.test(disposition)) {
       throw new ComposeError(
         `"${part.disposition}" is not a valid disposition`,
@@ -276,10 +378,7 @@ function renderPart(part: ComposePart): string {
       ),
     );
   }
-  if (part.cid) {
-    assertSingleLine(part.cid);
-    headers.push(fold('Content-ID', `<${part.cid.replace(/^<|>$/g, '')}>`));
-  }
+  headers.push(...describingHeaders(part));
 
   let body: string;
   if (isText && isPlainSevenBit(content)) {
@@ -300,13 +399,7 @@ export function composeMessage(
   headers: readonly ComposeHeader[],
   body: ComposePart,
 ): Uint8Array {
-  const lines = headers.map(({ name, value }) => {
-    if (!HEADER_NAME.test(name)) {
-      throw new ComposeError(`"${name}" is not a valid header name`);
-    }
-    assertSingleLine(value);
-    return fold(name, value);
-  });
+  const lines = headers.map(renderHeader);
   // No line break is added after a body that is the whole message: it would
   // become part of the text. After a multipart's last delimiter it is customary.
   return encoder.encode(

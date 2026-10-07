@@ -147,33 +147,14 @@
     "status": "skip",
     "reason": "test requires implementation of pool_account_pair"
   },
-  "t/Email/import/bad-values.t": {
-    "status": "fail",
-    "failed": [
-      "EmailImport object -> required fields",
-      "blobId"
-    ]
-  },
-  "t/Email/import/good-imports.t": {
-    "status": "fail",
-    "failed": [
-      "multiple mailboxes",
-      "single mailbox import, default values"
-    ]
-  },
-  "t/Email/import/one-fails-another-succeeds.t": {
-    "status": "fail",
-    "failed": [
-      "email looks good"
-    ]
-  },
   "t/Email/query/filtering.t": {
     "status": "fail",
     "failed": [
       "allInThreadHaveKeyword filter, none match that all have",
       "noneInThreadHaveKeyword filter, match, don't get some back",
       "someInThreadHaveKeyword filter, match"
-    ]
+    ],
+    "note": "The suite puts replies with a different subject in the thread of the message they answer. RFC 8621 section 3 recommends also requiring the same subject, so that a reply used to start a new conversation gets its own thread; this server follows that."
   },
   "t/Email/queryChanges/simple.t": {
     "status": "fail",
@@ -185,112 +166,12 @@
       "no changes"
     ]
   },
-  "t/Email/set/create/attachments-using-blob-id.t": {
-    "status": "fail",
-    "failed": [
-      "attachments create",
-      "got the id",
-      "no sentence found with name \"Email/get\""
-    ]
-  },
-  "t/Email/set/create/attachments.t": {
-    "status": "fail",
-    "failed": [
-      "attachments create",
-      "got the id",
-      "no sentence found with name \"Email/get\""
-    ]
-  },
-  "t/Email/set/create/body-structure-subparts.t": {
-    "status": "fail",
-    "failed": [
-      "got the id",
-      "no sentence found with name \"Email/get\"",
-      "textBody create"
-    ]
-  },
-  "t/Email/set/create/body-structure.t": {
-    "status": "fail",
-    "failed": [
-      "get looks good"
-    ]
-  },
-  "t/Email/set/create/content-transfer-encoding-not-allowed.t": {
-    "status": "fail",
-    "failed": [
-      "cannot specify Content-Transfer-Encoding"
-    ]
-  },
-  "t/Email/set/create/email-body-value-restrictions.t": {
-    "status": "fail",
-    "failed": [
-      "explicit true"
-    ]
-  },
-  "t/Email/set/create/header-header-field-name.t": {
-    "status": "fail",
-    "failed": [
-      ":all suffix can provide a list",
-      "asAddresses",
-      "asDate",
-      "asMessageIds",
-      "asText",
-      "asURLs"
-    ]
-  },
-  "t/Email/set/create/headers-property-forbidden-in-body-structure.t": {
-    "status": "fail",
-    "failed": [
-      "got invalidProperties error"
-    ]
-  },
-  "t/Email/set/create/html-body-using-blob-id.t": {
-    "status": "fail",
-    "failed": [
-      "get looks good"
-    ]
-  },
-  "t/Email/set/create/html-body.t": {
-    "status": "fail",
-    "failed": [
-      "get looks good"
-    ]
-  },
-  "t/Email/set/create/no-duplicate-header-representations.t": {
-    "status": "fail",
-    "failed": [
-      "sanity check"
-    ]
-  },
-  "t/Email/set/create/no-duplicate-structural-representations.t": {
-    "status": "fail",
-    "failed": [
-      "got invalidProperties error"
-    ]
-  },
-  "t/Email/set/create/no-size-with-partid.t": {
-    "status": "fail",
-    "failed": [
-      "cannot have size with partId"
-    ]
-  },
-  "t/Email/set/create/text-body-using-blob-id.t": {
-    "status": "fail",
-    "failed": [
-      "get looks good"
-    ]
-  },
-  "t/Email/set/create/text-body.t": {
-    "status": "fail",
-    "failed": [
-      "get looks good"
-    ]
-  },
   "t/Email/set/if-in-state.t": {
     "status": "fail",
     "failed": [
       "got current state"
-    ]
+    ],
+    "note": "Not about ifInState: the test checks that the state string is true in Perl, and this server's state before any change is \"0\", which Perl reads as false. RFC 8620 puts no such limit on state strings."
   },
   "t/MDN/foreign-account.t": {
     "status": "skip",

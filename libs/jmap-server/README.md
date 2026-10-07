@@ -101,7 +101,7 @@ time of use at most once an hour.
 | `Mailbox/get`, `/changes`, `/query`, `/set`                                  | Including `updatedProperties`, `sortAsTree`, `filterAsTree`, `onDestroyRemoveEmails`.                                                                                                                                  |
 | `Email/get`                                                                  | Metadata, headers in every `header:Name:asForm` variant, the MIME tree as it is in the message with each part's headers, body values in the part's charset, and the body and attachment lists RFC 8621 §4.1.4 derives. |
 | `Email/query`                                                                | Every RFC 8621 filter condition, including full-text `text` and `body`; sorting; `collapseThreads`; paging and anchors.                                                                                                |
-| `Email/set`                                                                  | Create (drafts and messages to send) from `textBody` / `htmlBody` / `attachments` or a `bodyStructure`; update `keywords` and `mailboxIds`; destroy.                                                                   |
+| `Email/set`                                                                  | Create drafts and messages to send, from `textBody` / `htmlBody` / `attachments` or any `bodyStructure`, with headers in every form on the message and on its parts; update `keywords` and `mailboxIds`; destroy.      |
 | `Email/import`                                                               |                                                                                                                                                                                                                        |
 | `SearchSnippet/get`                                                          | Subject and body excerpts with matches wrapped in `<mark>`.                                                                                                                                                            |
 | `Email/changes`, `Thread/get`, `Thread/changes`                              |                                                                                                                                                                                                                        |
@@ -132,11 +132,13 @@ const jmap = createJmapServer({
 });
 ```
 
-A message can only be submitted if every address in its `From` header, and
-the envelope sender, is covered by the chosen identity. The `Bcc` header is
+A client may set any header when creating a message, including `From` in raw
+form. What it may send is decided at submission: a message can only be
+submitted if every address in its `From` header, and the envelope sender, is
+covered by the chosen identity. The `Bcc` header is
 removed from what is sent and kept on the stored copy. Header values supplied
-by clients are rejected if they contain line breaks, so a draft cannot be used
-to add or override headers.
+by clients are rejected if they contain line breaks, so one header cannot be
+used to smuggle in another.
 
 Each message is handed to the transport with `tags` naming its account and
 submission. When the transport later learns what happened, the host calls
@@ -224,7 +226,6 @@ message's text are searchable.
 - Delayed sending and cancelling: messages are handed over at once, so
   `undoStatus` is always `final`.
 - `Email/copy`, `Email/parse`, `VacationResponse`.
-- Per-part headers, and non-text content from `bodyValues`, when creating.
 - Push over EventSource or WebSocket; push subscriptions are supported.
 
 ### Known simplifications

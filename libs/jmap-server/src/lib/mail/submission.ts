@@ -266,6 +266,19 @@ async function createSubmission(
       'The From address is not one this identity may send as',
     );
   }
+  // The Sender header names who actually sent the message, so it is held to the same rule.
+  if (
+    !(email.value.sender ?? []).every(
+      (address) =>
+        !address.email.startsWith('*@') &&
+        identityAllows(identity, address.email),
+    )
+  ) {
+    throw new SetFailure(
+      'forbiddenFrom',
+      'The Sender address is not one this identity may send as',
+    );
+  }
 
   let mailFrom: string;
   let recipients: string[];
