@@ -29,9 +29,11 @@ import {
 import { standardChanges, toChangesResponse } from '../standard/changes.js';
 import { loadForGet } from '../standard/get.js';
 import {
+  changesSince,
   compareStrings,
   filterAndSort,
   filterUses,
+  queryChanges,
   paginate,
   requiredConditionValues,
   type CompareFn,
@@ -80,6 +82,7 @@ import {
   EMAIL_DELIVERY,
   isValidKeyword,
   MAILBOX,
+  THREAD,
   type EmailRecord,
   type EmailValue,
   type MailboxRecord,
@@ -1081,6 +1084,127 @@ async function importOne(
   return { ...imported };
 }
 
+interface EmailQueryResults {
+  /** The ids found, in order. */
+  ids: string[];
+  /**
+   * Whether an email's place in the results can depend on other emails of its
+   * thread: with thread-wide keyword conditions, or when threads are collapsed.
+   */
+  dependsOnThread: boolean;
+  /** Every email of the account by thread, when the query needed to know. */
+  threadMembers?: Map<string, string[]>;
+}
+
+/** What an Email/query with these arguments finds now. */
+async function queryEmails(
+  ctx: MethodContext,
+  args: {
+    filter?: Record<string, unknown> | null | undefined;
+    sort?: Comparator[] | null | undefined;
+    collapseThreads?: boolean | undefined;
+  },
+  /** Whether the caller will ask which emails share a thread. */
+  wantThreadMembers = false,
+): Promise<EmailQueryResults> {
+  const accountId = ctx.auth.accountId;
+  const needsThreads =
+    filterUses(args.filter, THREAD_KEYWORD_PROPERTIES) ||
+    (args.sort ?? []).some((comparator) =>
+      THREAD_KEYWORD_PROPERTIES.includes(comparator.property),
+    );
+  const mailboxes = requiredConditionValues(args.filter, 'inMailbox');
+  const narrowTo =
+    mailboxes.length === 1 && typeof mailboxes[0] === 'string'
+      ? mailboxes[0]
+      : undefined;
+
+  const all =
+    needsThreads || narrowTo === undefined
+      ? await listAllEmails(ctx)
+      : undefined;
+  const candidates =
+    narrowTo === undefined
+      ? (all as EmailRecord[])
+      : ((await ctx.store.list(accountId, EMAIL, {
+          name: 'mailbox',
+          value: narrowTo,
+        })) as unknown as EmailRecord[]);
+
+  const threads: ThreadIndex = new Map();
+  if (needsThreads) {
+    for (const record of all as EmailRecord[]) {
+      const members = threads.get(record.value.threadId);
+      if (members) members.push(record.value);
+      else threads.set(record.value.threadId, [record.value]);
+    }
+  }
+
+  const spec = emailQuerySpec(threads);
+  // Checked before any text is loaded, so a bad filter costs nothing.
+  if (args.filter) {
+    validateFilter(args.filter, (condition) =>
+      spec.validateCondition(condition),
+    );
+  }
+  const texts = filterUses(args.filter, TEXT_CONDITIONS)
+    ? await loadSearchText(
+        ctx,
+        candidates,
+        narrowTo === undefined,
+        parseMessage,
+      )
+    : undefined;
+
+  let sorted = filterAndSort(
+    candidates.map((record) => {
+      const text = texts?.get(record.id);
+      return {
+        id: record.id,
+        email: record.value,
+        ...(text ? { text } : {}),
+      };
+    }),
+    args.filter,
+    args.sort,
+    spec,
+  );
+  if (args.collapseThreads) {
+    const seen = new Set<string>();
+    sorted = sorted.filter(({ email }) => {
+      if (seen.has(email.threadId)) return false;
+      seen.add(email.threadId);
+      return true;
+    });
+  }
+
+  const dependsOnThread = needsThreads || args.collapseThreads === true;
+  let threadMembers: Map<string, string[]> | undefined;
+  if (wantThreadMembers && dependsOnThread) {
+    threadMembers = new Map();
+    for (const record of all ?? (await listAllEmails(ctx))) {
+      const members = threadMembers.get(record.value.threadId);
+      if (members) members.push(record.id);
+      else threadMembers.set(record.value.threadId, [record.id]);
+    }
+  }
+  return {
+    ids: sorted.map((item) => item.id),
+    dependsOnThread,
+    ...(threadMembers ? { threadMembers } : {}),
+  };
+}
+
+/*
+ * The state of an email query is the state of the emails and of the threads
+ * together: which emails are in a thread decides results too, and a thread
+ * changes without any of its remaining emails changing when one is destroyed.
+ */
+async function emailQueryState(ctx: MethodContext): Promise<string> {
+  const accountId = ctx.auth.accountId;
+  return `${await ctx.store.getState(accountId, EMAIL)}.${await ctx.store.getState(accountId, THREAD)}`;
+}
+
 // -------------------------------------------------------- SearchSnippet/get
 
 const SearchSnippetArgumentsSchema = z.strictObject({
@@ -1150,87 +1274,11 @@ export const emailMethods: Record<string, MethodHandler> = {
 
   'Email/query': async (rawArgs, ctx) => {
     const args = parseArguments(EmailQueryArgumentsSchema, rawArgs);
-    const accountId = requireAccount(ctx, args.accountId);
-    const state = await ctx.store.getState(accountId, EMAIL);
-
-    const needsThreads =
-      filterUses(args.filter, THREAD_KEYWORD_PROPERTIES) ||
-      (args.sort ?? []).some((comparator) =>
-        THREAD_KEYWORD_PROPERTIES.includes(comparator.property),
-      );
-    const mailboxes = requiredConditionValues(args.filter, 'inMailbox');
-    const narrowTo =
-      mailboxes.length === 1 && typeof mailboxes[0] === 'string'
-        ? mailboxes[0]
-        : undefined;
-
-    const all =
-      needsThreads || narrowTo === undefined
-        ? await listAllEmails(ctx)
-        : undefined;
-    const candidates =
-      narrowTo === undefined
-        ? (all as EmailRecord[])
-        : ((await ctx.store.list(accountId, EMAIL, {
-            name: 'mailbox',
-            value: narrowTo,
-          })) as unknown as EmailRecord[]);
-
-    const threads: ThreadIndex = new Map();
-    if (needsThreads) {
-      for (const record of all as EmailRecord[]) {
-        const members = threads.get(record.value.threadId);
-        if (members) members.push(record.value);
-        else threads.set(record.value.threadId, [record.value]);
-      }
-    }
-
-    const spec = emailQuerySpec(threads);
-    // Checked before any text is loaded, so a bad filter costs nothing.
-    if (args.filter) {
-      validateFilter(args.filter, (condition) =>
-        spec.validateCondition(condition),
-      );
-    }
-    const texts = filterUses(args.filter, TEXT_CONDITIONS)
-      ? await loadSearchText(
-          ctx,
-          candidates,
-          narrowTo === undefined,
-          parseMessage,
-        )
-      : undefined;
-
-    let sorted = filterAndSort(
-      candidates.map((record) => {
-        const text = texts?.get(record.id);
-        return {
-          id: record.id,
-          email: record.value,
-          ...(text ? { text } : {}),
-        };
-      }),
-      args.filter,
-      args.sort,
-      spec,
-    );
-    if (args.collapseThreads) {
-      const seen = new Set<string>();
-      sorted = sorted.filter(({ email }) => {
-        if (seen.has(email.threadId)) return false;
-        seen.add(email.threadId);
-        return true;
-      });
-    }
-
-    return {
-      ...paginate(
-        ctx,
-        sorted.map((item) => item.id),
-        args,
-        state,
-      ),
-    };
+    requireAccount(ctx, args.accountId);
+    // Read first: a client may then see results newer than the state, never older.
+    const state = await emailQueryState(ctx);
+    const { ids } = await queryEmails(ctx, args);
+    return { ...paginate(ctx, ids, args, state) };
   },
 
   'SearchSnippet/get': async (rawArgs, ctx) => {
@@ -1313,7 +1361,39 @@ export const emailMethods: Record<string, MethodHandler> = {
       rawArgs,
     );
     requireAccount(ctx, args.accountId);
-    throw new MethodError('cannotCalculateChanges');
+    const [sinceEmails, sinceThreads, ...rest] =
+      args.sinceQueryState.split('.');
+    if (
+      sinceEmails === undefined ||
+      sinceThreads === undefined ||
+      rest.length
+    ) {
+      throw new MethodError('cannotCalculateChanges');
+    }
+    const state = await emailQueryState(ctx);
+    const changes = await changesSince(ctx, EMAIL, sinceEmails);
+    const threadChanges = await changesSince(ctx, THREAD, sinceThreads);
+    const { ids, dependsOnThread, threadMembers } = await queryEmails(
+      ctx,
+      args,
+      true,
+    );
+
+    // Where threads matter, a change to one email may move the others of its thread.
+    const alsoChanged = new Set<string>();
+    if (dependsOnThread && threadMembers) {
+      const changedEmails = new Set(changes.map((entry) => entry.id));
+      const changedThreads = new Set(threadChanges.map((entry) => entry.id));
+      for (const [threadId, members] of threadMembers) {
+        if (
+          changedThreads.has(threadId) ||
+          members.some((id) => changedEmails.has(id))
+        ) {
+          for (const id of members) alsoChanged.add(id);
+        }
+      }
+    }
+    return { ...queryChanges(ctx, ids, changes, alsoChanged, args, state) };
   },
 
   'Email/set': async (rawArgs, ctx) => {

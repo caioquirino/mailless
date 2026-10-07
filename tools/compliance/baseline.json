@@ -156,16 +156,6 @@
     ],
     "note": "The suite puts replies with a different subject in the thread of the message they answer. RFC 8621 section 3 recommends also requiring the same subject, so that a reply used to start a new conversation gets its own thread; this server follows that."
   },
-  "t/Email/queryChanges/simple.t": {
-    "status": "fail",
-    "failed": [
-      "a removal that doesn't match",
-      "a removal that matches",
-      "added message that doesn't match",
-      "added message that matches",
-      "no changes"
-    ]
-  },
   "t/Email/set/if-in-state.t": {
     "status": "fail",
     "failed": [
@@ -203,15 +193,6 @@
       "OR - two conditions, diff conds"
     ],
     "note": "The suite expects names sorted byte by byte, capitals first. RFC 8620 section 5.5 leaves the default collation to the server; this one ignores case, so 'aaa' sorts before 'Archive'."
-  },
-  "t/Mailbox/queryChanges/basic.t": {
-    "status": "fail",
-    "failed": [
-      "canCalculateChanges is true",
-      "created mailbox appears in added",
-      "destroyed mailbox appears in removed",
-      "no changes"
-    ]
   },
   "t/Principal/foreign-account.t": {
     "status": "skip",

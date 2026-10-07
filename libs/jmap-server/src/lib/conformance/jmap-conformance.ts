@@ -898,7 +898,7 @@ export function describeJmapConformance(
       expect(page.ids).toHaveLength(2);
       expect(page.position).toBe(1);
       expect(page.total).toBe(8);
-      expect(page.canCalculateChanges).toBe(false);
+      expect(page.canCalculateChanges).toBe(true);
 
       expect(
         (await h.fail('Mailbox/query', { filter: { nope: 1 } })).type,
@@ -2017,8 +2017,9 @@ export function describeJmapConformance(
         expect(page.position).toBe(1);
         expect(page.total).toBe(4);
         expect(page).not.toHaveProperty('limit');
+        // The state of a query covers emails and threads together.
         expect(page.queryState).toBe(
-          (await h.call('Email/get', { ids: [] })).state,
+          `${(await h.call('Email/get', { ids: [] })).state}.${(await h.call('Thread/get', { ids: [] })).state}`,
         );
 
         expect(await query({ sort: newestFirst, position: -1 })).toEqual([
@@ -3057,7 +3058,8 @@ export function describeJmapConformance(
       expect(wire).toContain('Subject: Hello Bob');
       expect(wire).toContain('To: "Bob" <bob@example.org>');
       expect(wire).toContain('Cc: carol@example.org');
-      expect(wire.toLowerCase()).not.toContain('bcc');
+      // A header line, not the letters: a random message id may well contain "bcc".
+      expect(wire).not.toMatch(/^bcc:/im);
       expect(wire).not.toContain('hidden@example.org');
       expect(wire).toContain('see you soon.');
 
@@ -3501,17 +3503,6 @@ export function describeJmapConformance(
           },
         ),
       ).toBe(false);
-    });
-
-    it('answers EmailSubmission/queryChanges, without calculating', async () => {
-      const { queryState } = await h.call('EmailSubmission/query', {});
-      expect(
-        (
-          await h.fail('EmailSubmission/queryChanges', {
-            sinceQueryState: queryState,
-          })
-        ).type,
-      ).toBe('cannotCalculateChanges');
     });
 
     it('offers no sending methods when no transport is configured', async () => {
@@ -4405,6 +4396,355 @@ export function describeJmapConformance(
       });
       expect(encoder.encode(list[0].preview).length).toBeLessThanOrEqual(255);
       expect(list[0].preview).toContain('<mark>überraschung</mark> is ready.');
+    });
+  });
+
+  describe(`${name}: queryChanges`, () => {
+    let h: Harness;
+    let inbox: string;
+    let archive: string;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      inbox = await h.mailbox('inbox');
+      archive = await h.mailbox('archive');
+    });
+
+    /**
+     * Brings a cached result list up to date the way RFC 8620 §5.6 tells
+     * clients to: take out everything removed, then put in everything added,
+     * lowest index first.
+     */
+    const applyChanges = (cached: string[], changes: Json): string[] => {
+      const result = cached.filter((id) => !changes.removed.includes(id));
+      for (const { id, index } of changes.added) result.splice(index, 0, id);
+      return result;
+    };
+
+    /** Checks that queryChanges turns the old results of a query into its new ones. */
+    const follow = async (method: string, args: Json) => {
+      const before = await h.call(`${method}/query`, args);
+      expect(before.canCalculateChanges).toBe(true);
+      return async (label: string) => {
+        const now = await h.call(`${method}/query`, args);
+        const changes = await h.call(`${method}/queryChanges`, {
+          ...args,
+          sinceQueryState: before.queryState,
+          calculateTotal: true,
+        });
+        expect(changes.oldQueryState).toBe(before.queryState);
+        expect(changes.newQueryState, label).toBe(now.queryState);
+        expect(changes.total, label).toBe(now.ids.length);
+        expect(
+          changes.added.map((item: Json) => item.index),
+          label,
+        ).toEqual(
+          [...changes.added.map((item: Json) => item.index)].sort(
+            (a: number, b: number) => a - b,
+          ),
+        );
+        expect(applyChanges(before.ids, changes), label).toEqual(now.ids);
+        return changes;
+      };
+    };
+
+    it('reports nothing when nothing changed', async () => {
+      await h.deliver(inbox, { subject: 'Only one' });
+      for (const [method, args] of [
+        ['Email', { filter: { inMailbox: inbox } }],
+        ['Mailbox', { sort: [{ property: 'name' }] }],
+        ['EmailSubmission', {}],
+      ] as Array<[string, Json]>) {
+        const check = await follow(method, args);
+        const changes = await check(method);
+        expect(changes.removed).toEqual([]);
+        expect(changes.added).toEqual([]);
+        expect(changes).not.toHaveProperty('nonsense');
+      }
+      const { queryState } = await h.call('Email/query', {});
+      expect(
+        await h.call('Email/queryChanges', { sinceQueryState: queryState }),
+      ).not.toHaveProperty('total');
+    });
+
+    it('follows emails arriving, changing, moving and going', async () => {
+      const subjects = ['delta', 'alpha', 'charlie', 'bravo'];
+      const ids: Record<string, string> = {};
+      for (const [index, subject] of subjects.entries()) {
+        ids[subject] = (
+          await h.deliver(
+            inbox,
+            { subject },
+            { receivedAt: `2026-10-0${index + 1}T10:00:00Z` },
+          )
+        ).id;
+      }
+
+      const queries: Array<[string, Json]> = [
+        [
+          'everything, newest first',
+          { sort: [{ property: 'receivedAt', isAscending: false }] },
+        ],
+        [
+          'the inbox by subject',
+          { filter: { inMailbox: inbox }, sort: [{ property: 'subject' }] },
+        ],
+        [
+          'unread only',
+          { filter: { notKeyword: '$seen' }, sort: [{ property: 'subject' }] },
+        ],
+        [
+          'flagged first',
+          {
+            sort: [
+              {
+                property: 'hasKeyword',
+                keyword: '$flagged',
+                isAscending: false,
+              },
+              { property: 'subject' },
+            ],
+          },
+        ],
+        ['a text search', { filter: { text: 'alpha' } }],
+      ];
+      const checks = await Promise.all(
+        queries.map(async ([label, args]) => ({
+          label,
+          check: await follow('Email', args),
+        })),
+      );
+
+      // One of each kind of change, then all queries are brought up to date.
+      ids['echo'] = (
+        await h.deliver(
+          inbox,
+          { subject: 'echo alpha' },
+          { receivedAt: '2026-10-05T10:00:00Z' },
+        )
+      ).id;
+      await h.call('Email/set', {
+        update: {
+          [ids['alpha'] as string]: { 'keywords/$seen': true },
+          [ids['charlie'] as string]: { 'keywords/$flagged': true },
+          [ids['bravo'] as string]: { mailboxIds: { [archive]: true } },
+        },
+        destroy: [ids['delta'] as string],
+      });
+
+      for (const { label, check } of checks) {
+        const changes = await check(label);
+        // Whatever was destroyed is always among the removed.
+        expect(changes.removed, label).toContain(ids['delta']);
+      }
+
+      const [, inboxArgs] = queries[1] as [string, Json];
+      const { queryState } = await h.call('Email/query', inboxArgs);
+      await h.deliver(inbox, { subject: 'foxtrot' });
+      const one = await h.call('Email/queryChanges', {
+        ...inboxArgs,
+        sinceQueryState: queryState,
+      });
+      // Something new cannot have been in the old results, so it is only added.
+      expect(one.removed).toEqual([]);
+      expect(one.added).toEqual([{ id: expect.any(String), index: 3 }]);
+    });
+
+    it('follows threads when the query depends on them', async () => {
+      const first = await h.deliver(
+        inbox,
+        {
+          subject: 'Plans',
+          messageId: '<p1@example.com>',
+        },
+        { receivedAt: '2026-10-01T10:00:00Z' },
+      );
+      const other = await h.deliver(
+        inbox,
+        { subject: 'Other' },
+        { receivedAt: '2026-10-02T10:00:00Z' },
+      );
+
+      const collapsed = await follow('Email', {
+        collapseThreads: true,
+        sort: [{ property: 'receivedAt', isAscending: false }],
+      });
+      const allFlagged = await follow('Email', {
+        filter: { allInThreadHaveKeyword: '$flagged' },
+      });
+      const someFlagged = await follow('Email', {
+        filter: { someInThreadHaveKeyword: '$flagged' },
+      });
+
+      // A reply joins the thread and becomes what stands for it; the first is
+      // flagged, which changes what both thread-wide conditions say about the reply.
+      const reply = await h.deliver(
+        inbox,
+        {
+          subject: 'Re: Plans',
+          messageId: '<p2@example.com>',
+          inReplyTo: '<p1@example.com>',
+        },
+        { receivedAt: '2026-10-03T10:00:00Z' },
+      );
+      expect(reply.threadId).toBe(first.threadId);
+      await h.call('Email/set', {
+        update: { [first.id]: { 'keywords/$flagged': true } },
+      });
+
+      const changes = await collapsed('collapsed');
+      // The first message did change here, but it would have to go even if it
+      // had not: it no longer stands for its thread.
+      expect(changes.removed).toContain(first.id);
+      expect(changes.added.map((item: Json) => item.id)).toEqual([reply.id]);
+      await allFlagged('all flagged');
+      expect((await someFlagged('some flagged')).added).toHaveLength(2);
+
+      // Destroying the unflagged reply makes the thread all flagged, although
+      // the message that now matches did not change.
+      const afterReply = await follow('Email', {
+        filter: { allInThreadHaveKeyword: '$flagged' },
+      });
+      await h.call('Email/set', { destroy: [reply.id] });
+      const again = await afterReply('after the reply went');
+      expect(again.added).toEqual([{ id: first.id, index: 0 }]);
+      expect(again.removed).not.toContain(other.id);
+    });
+
+    it('follows mailboxes, flat and as a tree', async () => {
+      const flat = await follow('Mailbox', {
+        filter: { hasAnyRole: false },
+        sort: [{ property: 'name' }],
+      });
+      const tree = await follow('Mailbox', {
+        sort: [{ property: 'name' }],
+        sortAsTree: true,
+        filterAsTree: true,
+        filter: { isSubscribed: true },
+      });
+
+      const { created } = await h.call('Mailbox/set', {
+        create: {
+          work: { name: 'Work' },
+          clients: { name: 'Clients', parentId: '#work' },
+          aside: { name: 'Aside' },
+        },
+      });
+      const first = await flat('created');
+      expect(first.removed).toEqual([]);
+      expect(first.added.map((item: Json) => item.id)).toEqual([
+        created.aside.id,
+        created.clients.id,
+        created.work.id,
+      ]);
+      await tree('created, as a tree');
+
+      const later = await follow('Mailbox', { sort: [{ property: 'name' }] });
+      const laterTree = await follow('Mailbox', {
+        sort: [{ property: 'name' }],
+        sortAsTree: true,
+        filterAsTree: true,
+        filter: { isSubscribed: true },
+      });
+      await h.call('Mailbox/set', {
+        update: {
+          [created.aside.id]: { name: 'Zebra' },
+          // Hiding a parent hides its children from a tree-filtered list.
+          [created.work.id]: { isSubscribed: false },
+        },
+        destroy: [archive],
+      });
+      const second = await later('renamed and destroyed');
+      expect(second.removed).toContain(archive);
+      const asTree = await laterTree('as a tree');
+      expect(asTree.removed).toContain(created.clients.id);
+      expect(asTree.added.map((item: Json) => item.id)).not.toContain(
+        created.clients.id,
+      );
+
+      // Mail arriving changes a mailbox's counts, and so the mailbox.
+      const counts = await follow('Mailbox', { sort: [{ property: 'name' }] });
+      await h.deliver(inbox);
+      const third = await counts('mail arrived');
+      expect(third.removed).toEqual([inbox]);
+      expect(third.added).toEqual([{ id: inbox, index: expect.any(Number) }]);
+    });
+
+    it('follows submissions', async () => {
+      const drafts = await h.mailbox('drafts');
+      const draft = async (subject: string) =>
+        (
+          await h.call('Email/set', {
+            create: {
+              d: {
+                mailboxIds: { [drafts]: true },
+                from: [{ email: 'me@example.com' }],
+                to: [{ email: 'bob@example.org' }],
+                subject,
+                bodyValues: { b: { value: 'Hi' } },
+                textBody: [{ partId: 'b' }],
+              },
+            },
+          })
+        ).created.d.id;
+      const check = await follow('EmailSubmission', {
+        sort: [{ property: 'sentAt' }],
+      });
+      const { created } = await h.call('EmailSubmission/set', {
+        create: { s: { identityId: 'me', emailId: await draft('One') } },
+      });
+      const changes = await check('one sent');
+      expect(changes.removed).toEqual([]);
+      expect(changes.added).toEqual([{ id: created.s.id, index: 0 }]);
+    });
+
+    it('limits how much it reports, and refuses states it does not know', async () => {
+      for (let index = 0; index < 4; index++) {
+        await h.deliver(inbox, { subject: `m${index}` });
+      }
+      const { queryState } = await h.call('Email/query', {});
+      for (let index = 0; index < 3; index++) {
+        await h.deliver(inbox, { subject: `n${index}` });
+      }
+      expect(
+        (
+          await h.fail('Email/queryChanges', {
+            sinceQueryState: queryState,
+            maxChanges: 2,
+          })
+        ).type,
+      ).toBe('tooManyChanges');
+      expect(
+        (
+          await h.call('Email/queryChanges', {
+            sinceQueryState: queryState,
+            maxChanges: 3,
+          })
+        ).added,
+      ).toHaveLength(3);
+
+      for (const [method, state] of [
+        ['Email', 'x'],
+        ['Email', '1'],
+        ['Email', '999999.0'],
+        ['Email', '1.2.3'],
+        ['Mailbox', 'x'],
+        ['Mailbox', '999999'],
+        ['EmailSubmission', 'not-a-state'],
+      ] as Array<[string, string]>) {
+        expect(
+          (await h.fail(`${method}/queryChanges`, { sinceQueryState: state }))
+            .type,
+          `${method} ${state}`,
+        ).toBe('cannotCalculateChanges');
+      }
+      expect(
+        (
+          await h.fail('Email/queryChanges', {
+            sinceQueryState: queryState,
+            filter: { nope: 1 },
+          })
+        ).type,
+      ).toBe('invalidArguments');
     });
   });
 }

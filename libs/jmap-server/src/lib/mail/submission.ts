@@ -30,9 +30,11 @@ import type { StoredRecord } from '../storage.js';
 import { standardChanges, toChangesResponse } from '../standard/changes.js';
 import { loadForGet, pick, selectProperties } from '../standard/get.js';
 import {
+  changesSince,
   compareStrings,
   filterAndSort,
   paginate,
+  queryChanges,
   type CompareFn,
   type QuerySpec,
 } from '../standard/query.js';
@@ -523,6 +525,26 @@ const SubmissionSetArgumentsSchema = SetArgumentsSchema.extend({
   onSuccessDestroyEmail: z.array(z.string()).nullish(),
 });
 
+/** The ids an EmailSubmission/query with these arguments finds now, in order. */
+async function querySubmissionIds(
+  ctx: MethodContext,
+  args: {
+    filter?: Record<string, unknown> | null | undefined;
+    sort?: Comparator[] | null | undefined;
+  },
+): Promise<string[]> {
+  const records = (await ctx.store.list(
+    ctx.auth.accountId,
+    SUBMISSION,
+  )) as unknown as SubmissionRecord[];
+  return filterAndSort(
+    records.map((record) => ({ id: record.id, ...record.value })),
+    args.filter,
+    args.sort,
+    submissionQuerySpec,
+  ).map((item) => item.id);
+}
+
 export const submissionMethods: Record<string, MethodHandler> = {
   'Identity/get': async (rawArgs, ctx) => {
     const args = parseArguments(GetArgumentsSchema, rawArgs);
@@ -654,31 +676,18 @@ export const submissionMethods: Record<string, MethodHandler> = {
   'EmailSubmission/queryChanges': async (rawArgs, ctx) => {
     const args = parseArguments(QueryChangesArgumentsSchema, rawArgs);
     requireAccount(ctx, args.accountId);
-    throw new MethodError('cannotCalculateChanges');
+    const state = await ctx.store.getState(ctx.auth.accountId, SUBMISSION);
+    const changes = await changesSince(ctx, SUBMISSION, args.sinceQueryState);
+    const ids = await querySubmissionIds(ctx, args);
+    return { ...queryChanges(ctx, ids, changes, [], args, state) };
   },
 
   'EmailSubmission/query': async (rawArgs, ctx) => {
     const args = parseArguments(QueryArgumentsSchema, rawArgs);
     const accountId = requireAccount(ctx, args.accountId);
     const state = await ctx.store.getState(accountId, SUBMISSION);
-    const records = (await ctx.store.list(
-      accountId,
-      SUBMISSION,
-    )) as unknown as SubmissionRecord[];
-    const sorted = filterAndSort(
-      records.map((record) => ({ id: record.id, ...record.value })),
-      args.filter,
-      args.sort,
-      submissionQuerySpec,
-    );
-    return {
-      ...paginate(
-        ctx,
-        sorted.map((item) => item.id),
-        args,
-        state,
-      ),
-    };
+    const ids = await querySubmissionIds(ctx, args);
+    return { ...paginate(ctx, ids, args, state) };
   },
 
   'EmailSubmission/set': async (rawArgs, ctx) => {

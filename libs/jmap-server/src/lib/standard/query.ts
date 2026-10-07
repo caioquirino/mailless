@@ -1,9 +1,11 @@
 import {
   MethodError,
   type Comparator,
+  type QueryChangesResponse,
   type QueryResponse,
 } from '@mailless/jmap-core';
 import type { MethodContext } from '../context.js';
+import type { ChangeLogEntry } from '../storage.js';
 
 type Condition = Record<string, unknown>;
 export type CompareFn<T> = (a: T, b: T) => number;
@@ -181,7 +183,7 @@ export function paginate(
   return {
     accountId: ctx.auth.accountId,
     queryState,
-    canCalculateChanges: false,
+    canCalculateChanges: true,
     // Past the end there is no first result to give the index of.
     position: position >= ids.length ? 0 : position,
     ids: ids.slice(position, position + limit),
@@ -194,4 +196,84 @@ export function compareStrings(a: string, b: string): number {
   const left = a.toLowerCase();
   const right = b.toLowerCase();
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export interface QueryChangesInput {
+  sinceQueryState: string;
+  maxChanges?: number | null | undefined;
+  calculateTotal?: boolean | undefined;
+}
+
+/**
+ * `/queryChanges` (RFC 8620 §5.6) from the change log: what to take out of a
+ * cached result list and what to put back in, so that it matches `ids`, the
+ * results as they are now.
+ *
+ * Every object that changed or went away since the old state is reported as
+ * removed, whether or not it was in the old results (which the RFC allows,
+ * and which nothing here could tell). Those still in the results are then
+ * added again at their current position. `alsoChanged` names objects whose
+ * place in the results may have moved although they did not change
+ * themselves.
+ */
+export function queryChanges(
+  ctx: MethodContext,
+  ids: readonly string[],
+  changes: readonly ChangeLogEntry[],
+  alsoChanged: Iterable<string>,
+  args: QueryChangesInput,
+  newQueryState: string,
+): QueryChangesResponse {
+  const created = new Set<string>();
+  const touched = new Set<string>(alsoChanged);
+  for (const entry of changes) {
+    // Something created after the old state cannot have been in the old results.
+    if (entry.kind === 'created' && !touched.has(entry.id)) {
+      created.add(entry.id);
+    }
+    touched.add(entry.id);
+  }
+
+  const index = new Map(ids.map((id, position) => [id, position]));
+  const removed = [...touched].filter((id) => !created.has(id));
+  const added = [...touched]
+    .flatMap((id) => {
+      const position = index.get(id);
+      return position === undefined ? [] : [{ id, index: position }];
+    })
+    .sort((a, b) => a.index - b.index);
+
+  if (
+    args.maxChanges !== null &&
+    args.maxChanges !== undefined &&
+    removed.length + added.length > args.maxChanges
+  ) {
+    throw new MethodError(
+      'tooManyChanges',
+      `There are ${removed.length + added.length} changes`,
+    );
+  }
+  return {
+    accountId: ctx.auth.accountId,
+    oldQueryState: args.sinceQueryState,
+    newQueryState,
+    ...(args.calculateTotal ? { total: ids.length } : {}),
+    removed,
+    added,
+  };
+}
+
+/** The change log since a state, or the error that tells the client to start over. */
+export async function changesSince(
+  ctx: MethodContext,
+  type: string,
+  sinceState: string,
+): Promise<ChangeLogEntry[]> {
+  const entries = await ctx.store.getChanges(
+    ctx.auth.accountId,
+    type,
+    sinceState,
+  );
+  if (entries === null) throw new MethodError('cannotCalculateChanges');
+  return entries;
 }

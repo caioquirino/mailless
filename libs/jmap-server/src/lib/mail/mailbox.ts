@@ -29,6 +29,8 @@ import {
   validateFilter,
   type CompareFn,
   type QuerySpec,
+  changesSince,
+  queryChanges,
 } from '../standard/query.js';
 import {
   resolveCreationReference,
@@ -453,6 +455,62 @@ const MailboxSetArgumentsSchema = SetArgumentsSchema.extend({
   onDestroyRemoveEmails: z.boolean().optional(),
 });
 
+/** The ids a Mailbox/query with these arguments finds now, in order, and those of every mailbox. */
+async function queryMailboxIds(
+  ctx: MethodContext,
+  args: {
+    filter?: Record<string, unknown> | null | undefined;
+    sort?: Comparator[] | null | undefined;
+    sortAsTree?: boolean | undefined;
+    filterAsTree?: boolean | undefined;
+  },
+): Promise<{ ids: string[]; allIds: string[] }> {
+  const all = (await listMailboxes(ctx)).map(toObject);
+
+  let ordered = filterAndSort(all, null, args.sort, querySpec);
+  if (args.sortAsTree) ordered = orderAsTree(ordered);
+
+  let matched = new Set(all.map((mailbox) => mailbox.id));
+  const filter = args.filter;
+  if (filter) {
+    validateFilter(filter, (c) => querySpec.validateCondition(c));
+    matched = new Set(
+      all
+        .filter((mailbox) =>
+          evaluateFilter(filter, mailbox, (m, c) => querySpec.matches(m, c)),
+        )
+        .map((mailbox) => mailbox.id),
+    );
+    if (args.filterAsTree) {
+      const byId = new Map(all.map((mailbox) => [mailbox.id, mailbox]));
+      const ancestorsMatch = (mailbox: MailboxObject): boolean => {
+        for (
+          let parent = mailbox.parentId
+            ? byId.get(mailbox.parentId)
+            : undefined;
+          parent;
+          parent = parent.parentId ? byId.get(parent.parentId) : undefined
+        ) {
+          if (!matched.has(parent.id)) return false;
+        }
+        return true;
+      };
+      matched = new Set(
+        all
+          .filter(
+            (mailbox) => matched.has(mailbox.id) && ancestorsMatch(mailbox),
+          )
+          .map((mailbox) => mailbox.id),
+      );
+    }
+  }
+
+  const ids = ordered
+    .filter((mailbox) => matched.has(mailbox.id))
+    .map((mailbox) => mailbox.id);
+  return { ids, allIds: all.map((mailbox) => mailbox.id) };
+}
+
 export const mailboxMethods: Record<string, MethodHandler> = {
   'Mailbox/get': async (rawArgs, ctx) => {
     const args = parseArguments(GetArgumentsSchema, rawArgs);
@@ -500,49 +558,7 @@ export const mailboxMethods: Record<string, MethodHandler> = {
     const args = parseArguments(MailboxQueryArgumentsSchema, rawArgs);
     requireAccount(ctx, args.accountId);
     const state = await ctx.store.getState(ctx.auth.accountId, MAILBOX);
-    const all = (await listMailboxes(ctx)).map(toObject);
-
-    let ordered = filterAndSort(all, null, args.sort, querySpec);
-    if (args.sortAsTree) ordered = orderAsTree(ordered);
-
-    let matched = new Set(all.map((mailbox) => mailbox.id));
-    const filter = args.filter;
-    if (filter) {
-      validateFilter(filter, (c) => querySpec.validateCondition(c));
-      matched = new Set(
-        all
-          .filter((mailbox) =>
-            evaluateFilter(filter, mailbox, (m, c) => querySpec.matches(m, c)),
-          )
-          .map((mailbox) => mailbox.id),
-      );
-      if (args.filterAsTree) {
-        const byId = new Map(all.map((mailbox) => [mailbox.id, mailbox]));
-        const ancestorsMatch = (mailbox: MailboxObject): boolean => {
-          for (
-            let parent = mailbox.parentId
-              ? byId.get(mailbox.parentId)
-              : undefined;
-            parent;
-            parent = parent.parentId ? byId.get(parent.parentId) : undefined
-          ) {
-            if (!matched.has(parent.id)) return false;
-          }
-          return true;
-        };
-        matched = new Set(
-          all
-            .filter(
-              (mailbox) => matched.has(mailbox.id) && ancestorsMatch(mailbox),
-            )
-            .map((mailbox) => mailbox.id),
-        );
-      }
-    }
-
-    const ids = ordered
-      .filter((mailbox) => matched.has(mailbox.id))
-      .map((mailbox) => mailbox.id);
+    const { ids } = await queryMailboxIds(ctx, args);
     return { ...paginate(ctx, ids, args, state) };
   },
 
@@ -555,7 +571,22 @@ export const mailboxMethods: Record<string, MethodHandler> = {
       rawArgs,
     );
     requireAccount(ctx, args.accountId);
-    throw new MethodError('cannotCalculateChanges');
+    const state = await ctx.store.getState(ctx.auth.accountId, MAILBOX);
+    const changes = await changesSince(ctx, MAILBOX, args.sinceQueryState);
+    const { ids, allIds } = await queryMailboxIds(ctx, args);
+    // In a tree, where a mailbox sits or whether it shows depends on its
+    // ancestors, so a change to one may move, hide or reveal any other.
+    const isTree = args.sortAsTree === true || args.filterAsTree === true;
+    return {
+      ...queryChanges(
+        ctx,
+        ids,
+        changes,
+        isTree && changes.length > 0 ? allIds : [],
+        args,
+        state,
+      ),
+    };
   },
 
   'Mailbox/set': async (rawArgs, ctx) => {

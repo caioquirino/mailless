@@ -137,8 +137,8 @@ wrapper around `handleRequest`.
 5. ~~Delivery, bounce and complaint reporting~~
 6. App passwords (written, being tried out); multi-factor sign-in
 7. `jmap-client`
-8. ~~Push notifications through push subscriptions~~; push over WebSocket,
-   `/queryChanges`, first npm release
+8. ~~Push notifications through push subscriptions, full-text search,
+   `/queryChanges`~~; push over WebSocket, first npm release
 9. Self-hosted build with docker-compose
 
 ## License
