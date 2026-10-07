@@ -29,7 +29,7 @@ export function readSettings(tfvarsPath) {
       `${tfvarsPath} must set region, for example region = "eu-west-1".`,
     );
   }
-  return { region, name: value('name') ?? 'mailless' };
+  return { region, name: value('name') ?? 'mailless', domain: value('domain') };
 }
 
 export function stateBucketName({ name, accountId, region }) {

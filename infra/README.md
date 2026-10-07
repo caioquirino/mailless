@@ -1,12 +1,13 @@
 # Infrastructure
 
 Terraform for the AWS side of mailless: receiving mail through SES, storing it
-in S3 and DynamoDB, and serving it to mail clients over a JMAP API.
+in S3 and DynamoDB, serving it to mail clients over a JMAP API, and sending
+through SES.
 
-> **Receiving is proven; the API is new.** Inbound delivery has been confirmed
-> with real mail on a real account. The JMAP API, its hostname and the Cognito
-> sign-in pass `terraform validate`, a mocked-provider test suite and a real
-> `plan`, but have not been exercised with a mail client yet.
+> **Receiving and reading are proven; sending is new.** Inbound delivery and
+> the JMAP API with Cognito sign-in have been confirmed on a real account.
+> Sending passes its tests and a real `plan`, but no message has left through
+> SES yet.
 
 ## What it creates
 
@@ -22,14 +23,31 @@ in S3 and DynamoDB, and serving it to mail clients over a JMAP API.
 | Cognito user pool                              | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed.                                     |
 | API Lambda and HTTP API                        | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                            |
 | Certificate and `mail.<domain>` (with Route53) | The API's own hostname, plus an SRV record so clients can find it from an address.                              |
-| Route53 records (optional)                     | MX and three DKIM CNAMEs, when the domain's zone is in Route53.                                                 |
+| MAIL FROM subdomain                            | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                   |
+| Route53 records (optional)                     | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.  |
 
 Everything is pay-per-use except the KMS key, which costs about 1 USD a month.
 Set `use_customer_kms_key = false` to use the free AWS-managed encryption.
 
-SPF and DMARC records are not created yet. They concern sending, which is a
-later milestone, and publishing them for a domain that already sends mail
-elsewhere would break that mail.
+## Sending
+
+Each account may send from the addresses that deliver to it. With a
+`*@<domain>` entry in `mailboxes`, that is any address at the domain.
+
+- **Sandbox.** A new SES account can only send to verified addresses, 200
+  messages a day. Your own domain is verified, so mail to any address at it
+  works straight away, which is enough to test. To send to anyone else, ask
+  AWS for production access (SES console, "Request production access");
+  approval usually takes about a day.
+- **Authentication.** Outgoing mail is DKIM-signed for your domain and uses
+  `bounce.<domain>` as its envelope sender, so both DKIM and SPF align.
+- **DMARC.** A `_dmarc` record with policy `quarantine` is published by
+  default. It tells receivers to distrust mail claiming to be from your domain
+  that fails authentication. If the domain also sends through another service
+  that does not sign with DKIM, set `dmarc_policy = "none"` or `null` first,
+  or that mail may land in spam.
+- **Not handled yet:** bounces and complaints are not processed or shown, and
+  there is no outbound rate limiting beyond SES's own.
 
 ## Before you apply
 

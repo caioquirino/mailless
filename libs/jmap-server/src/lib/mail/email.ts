@@ -14,6 +14,7 @@ import {
   UTCDateSchema,
   type Comparator,
   type EmailAddress,
+  type SetResponse,
 } from '@mailless/jmap-core';
 import { z } from 'zod';
 import {
@@ -37,8 +38,10 @@ import {
 import {
   resolveCreationReference,
   standardSet,
+  type SetArgumentsLike,
   type SetSpec,
 } from '../standard/set.js';
+import { buildDraft } from './draft.js';
 import { destroyEmail, getEmail, mutateThread } from './email-store.js';
 import {
   headerAsText,
@@ -683,19 +686,44 @@ async function updateEmail(
   return null;
 }
 
+async function createEmail(
+  ctx: MethodContext,
+  input: Record<string, unknown>,
+): Promise<{ id: string } & Record<string, unknown>> {
+  const draft = await buildDraft(input, (blobId) => readBlob(ctx, blobId));
+
+  if (draft.receivedAt !== undefined && draft.receivedAt !== null) {
+    if (!UTCDateSchema.safeParse(draft.receivedAt).success) {
+      throw invalid(['receivedAt'], 'receivedAt must be a UTC date');
+    }
+  }
+  const imported = await importMessage(ctx, draft.raw, {
+    // Checked by importMessage; it is the client's value as given.
+    mailboxIds: (draft.mailboxIds ?? {}) as Record<string, true>,
+    keywords: draft.keywords as Record<string, true>,
+    ...(typeof draft.receivedAt === 'string'
+      ? { receivedAt: draft.receivedAt }
+      : {}),
+  });
+  return { ...imported };
+}
+
 const emailSetSpec: SetSpec = {
   type: EMAIL,
-  create: async () => {
-    throw new SetFailure(
-      'forbidden',
-      'Creating emails with Email/set is not supported yet; upload the message and use Email/import',
-    );
-  },
+  create: createEmail,
   update: updateEmail,
   destroy: async (ctx, id) => {
     if (!(await destroyEmail(ctx, id))) throw new SetFailure('notFound');
   },
 };
+
+/** Email/set, callable from other methods that change emails as a side effect. */
+export function runEmailSet(
+  ctx: MethodContext,
+  args: SetArgumentsLike,
+): Promise<SetResponse<Record<string, unknown>>> {
+  return standardSet(ctx, emailSetSpec, args);
+}
 
 // ------------------------------------------------------------- Email/import
 

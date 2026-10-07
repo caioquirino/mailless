@@ -1,5 +1,9 @@
 import type { EmailAddress, EmailHeader } from '@mailless/jmap-core';
-import PostalMime, { type Address } from 'postal-mime';
+import PostalMime, {
+  addressParser,
+  decodeWords,
+  type Address,
+} from 'postal-mime';
 import { toUtcDate } from '../context.js';
 import type { StoredBodyPart } from './model.js';
 
@@ -74,6 +78,25 @@ export function toEmailAddresses(
     }
   }
   return result;
+}
+
+/**
+ * Every address of a header that may list several. The parser's own `from`
+ * and `sender` fields keep only the first, which would hide extra senders.
+ */
+function allAddresses(
+  headers: readonly EmailHeader[],
+  name: string,
+): EmailAddress[] | null {
+  const values = headers.filter((header) => header.name.toLowerCase() === name);
+  const last = values[values.length - 1];
+  if (!last) return null;
+  const unfolded = last.value.replace(/\r?\n(?=[ \t])/g, '');
+  return addressParser(unfolded, { flatten: true }).flatMap((address) =>
+    address.address
+      ? [{ name: decodeWords(address.name) || null, email: address.address }]
+      : [],
+  );
 }
 
 function toBytes(content: ArrayBuffer | Uint8Array | string): Uint8Array {
@@ -186,8 +209,8 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
       messageId: parseMessageIds(email.messageId),
       inReplyTo: parseMessageIds(email.inReplyTo),
       references: parseMessageIds(email.references),
-      sender: toEmailAddresses(email.sender),
-      from: toEmailAddresses(email.from),
+      sender: allAddresses(headers, 'sender'),
+      from: allAddresses(headers, 'from'),
       to: toEmailAddresses(email.to),
       cc: toEmailAddresses(email.cc),
       bcc: toEmailAddresses(email.bcc),

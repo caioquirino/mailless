@@ -22,6 +22,7 @@ mock_provider "aws" {
   override_resource {
     target = aws_sesv2_email_identity.domain
     values = {
+      arn = "arn:aws:ses:eu-west-1:123456789012:identity/example.com"
       dkim_signing_attributes = {
         tokens = ["tokena", "tokenb", "tokenc"]
       }
@@ -95,6 +96,8 @@ variables {
   route53_zone_id      = null
   api_hostname         = null
   use_customer_kms_key = true
+  mail_from_subdomain  = "bounce"
+  dmarc_policy         = "quarantine"
 }
 
 run "defaults" {
@@ -117,11 +120,21 @@ run "defaults" {
 
   assert {
     condition = (
-      length(output.dns_records) == 4 &&
+      length(output.dns_records) == 7 &&
       output.dns_records["dkim0"].name == "tokena._domainkey.example.com" &&
       output.dns_records["dkim2"].value == "tokenc.dkim.amazonses.com"
     )
-    error_message = "There must be one MX and three DKIM records."
+    error_message = "There must be the inbound MX, three DKIM, two MAIL FROM and one DMARC record."
+  }
+
+  assert {
+    condition = (
+      aws_sesv2_email_identity_mail_from_attributes.domain.mail_from_domain == "bounce.example.com" &&
+      output.dns_records["mail_from_mx"] == { name = "bounce.example.com", type = "MX", value = "10 feedback-smtp.eu-west-1.amazonses.com" } &&
+      output.dns_records["mail_from_spf"] == { name = "bounce.example.com", type = "TXT", value = "v=spf1 include:amazonses.com ~all" } &&
+      output.dns_records["dmarc"] == { name = "_dmarc.example.com", type = "TXT", value = "v=DMARC1; p=quarantine" }
+    )
+    error_message = "Sender authentication records must be on the bounce subdomain and _dmarc, never on the domain's own SPF."
   }
 
   assert {
@@ -290,6 +303,19 @@ run "api_and_sign_in" {
     error_message = "The API role must not use wildcard actions or resources."
   }
 
+  assert {
+    condition = one([
+      for statement in data.aws_iam_policy_document.api.statement : statement.resources
+      if statement.sid == "SendMail"
+    ]) == toset(["arn:aws:ses:eu-west-1:123456789012:identity/example.com"])
+    error_message = "The API may send only as the verified domain."
+  }
+
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables["MAILBOXES"] == jsonencode(var.mailboxes)
+    error_message = "The API needs the mailbox map to decide who may send from which address."
+  }
+
   # The API reads and writes mailbox content but has no business in the inbound queue.
   assert {
     condition = alltrue([
@@ -349,6 +375,29 @@ run "api_hostname_can_be_chosen" {
   }
 }
 
+run "without_dmarc" {
+  command = plan
+
+  variables {
+    dmarc_policy = null
+  }
+
+  assert {
+    condition     = !contains(keys(output.dns_records), "dmarc") && length(output.dns_records) == 6
+    error_message = "No DMARC record may be published when the policy is null."
+  }
+}
+
+run "rejects_unknown_dmarc_policy" {
+  command = plan
+
+  variables {
+    dmarc_policy = "strict"
+  }
+
+  expect_failures = [var.dmarc_policy]
+}
+
 run "with_hosted_zone_and_activation" {
   command = plan
 
@@ -358,8 +407,8 @@ run "with_hosted_zone_and_activation" {
   }
 
   assert {
-    condition     = length(aws_route53_record.mail) == 4
-    error_message = "One MX and three DKIM records must be created in the hosted zone."
+    condition     = length(aws_route53_record.mail) == 7
+    error_message = "Every mail DNS record must be created in the hosted zone."
   }
 
   assert {

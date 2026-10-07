@@ -46,6 +46,33 @@ variable "route53_zone_id" {
   default     = null
 }
 
+variable "mail_from_subdomain" {
+  description = "Subdomain used as the envelope sender of outgoing mail, where bounces are returned."
+  type        = string
+  default     = "bounce"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.mail_from_subdomain))
+    error_message = "mail_from_subdomain must be a single lower-case DNS label."
+  }
+}
+
+variable "dmarc_policy" {
+  description = <<-EOT
+    DMARC policy published for the domain: "none", "quarantine" or "reject".
+    Set to null to publish no DMARC record, for example when the domain
+    already has one or also sends mail through another service that does not
+    sign with DKIM.
+  EOT
+  type        = string
+  default     = "quarantine"
+
+  validation {
+    condition     = var.dmarc_policy == null ? true : contains(["none", "quarantine", "reject"], var.dmarc_policy)
+    error_message = "dmarc_policy must be none, quarantine, reject or null."
+  }
+}
+
 variable "api_hostname" {
   description = "Hostname of the JMAP API. Defaults to mail.<domain>. Only used when route53_zone_id is set; otherwise the API is reachable on the address API Gateway generates."
   type        = string

@@ -1,6 +1,7 @@
 import {
   CAPABILITY_CORE,
   CAPABILITY_MAIL,
+  CAPABILITY_SUBMISSION,
   REQUEST_ERROR,
   RequestError,
   type Invocation,
@@ -8,6 +9,7 @@ import {
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createJmapServer, type JmapServer } from '../server.js';
 import type { StorageAdapter } from '../storage.js';
+import { MailRejectedError, type MailEnvelope } from '../transport.js';
 import type { StorageAdapterFactory } from './storage-contract.js';
 
 // Responses are untyped JSON; the tests assert on their shape.
@@ -15,7 +17,7 @@ import type { StorageAdapterFactory } from './storage-contract.js';
 type Json = any;
 
 const AUTH = { accountId: 'acc1', username: 'user@example.com' };
-const USING = [CAPABILITY_CORE, CAPABILITY_MAIL];
+const USING = [CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION];
 const URLS = {
   api: 'https://jmap.example.com/api',
   download:
@@ -98,6 +100,10 @@ export function buildMessage(options: MessageOptions = {}): string {
 interface Harness {
   server: JmapServer;
   adapter: StorageAdapter;
+  /** Everything handed to the transport, in order. */
+  sent: Array<{ message: string; envelope: MailEnvelope }>;
+  /** Makes the transport refuse the next message with this reason. */
+  rejectNext(reason: string): void;
   /** Sends method calls, adding the account id, and returns the raw responses. */
   request(calls: Array<[string, Json]>): Promise<Invocation[]>;
   /** One call that must succeed; returns its response arguments. */
@@ -116,7 +122,26 @@ interface Harness {
 
 async function createHarness(factory: StorageAdapterFactory): Promise<Harness> {
   const adapter = await factory();
-  const server = createJmapServer({ storage: adapter, urls: URLS });
+  const sent: Harness['sent'] = [];
+  let rejection: string | undefined;
+  const server = createJmapServer({
+    storage: adapter,
+    urls: URLS,
+    transport: {
+      async send(message, envelope) {
+        if (rejection !== undefined) {
+          const reason = rejection;
+          rejection = undefined;
+          throw new MailRejectedError(reason);
+        }
+        sent.push({ message: decoder.decode(message), envelope });
+      },
+    },
+    identities: () => [
+      { id: 'me', email: 'me@example.com', name: 'Me Myself' },
+      { id: 'team', email: '*@team.example.com' },
+    ],
+  });
   await server.provisionAccount(AUTH);
 
   const request: Harness['request'] = async (calls) => {
@@ -143,6 +168,10 @@ async function createHarness(factory: StorageAdapterFactory): Promise<Harness> {
   const harness: Harness = {
     server,
     adapter,
+    sent,
+    rejectNext(reason) {
+      rejection = reason;
+    },
     request,
     call,
     async fail(name, args = {}) {
@@ -1000,6 +1029,25 @@ export function describeJmapConformance(
       ).toBe('invalidArguments');
     });
 
+    it('keeps every address of a From header with several', async () => {
+      const created = await h.deliver(inbox, {
+        from: 'Alice <alice@example.com>, =?utf-8?Q?J=C3=B6rg?= <jorg@example.org>',
+      });
+      const { list } = await h.call('Email/get', {
+        ids: [created.id],
+        properties: ['from', 'sender'],
+      });
+      expect(list[0].from).toEqual([
+        { name: 'Alice', email: 'alice@example.com' },
+        { name: 'Jörg', email: 'jorg@example.org' },
+      ]);
+      expect(list[0].sender).toBeNull();
+      expect(
+        (await h.call('Email/query', { filter: { from: 'jorg@example.org' } }))
+          .ids,
+      ).toEqual([created.id]);
+    });
+
     it('rejects bad imports one by one', async () => {
       const blobId = await h.upload(buildMessage());
       const result = await h.call('Email/import', {
@@ -1278,7 +1326,7 @@ export function describeJmapConformance(
           missing: { 'keywords/$seen': true },
         },
       });
-      expect(result.notCreated.n.type).toBe('forbidden');
+      expect(result.notCreated.n.type).toBe('invalidProperties');
       expect(result.notUpdated[email.id]).toMatchObject({
         type: 'invalidProperties',
         properties: ['subject'],
@@ -1937,7 +1985,7 @@ export function describeJmapConformance(
         (
           await server.handleRequest(
             {
-              using: USING,
+              using: [CAPABILITY_CORE, CAPABILITY_MAIL],
               methodCalls: [
                 [name, { accountId: AUTH.accountId, ...args }, 'a'],
               ],
@@ -1960,6 +2008,680 @@ export function describeJmapConformance(
           })
         ).type,
       ).toBe('requestTooLarge');
+    });
+  });
+
+  describe(`${name}: composing and sending`, () => {
+    let h: Harness;
+    let drafts: string;
+    let sentBox: string;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      drafts = await h.mailbox('drafts');
+      sentBox = await h.mailbox('sent');
+    });
+
+    const draft = (overrides: Json = {}) => ({
+      mailboxIds: { [drafts]: true },
+      keywords: { $draft: true },
+      from: [{ name: 'Me Myself', email: 'me@example.com' }],
+      to: [{ name: 'Bob', email: 'bob@example.org' }],
+      subject: 'Hello Bob',
+      bodyValues: { body: { value: 'Hi Bob,\nsee you soon.' } },
+      textBody: [{ partId: 'body', type: 'text/plain' }],
+      ...overrides,
+    });
+    const create = async (overrides: Json = {}) => {
+      const result = await h.call('Email/set', {
+        create: { d: draft(overrides) },
+      });
+      expect(result.notCreated, JSON.stringify(result.notCreated)).toBeNull();
+      return result.created.d;
+    };
+    const refusal = async (overrides: Json) =>
+      (await h.call('Email/set', { create: { d: draft(overrides) } }))
+        .notCreated.d;
+
+    it('creates a draft from text, HTML and an uploaded attachment', async () => {
+      const blobId = await h.upload('attachment bytes');
+      const created = await create({
+        cc: [{ name: 'Çarol Ünicode', email: 'carol@example.org' }],
+        bcc: [{ email: 'hidden@example.org' }],
+        replyTo: [{ email: 'replies@example.com' }],
+        subject: 'Relatório — ✓',
+        sentAt: '2026-10-07T08:00:00Z',
+        inReplyTo: ['parent@example.org'],
+        references: ['root@example.org', 'parent@example.org'],
+        'header:X-Campaign:asText': 'spring ✓',
+        bodyValues: {
+          t: { value: 'Plain é' },
+          h: { value: '<p>Rich <b>é</b></p>' },
+        },
+        textBody: [{ partId: 't', type: 'text/plain' }],
+        htmlBody: [{ partId: 'h', type: 'text/html' }],
+        attachments: [{ blobId, type: 'text/plain', name: 'notes.txt' }],
+      });
+      expect(Object.keys(created).sort()).toEqual([
+        'blobId',
+        'id',
+        'size',
+        'threadId',
+      ]);
+
+      const { list } = await h.call('Email/get', {
+        ids: [created.id],
+        properties: [
+          'mailboxIds',
+          'keywords',
+          'from',
+          'to',
+          'cc',
+          'bcc',
+          'replyTo',
+          'subject',
+          'sentAt',
+          'messageId',
+          'inReplyTo',
+          'references',
+          'hasAttachment',
+          'textBody',
+          'htmlBody',
+          'attachments',
+          'bodyValues',
+          'header:X-Campaign:asText',
+        ],
+        fetchAllBodyValues: true,
+      });
+      const email = list[0];
+      expect(email).toMatchObject({
+        mailboxIds: { [drafts]: true },
+        keywords: { $draft: true },
+        from: [{ name: 'Me Myself', email: 'me@example.com' }],
+        to: [{ name: 'Bob', email: 'bob@example.org' }],
+        cc: [{ name: 'Çarol Ünicode', email: 'carol@example.org' }],
+        bcc: [{ name: null, email: 'hidden@example.org' }],
+        replyTo: [{ name: null, email: 'replies@example.com' }],
+        subject: 'Relatório — ✓',
+        sentAt: '2026-10-07T08:00:00Z',
+        inReplyTo: ['parent@example.org'],
+        references: ['root@example.org', 'parent@example.org'],
+        hasAttachment: true,
+        'header:X-Campaign:asText': 'spring ✓',
+      });
+      expect(email.messageId).toHaveLength(1);
+      expect(email.messageId[0]).toMatch(/@example\.com$/);
+      expect(email.bodyValues[email.textBody[0].partId].value.trim()).toBe(
+        'Plain é',
+      );
+      expect(email.bodyValues[email.htmlBody[0].partId].value.trim()).toBe(
+        '<p>Rich <b>é</b></p>',
+      );
+      expect(email.attachments).toHaveLength(1);
+      expect(email.attachments[0]).toMatchObject({
+        name: 'notes.txt',
+        type: 'text/plain',
+      });
+      const attachment = await h.server.download(
+        AUTH,
+        AUTH.accountId,
+        email.attachments[0].blobId,
+      );
+      expect(decoder.decode(attachment ?? new Uint8Array())).toBe(
+        'attachment bytes',
+      );
+    });
+
+    it('accepts an explicit body structure and an empty body', async () => {
+      const structured = await create({
+        bodyValues: { a: { value: 'one' }, b: { value: '<i>two</i>' } },
+        textBody: undefined,
+        bodyStructure: {
+          type: 'multipart/alternative',
+          subParts: [
+            { partId: 'a', type: 'text/plain' },
+            { partId: 'b', type: 'text/html' },
+          ],
+        },
+      });
+      const empty = await create({
+        bodyValues: undefined,
+        textBody: undefined,
+      });
+      const { list } = await h.call('Email/get', {
+        ids: [structured.id, empty.id],
+        properties: ['bodyValues', 'preview'],
+        fetchAllBodyValues: true,
+      });
+      expect(
+        Object.values(list[0].bodyValues).map((v: Json) => v.value.trim()),
+      ).toEqual(['one', '<i>two</i>']);
+      expect(list[1].preview).toBe('');
+    });
+
+    it('rejects drafts it cannot turn into a message', async () => {
+      expect((await refusal({ mailboxIds: undefined })).properties).toEqual([
+        'mailboxIds',
+      ]);
+      expect(
+        (await refusal({ mailboxIds: { missing: true } })).properties,
+      ).toEqual(['mailboxIds']);
+      expect(
+        (await refusal({ keywords: { 'bad keyword': true } })).properties,
+      ).toEqual(['keywords']);
+      expect((await refusal({ receivedAt: 'yesterday' })).properties).toEqual([
+        'receivedAt',
+      ]);
+      expect((await refusal({ id: 'chosen' })).properties).toEqual(['id']);
+      expect((await refusal({ threadId: 't', size: 5 })).properties).toEqual([
+        'threadId',
+        'size',
+      ]);
+      expect(
+        (await refusal({ to: [{ email: 'not-an-address' }] })).properties,
+      ).toEqual(['to']);
+      expect((await refusal({ to: 'bob@example.org' })).properties).toEqual([
+        'to',
+      ]);
+      expect((await refusal({ subject: 5 })).properties).toEqual(['subject']);
+      expect((await refusal({ sentAt: 'soon' })).properties).toEqual([
+        'sentAt',
+      ]);
+      expect((await refusal({ messageId: ['a@b', 'c@d'] })).properties).toEqual(
+        ['messageId'],
+      );
+      expect(
+        (
+          await refusal({
+            textBody: [{ partId: 'missing', type: 'text/plain' }],
+          })
+        ).properties,
+      ).toEqual(['bodyValues']);
+      expect(
+        (await refusal({ textBody: [{ partId: 'body', type: 'text/html' }] }))
+          .properties,
+      ).toEqual(['textBody']);
+      expect(
+        (await refusal({ textBody: [{ partId: 'body' }, { partId: 'body' }] }))
+          .properties,
+      ).toEqual(['textBody']);
+      expect(
+        (await refusal({ textBody: [{ type: 'text/plain' }] })).properties,
+      ).toEqual(['textBody']);
+      expect(
+        (
+          await refusal({
+            bodyStructure: { partId: 'body', type: 'text/plain' },
+          })
+        ).properties,
+      ).toEqual(['bodyStructure']);
+      expect(
+        (
+          await refusal({
+            bodyValues: { body: { value: 'x', isTruncated: true } },
+          })
+        ).properties,
+      ).toEqual(['bodyValues']);
+      expect(
+        await refusal({ attachments: [{ blobId: 'gone', type: 'image/png' }] }),
+      ).toEqual({
+        type: 'blobNotFound',
+        notFound: ['gone'],
+      });
+    });
+
+    it('cannot be used to inject or override headers', async () => {
+      expect(
+        (await refusal({ subject: 'Hi\r\nBcc: victim@example.org' }))
+          .properties,
+      ).toEqual(['subject']);
+      expect(
+        (
+          await refusal({
+            from: [{ name: 'Me\nX-Evil: 1', email: 'me@example.com' }],
+          })
+        ).properties,
+      ).toEqual(['from']);
+      expect((await refusal({ 'header:X-Note': 'a\r\nX-Evil: 1' })).type).toBe(
+        'invalidProperties',
+      );
+      for (const header of [
+        'header:Bcc',
+        'header:From',
+        'header:Content-Type',
+        'header:Date',
+      ]) {
+        expect((await refusal({ [header]: 'x' })).properties, header).toEqual([
+          header,
+        ]);
+      }
+      expect(
+        (await refusal({ 'header:X-Note:asAddresses': 'x' })).properties,
+      ).toEqual(['header:X-Note:asAddresses']);
+      expect((await counts(drafts)).totalEmails).toBe(0);
+    });
+
+    const counts = async (mailboxId: string) =>
+      (
+        await h.call('Mailbox/get', {
+          ids: [mailboxId],
+          properties: ['totalEmails'],
+        })
+      ).list[0];
+
+    it('lists the identities and refuses to change them', async () => {
+      const { list, state, notFound } = await h.call('Identity/get', {
+        ids: null,
+      });
+      expect(notFound).toEqual([]);
+      expect(list).toEqual([
+        {
+          id: 'me',
+          name: 'Me Myself',
+          email: 'me@example.com',
+          replyTo: null,
+          bcc: null,
+          textSignature: '',
+          htmlSignature: '',
+          mayDelete: false,
+        },
+        expect.objectContaining({
+          id: 'team',
+          email: '*@team.example.com',
+          name: '',
+        }),
+      ]);
+      expect(
+        await h.call('Identity/get', {
+          ids: ['team', 'nope'],
+          properties: ['email'],
+        }),
+      ).toMatchObject({
+        list: [{ id: 'team', email: '*@team.example.com' }],
+        notFound: ['nope'],
+      });
+
+      expect(
+        await h.call('Identity/changes', { sinceState: state }),
+      ).toMatchObject({
+        created: [],
+        updated: [],
+        destroyed: [],
+        newState: state,
+      });
+      expect(
+        (await h.fail('Identity/changes', { sinceState: 'old' })).type,
+      ).toBe('cannotCalculateChanges');
+
+      const changed = await h.call('Identity/set', {
+        create: { n: { email: 'other@example.com' } },
+        update: { me: { name: 'Changed' } },
+        destroy: ['team'],
+      });
+      expect(changed.notCreated.n.type).toBe('forbidden');
+      expect(changed.notUpdated.me.type).toBe('forbidden');
+      expect(changed.notDestroyed.team.type).toBe('forbidden');
+      expect((await h.call('Identity/get', { ids: ['me'] })).list[0].name).toBe(
+        'Me Myself',
+      );
+    });
+
+    it('creates, sends and files a message in one request', async () => {
+      const responses = await h.request([
+        [
+          'Email/set',
+          {
+            create: {
+              d: draft({
+                cc: [{ email: 'carol@example.org' }],
+                bcc: [
+                  { email: 'hidden@example.org' },
+                  { email: 'bob@example.org' },
+                ],
+              }),
+            },
+          },
+        ],
+        [
+          'EmailSubmission/set',
+          {
+            create: { s: { identityId: 'me', emailId: '#d' } },
+            onSuccessUpdateEmail: {
+              '#s': {
+                [`mailboxIds/${drafts}`]: null,
+                [`mailboxIds/${sentBox}`]: true,
+                'keywords/$draft': null,
+                'keywords/$seen': true,
+              },
+            },
+          },
+        ],
+      ]);
+      expect(responses.map((response) => [response[0], response[2]])).toEqual([
+        ['Email/set', 'c0'],
+        ['EmailSubmission/set', 'c1'],
+        ['Email/set', 'c1'],
+      ]);
+      const emailId = (responses[0]?.[1] as Json).created.d.id;
+      const submission = (responses[1]?.[1] as Json).created.s;
+      expect(submission).toMatchObject({
+        undoStatus: 'final',
+        deliveryStatus: null,
+        envelope: {
+          mailFrom: { email: 'me@example.com', parameters: null },
+          rcptTo: [
+            { email: 'bob@example.org', parameters: null },
+            { email: 'carol@example.org', parameters: null },
+            { email: 'hidden@example.org', parameters: null },
+          ],
+        },
+      });
+      expect((responses[2]?.[1] as Json).updated).toEqual({ [emailId]: null });
+
+      expect(h.sent).toHaveLength(1);
+      expect(h.sent[0]?.envelope).toEqual({
+        mailFrom: 'me@example.com',
+        rcptTo: ['bob@example.org', 'carol@example.org', 'hidden@example.org'],
+      });
+      const wire = h.sent[0]?.message ?? '';
+      expect(wire).toContain('Subject: Hello Bob');
+      expect(wire).toContain('To: Bob <bob@example.org>');
+      expect(wire).toContain('Cc: carol@example.org');
+      expect(wire.toLowerCase()).not.toContain('bcc');
+      expect(wire).not.toContain('hidden@example.org');
+      expect(wire).toContain('see you soon.');
+
+      const { list } = await h.call('Email/get', {
+        ids: [emailId],
+        properties: ['mailboxIds', 'keywords', 'bcc'],
+      });
+      expect(list[0]).toEqual({
+        id: emailId,
+        mailboxIds: { [sentBox]: true },
+        keywords: { $seen: true },
+        // The stored copy keeps its Bcc so the sender can see who got it.
+        bcc: [
+          { name: null, email: 'hidden@example.org' },
+          { name: null, email: 'bob@example.org' },
+        ],
+      });
+
+      const stored = await h.call('EmailSubmission/get', {
+        ids: [submission.id],
+      });
+      expect(stored.list[0]).toMatchObject({
+        id: submission.id,
+        identityId: 'me',
+        emailId,
+        threadId: (responses[0]?.[1] as Json).created.d.threadId,
+        sendAt: submission.sendAt,
+      });
+    });
+
+    it('can delete the draft after sending', async () => {
+      const created = await create();
+      const responses = await h.request([
+        [
+          'EmailSubmission/set',
+          {
+            create: { s: { identityId: 'me', emailId: created.id } },
+            onSuccessDestroyEmail: ['#s'],
+          },
+        ],
+      ]);
+      expect((responses[1]?.[1] as Json).destroyed).toEqual([created.id]);
+      expect(h.sent).toHaveLength(1);
+      expect(
+        (await h.call('Email/get', { ids: [created.id] })).notFound,
+      ).toEqual([created.id]);
+    });
+
+    it('only sends from addresses the identity covers', async () => {
+      const submit = async (
+        identityId: string,
+        overrides: Json,
+        submission: Json = {},
+      ) => {
+        const email = await create(overrides);
+        const result = await h.call('EmailSubmission/set', {
+          create: { s: { identityId, emailId: email.id, ...submission } },
+        });
+        return result.notCreated?.s ?? result.created.s;
+      };
+
+      expect(
+        (await submit('me', { from: [{ email: 'boss@example.com' }] })).type,
+      ).toBe('forbiddenFrom');
+      expect(
+        (await submit('me', { from: [{ email: 'me@example.com.evil.org' }] }))
+          .type,
+      ).toBe('forbiddenFrom');
+      expect(
+        (
+          await submit('me', {
+            from: [{ email: 'me@example.com' }, { email: 'other@example.com' }],
+          })
+        ).type,
+      ).toBe('forbiddenFrom');
+      expect(
+        (
+          await submit('team', {
+            from: [{ email: 'x@team.example.com.evil.org' }],
+          })
+        ).type,
+      ).toBe('forbiddenFrom');
+      expect(
+        (await submit('team', { from: [{ email: 'x@sub.team.example.com' }] }))
+          .type,
+      ).toBe('forbiddenFrom');
+      expect((await submit('me', { from: undefined })).type).toBe(
+        'invalidEmail',
+      );
+      expect(h.sent).toHaveLength(0);
+
+      expect(
+        (await submit('me', { from: [{ email: 'ME@Example.com' }] }))
+          .undoStatus,
+      ).toBe('final');
+      expect(
+        (await submit('team', { from: [{ email: 'Anyone@Team.Example.com' }] }))
+          .undoStatus,
+      ).toBe('final');
+      expect(h.sent.map((entry) => entry.envelope.mailFrom)).toEqual([
+        'ME@Example.com',
+        'Anyone@Team.Example.com',
+      ]);
+
+      expect(
+        (
+          await submit(
+            'me',
+            {},
+            {
+              envelope: {
+                mailFrom: { email: 'boss@example.com' },
+                rcptTo: [{ email: 'bob@example.org' }],
+              },
+            },
+          )
+        ).type,
+      ).toBe('forbiddenMailFrom');
+      const explicit = await submit(
+        'me',
+        {},
+        {
+          envelope: {
+            mailFrom: { email: 'me@example.com' },
+            rcptTo: [
+              { email: 'only@example.org' },
+              { email: 'only@example.org' },
+            ],
+          },
+        },
+      );
+      expect(explicit).not.toHaveProperty('envelope');
+      expect(h.sent.at(-1)?.envelope.rcptTo).toEqual(['only@example.org']);
+    });
+
+    it('rejects submissions that cannot be delivered', async () => {
+      const email = await create();
+      const noRecipients = await create({ to: undefined });
+      const tooMany = await create({
+        to: Array.from({ length: 51 }, (_, index) => ({
+          email: `user${index}@example.org`,
+        })),
+      });
+      const result = await h.call('EmailSubmission/set', {
+        create: {
+          identity: { identityId: 'nope', emailId: email.id },
+          email: { identityId: 'me', emailId: 'missing' },
+          reference: { identityId: 'me', emailId: '#never-created' },
+          extra: {
+            identityId: 'me',
+            emailId: email.id,
+            sendAt: '2030-01-01T00:00:00Z',
+          },
+          none: { identityId: 'me', emailId: noRecipients.id },
+          many: { identityId: 'me', emailId: tooMany.id },
+          bad: {
+            identityId: 'me',
+            emailId: email.id,
+            envelope: {
+              mailFrom: { email: 'me@example.com' },
+              rcptTo: [{ email: 'nope' }],
+            },
+          },
+          malformed: {
+            identityId: 'me',
+            emailId: email.id,
+            envelope: { rcptTo: [] },
+          },
+        },
+      });
+      expect(result.created).toBeNull();
+      expect(result.notCreated.identity.properties).toEqual(['identityId']);
+      expect(result.notCreated.email.properties).toEqual(['emailId']);
+      expect(result.notCreated.reference.properties).toEqual(['emailId']);
+      expect(result.notCreated.extra.properties).toEqual(['sendAt']);
+      expect(result.notCreated.none.type).toBe('noRecipients');
+      expect(result.notCreated.many).toEqual({
+        type: 'tooManyRecipients',
+        maxRecipients: 50,
+      });
+      expect(result.notCreated.bad).toEqual({
+        type: 'invalidRecipients',
+        invalidRecipients: ['nope'],
+      });
+      expect(result.notCreated.malformed.properties).toEqual(['envelope']);
+      expect(h.sent).toHaveLength(0);
+    });
+
+    it('reports a refusal by the transport and leaves the draft alone', async () => {
+      const created = await create();
+      h.rejectNext('Email address is not verified');
+      const responses = await h.request([
+        [
+          'EmailSubmission/set',
+          {
+            create: { s: { identityId: 'me', emailId: created.id } },
+            onSuccessDestroyEmail: ['#s'],
+          },
+        ],
+      ]);
+      expect(responses).toHaveLength(1);
+      expect((responses[0]?.[1] as Json).notCreated.s).toEqual({
+        type: 'forbiddenToSend',
+        description: 'Email address is not verified',
+      });
+      expect(
+        (await h.call('Email/get', { ids: [created.id] })).notFound,
+      ).toEqual([]);
+      expect((await h.call('EmailSubmission/query', {})).ids).toEqual([]);
+    });
+
+    it('keeps a record of submissions that can be queried and removed', async () => {
+      const state = (await h.call('EmailSubmission/get', { ids: [] })).state;
+      const first = await create({ subject: 'One' });
+      const second = await create({ subject: 'Two' });
+      const submit = async (emailId: string) =>
+        (
+          await h.call('EmailSubmission/set', {
+            create: { s: { identityId: 'me', emailId } },
+          })
+        ).created.s.id;
+      const a = await submit(first.id);
+      const b = await submit(second.id);
+
+      expect(
+        (await h.call('EmailSubmission/changes', { sinceState: state }))
+          .created,
+      ).toEqual([a, b]);
+      expect(
+        (
+          await h.call('EmailSubmission/query', {
+            filter: { emailIds: [second.id] },
+          })
+        ).ids,
+      ).toEqual([b]);
+      expect(
+        (
+          await h.call('EmailSubmission/query', {
+            filter: { identityIds: ['me'], undoStatus: 'final' },
+            calculateTotal: true,
+          })
+        ).total,
+      ).toBe(2);
+      expect(
+        (
+          await h.call('EmailSubmission/query', {
+            filter: { undoStatus: 'pending' },
+          })
+        ).ids,
+      ).toEqual([]);
+      expect(
+        (await h.fail('EmailSubmission/query', { filter: { nope: 1 } })).type,
+      ).toBe('invalidArguments');
+      expect(
+        (
+          await h.fail('EmailSubmission/query', {
+            sort: [{ property: 'nope' }],
+          })
+        ).type,
+      ).toBe('unsupportedSort');
+
+      const changed = await h.call('EmailSubmission/set', {
+        update: {
+          [a]: { undoStatus: 'canceled' },
+          absent: { undoStatus: 'canceled' },
+        },
+        destroy: [b, 'missing'],
+      });
+      expect(changed.notUpdated[a].type).toBe('cannotUnsend');
+      expect(changed.notUpdated.absent.type).toBe('notFound');
+      expect(changed.destroyed).toEqual([b]);
+      expect(changed.notDestroyed.missing.type).toBe('notFound');
+      expect(
+        (await h.call('EmailSubmission/get', { ids: [a, b] })).notFound,
+      ).toEqual([b]);
+    });
+
+    it('offers no sending methods when no transport is configured', async () => {
+      const server = createJmapServer({ storage: h.adapter, urls: URLS });
+      expect(Object.keys(server.getSession(AUTH).capabilities)).not.toContain(
+        CAPABILITY_SUBMISSION,
+      );
+      await expect(
+        server.handleRequest({ using: USING, methodCalls: [] }, AUTH),
+      ).rejects.toMatchObject({ type: REQUEST_ERROR.unknownCapability });
+      const response = await server.handleRequest(
+        {
+          using: [CAPABILITY_CORE, CAPABILITY_MAIL],
+          methodCalls: [['Identity/get', { accountId: AUTH.accountId }, 'a']],
+        },
+        AUTH,
+      );
+      expect(response.methodResponses[0]?.[1]).toEqual({
+        type: 'unknownMethod',
+      });
     });
   });
 }

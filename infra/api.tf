@@ -57,6 +57,13 @@ data "aws_iam_policy_document" "api" {
     resources = [aws_dynamodb_table.metadata.arn]
   }
 
+  # Sending is allowed only as the domain this stack verified.
+  statement {
+    sid       = "SendMail"
+    actions   = ["ses:SendEmail", "ses:SendRawEmail"]
+    resources = [aws_sesv2_email_identity.domain.arn]
+  }
+
   dynamic "statement" {
     for_each = var.use_customer_kms_key ? [1] : []
 
@@ -97,6 +104,8 @@ resource "aws_lambda_function" "api" {
         DOWNLOAD_PREFIX     = local.download_prefix
         USER_POOL_ID        = aws_cognito_user_pool.main.id
         USER_POOL_CLIENT_ID = aws_cognito_user_pool_client.jmap.id
+        # Decides which addresses each account may send from.
+        MAILBOXES = jsonencode(var.mailboxes)
       },
       # Without a hostname of our own the function uses the host each request arrived on.
       local.api_custom_domain ? { PUBLIC_URL = "https://${local.api_hostname}" } : {},

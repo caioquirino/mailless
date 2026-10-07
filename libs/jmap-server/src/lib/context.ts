@@ -1,4 +1,8 @@
-import { MethodError, type CoreCapability } from '@mailless/jmap-core';
+import {
+  MethodError,
+  type CoreCapability,
+  type Identity,
+} from '@mailless/jmap-core';
 import type { z } from 'zod';
 import {
   ConflictError,
@@ -7,6 +11,7 @@ import {
   type MetadataStore,
   type WriteOp,
 } from './storage.js';
+import type { MailTransport } from './transport.js';
 
 /** Who is making the request. Authentication happens in the host, before the server is called. */
 export interface AuthContext {
@@ -23,6 +28,15 @@ export interface MethodContext {
   createdIds: Map<string, string>;
   /** Set by `/set` when `ifInState` was given; attached to the next commit, then cleared. */
   pendingExpectedState?: { type: string; state: string };
+  /**
+   * Further responses a method produced besides its own, such as the implicit
+   * Email/set after a submission. They follow the method's response under the same call id.
+   */
+  extraResponses: Array<[name: string, args: Record<string, unknown>]>;
+  /** Present when the server can send mail. */
+  transport?: MailTransport;
+  /** The addresses the caller may send from. */
+  identities(): Promise<Identity[]>;
 }
 
 export type MethodHandler = (
@@ -111,4 +125,14 @@ export function generateId(prefix: string): string {
 
 export function toUtcDate(date: Date): string {
   return date.toISOString().replace(/\.?0+Z$/, 'Z');
+}
+
+/** A short, stable fingerprint of some text, for state strings. Not for security. */
+export function fingerprint(text: string): string {
+  let value = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) {
+    value ^= text.charCodeAt(index);
+    value = Math.imul(value, 0x01000193);
+  }
+  return (value >>> 0).toString(16);
 }

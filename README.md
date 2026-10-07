@@ -4,11 +4,11 @@ A mailbox without a mail server to run: serverless email on AWS, reached over
 [JMAP](https://jmap.io) instead of IMAP, built from reusable TypeScript
 libraries.
 
-> **Status: early.** Receiving works on real AWS: mail sent to the domain is
-> accepted by SES, stored in S3 and DynamoDB, and tested locally end to end.
-> A JMAP API with Cognito sign-in is written and deployable but has not been
-> used with a mail client yet. There is no sending and no client library.
-> Nothing has been published to npm.
+> **Status: early.** Receiving and reading work on real AWS: mail sent to the
+> domain is accepted by SES, stored in S3 and DynamoDB, and served over a JMAP
+> API with Cognito sign-in. Composing and sending through SES are written and
+> tested locally but not yet tried on AWS. There is no client library, and
+> nothing has been published to npm.
 
 ## Why JMAP
 
@@ -26,6 +26,7 @@ be served by functions that only run while a request is in flight.
 | [`@mailless/storage-dynamodb`](libs/storage-dynamodb) | Metadata store on DynamoDB (or DynamoDB Local).                                                                                       | Working |
 | [`@mailless/storage-s3`](libs/storage-s3)             | Blob store on S3 or an S3-compatible server.                                                                                          | Working |
 | [`@mailless/storage-fs`](libs/storage-fs)             | Blob store on a local directory.                                                                                                      | Working |
+| [`@mailless/transport-ses`](libs/transport-ses)       | Sends outgoing mail through Amazon SES.                                                                                               | Working |
 | `@mailless/jmap-client`                               | Typed JMAP client.                                                                                                                    | Planned |
 
 Also in this repository:
@@ -123,11 +124,12 @@ wrapper around `handleRequest`.
 
 1. ~~Workspace, `jmap-core`, `jmap-server` on in-memory storage~~
 2. ~~DynamoDB, S3 and filesystem adapters; SES ingest function; Terraform~~
-3. JMAP API behind API Gateway with Cognito sign-in (written, being tried out)
-4. Sending through SES; drafts; app passwords and multi-factor sign-in
-5. `jmap-client`
-6. Push over WebSocket, `/queryChanges`, first npm release
-7. Self-hosted build with docker-compose
+3. ~~JMAP API behind API Gateway with Cognito sign-in~~
+4. Composing and sending through SES (written, being tried out)
+5. App passwords and multi-factor sign-in; bounce and complaint handling
+6. `jmap-client`
+7. Push over WebSocket, `/queryChanges`, first npm release
+8. Self-hosted build with docker-compose
 
 ## License
 

@@ -30,6 +30,13 @@ export default [
               onlyDependOnLibsWithTags: ['scope:jmap-core'],
             },
             {
+              sourceTag: 'scope:transport',
+              onlyDependOnLibsWithTags: [
+                'scope:jmap-core',
+                'scope:jmap-server',
+              ],
+            },
+            {
               sourceTag: 'scope:storage',
               onlyDependOnLibsWithTags: [
                 'scope:jmap-core',

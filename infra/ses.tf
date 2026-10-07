@@ -6,8 +6,18 @@ resource "aws_sesv2_email_identity" "domain" {
   }
 }
 
+# Outgoing mail uses a subdomain of ours as its envelope sender, so that SPF
+# passes for our own domain and not only for amazonses.com. The records live on
+# the subdomain and leave any SPF record on the domain itself alone.
+resource "aws_sesv2_email_identity_mail_from_attributes" "domain" {
+  email_identity         = aws_sesv2_email_identity.domain.email_identity
+  mail_from_domain       = local.mail_from_domain
+  behavior_on_mx_failure = "USE_DEFAULT_VALUE"
+}
+
 locals {
-  dkim_tokens = aws_sesv2_email_identity.domain.dkim_signing_attributes[0].tokens
+  dkim_tokens      = aws_sesv2_email_identity.domain.dkim_signing_attributes[0].tokens
+  mail_from_domain = "${var.mail_from_subdomain}.${var.domain}"
 
   dns_records = merge(
     {
@@ -15,6 +25,25 @@ locals {
         name  = var.domain
         type  = "MX"
         value = "10 inbound-smtp.${var.region}.amazonaws.com"
+      }
+      mail_from_mx = {
+        name  = local.mail_from_domain
+        type  = "MX"
+        value = "10 feedback-smtp.${var.region}.amazonses.com"
+      }
+      mail_from_spf = {
+        name  = local.mail_from_domain
+        type  = "TXT"
+        value = "v=spf1 include:amazonses.com ~all"
+      }
+    },
+    # Tells receivers what to do with mail that claims to be from the domain but fails
+    # authentication. Everything this stack sends is DKIM-signed, so it passes.
+    var.dmarc_policy == null ? {} : {
+      dmarc = {
+        name  = "_dmarc.${var.domain}"
+        type  = "TXT"
+        value = "v=DMARC1; p=${var.dmarc_policy}"
       }
     },
     {

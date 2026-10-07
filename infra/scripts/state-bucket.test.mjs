@@ -134,10 +134,15 @@ test('reads region and name from a tfvars file', () => {
   assert.deepEqual(readSettings(file), {
     region: 'eu-west-1',
     name: 'mailless',
+    domain: 'example.com',
   });
 
   writeFileSync(file, 'name = "inbox"\nregion = "us-east-1"\n');
-  assert.deepEqual(readSettings(file), { region: 'us-east-1', name: 'inbox' });
+  assert.deepEqual(readSettings(file), {
+    region: 'us-east-1',
+    name: 'inbox',
+    domain: undefined,
+  });
 });
 
 test('explains a missing or incomplete tfvars file', () => {

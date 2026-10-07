@@ -1,6 +1,7 @@
 import {
   CAPABILITY_CORE,
   CAPABILITY_MAIL,
+  CAPABILITY_SUBMISSION,
   IdSchema,
   MethodError,
   REQUEST_ERROR,
@@ -8,6 +9,7 @@ import {
   RequestSchema,
   resolveResultReferences,
   type CoreCapability,
+  type Identity,
   type Invocation,
   type JmapResponse,
   type MailAccountCapability,
@@ -33,8 +35,10 @@ import {
   MAX_MAILBOX_DEPTH,
   provisionMailboxes,
 } from './mail/mailbox.js';
+import { submissionMethods } from './mail/submission.js';
 import { threadMethods } from './mail/thread.js';
 import type { StorageAdapter } from './storage.js';
+import type { MailTransport } from './transport.js';
 
 export const DEFAULT_LIMITS: CoreCapability = {
   maxSizeUpload: 50_000_000,
@@ -62,6 +66,24 @@ export interface JmapServerOptions {
   limits?: Partial<CoreCapability>;
   /** Called with errors that were reported to the client only as `serverFail`. */
   onError?: (error: unknown, method: string) => void;
+  /**
+   * How outgoing mail leaves. When set, the server offers the submission
+   * capability (Identity and EmailSubmission methods).
+   */
+  transport?: MailTransport;
+  /**
+   * The addresses an account may send from. An email of `*@example.com`
+   * allows any address at that domain.
+   */
+  identities?: (
+    auth: AuthContext,
+  ) => IdentityInput[] | Promise<IdentityInput[]>;
+}
+
+export interface IdentityInput {
+  id: string;
+  email: string;
+  name?: string;
 }
 
 export interface JmapServer {
@@ -104,9 +126,12 @@ function hash(text: string): string {
 
 export function createJmapServer(options: JmapServerOptions): JmapServer {
   const limits: CoreCapability = { ...DEFAULT_LIMITS, ...options.limits };
+  const submissionCapability = { maxDelayedSend: 0, submissionExtensions: {} };
+  const canSend = options.transport !== undefined;
   const capabilities: Record<string, unknown> = {
     [CAPABILITY_CORE]: limits,
     [CAPABILITY_MAIL]: {},
+    ...(canSend ? { [CAPABILITY_SUBMISSION]: submissionCapability } : {}),
   };
   const mailAccountCapability: MailAccountCapability = {
     maxMailboxesPerEmail: null,
@@ -130,6 +155,11 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       methods.set(name, { capability: CAPABILITY_MAIL, handler });
     }
   }
+  if (canSend) {
+    for (const [name, handler] of Object.entries(submissionMethods)) {
+      methods.set(name, { capability: CAPABILITY_SUBMISSION, handler });
+    }
+  }
 
   const makeContext = (auth: AuthContext): MethodContext => ({
     auth,
@@ -137,6 +167,19 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     blobs: options.storage.blobs,
     limits,
     createdIds: new Map(),
+    extraResponses: [],
+    ...(options.transport ? { transport: options.transport } : {}),
+    identities: async (): Promise<Identity[]> =>
+      ((await options.identities?.(auth)) ?? []).map((identity) => ({
+        id: identity.id,
+        name: identity.name ?? '',
+        email: identity.email,
+        replyTo: null,
+        bcc: null,
+        textSignature: '',
+        htmlSignature: '',
+        mayDelete: false,
+      })),
   });
 
   return {
@@ -153,12 +196,16 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
             accountCapabilities: {
               [CAPABILITY_CORE]: {},
               [CAPABILITY_MAIL]: mailAccountCapability,
+              ...(canSend
+                ? { [CAPABILITY_SUBMISSION]: submissionCapability }
+                : {}),
             },
           },
         },
         primaryAccounts: {
           [CAPABILITY_CORE]: auth.accountId,
           [CAPABILITY_MAIL]: auth.accountId,
+          ...(canSend ? { [CAPABILITY_SUBMISSION]: auth.accountId } : {}),
         },
         username: auth.username,
         apiUrl: options.urls.api,
@@ -209,11 +256,15 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
             throw new MethodError('unknownMethod');
           }
           const args = resolveResultReferences(rawArgs, methodResponses);
+          ctx.extraResponses = [];
           methodResponses.push([
             name,
             await definition.handler(args, ctx),
             callId,
           ]);
+          for (const [extraName, extraArgs] of ctx.extraResponses) {
+            methodResponses.push([extraName, extraArgs, callId]);
+          }
         } catch (error) {
           if (error instanceof MethodError) {
             methodResponses.push(['error', error.toJSON(), callId]);

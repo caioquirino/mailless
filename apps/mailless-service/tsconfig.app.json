@@ -28,6 +28,9 @@
   ],
   "references": [
     {
+      "path": "../../libs/transport-ses/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/storage-s3/tsconfig.lib.json"
     },
     {

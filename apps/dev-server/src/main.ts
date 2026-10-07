@@ -5,7 +5,7 @@
  */
 import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage } from 'node:http';
-import { createJmapServer } from '@mailless/jmap-server';
+import { createJmapServer, type JmapServer } from '@mailless/jmap-server';
 import { createFetchHandler, jmapUrls } from '@mailless/jmap-server/http';
 import { InMemoryStorageAdapter } from '@mailless/jmap-server/memory';
 
@@ -15,23 +15,43 @@ const token = process.env['MAILLESS_DEV_TOKEN'] ?? 'dev-token';
 const baseUrl = process.env['BASE_URL'] ?? `http://${host}:${port}`;
 const auth = { accountId: 'dev', username: 'dev@mailless.test' };
 
-const jmap = createJmapServer({
+const jmap: JmapServer = createJmapServer({
   storage: new InMemoryStorageAdapter(),
   urls: jmapUrls(baseUrl),
   onError: (error, method) => console.error(`${method} failed:`, error),
+  // There is nowhere to send mail to from here, so everything sent comes back to the inbox.
+  transport: {
+    send: async (message) => {
+      await jmap.importMessage(auth, message, { mailboxRole: 'inbox' });
+    },
+  },
+  identities: () => [{ id: 'dev', email: '*@mailless.test' }],
 });
 
-const expectedAuthorization = Buffer.from(`Bearer ${token}`);
+// The token is accepted as a bearer token, or as the password of any username over Basic.
+function matchesToken(candidate: string): boolean {
+  const given = Buffer.from(candidate);
+  const expected = Buffer.from(token);
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
 const handle = createFetchHandler({
   server: jmap,
   authenticate: async (request) => {
-    const given = Buffer.from(request.headers.get('authorization') ?? '');
-    return given.length === expectedAuthorization.length &&
-      timingSafeEqual(given, expectedAuthorization)
-      ? auth
-      : null;
+    const [scheme, value = ''] = (
+      request.headers.get('authorization') ?? ''
+    ).split(' ');
+    if (scheme?.toLowerCase() === 'bearer')
+      return matchesToken(value) ? auth : null;
+    if (scheme?.toLowerCase() === 'basic') {
+      const decoded = Buffer.from(value, 'base64').toString('utf8');
+      return matchesToken(decoded.slice(decoded.indexOf(':') + 1))
+        ? auth
+        : null;
+    }
+    return null;
   },
-  challenge: 'Bearer realm="mailless-dev"',
+  challenge: 'Basic realm="mailless-dev", Bearer',
   onError: (error) => console.error(error),
 });
 
@@ -81,5 +101,7 @@ createServer((incoming, outgoing) => {
     });
 }).listen(port, host, () => {
   console.log(`mailless dev server: ${baseUrl}/.well-known/jmap`);
-  console.log(`Authorization: Bearer ${token}`);
+  console.log(
+    `Sign in with the token ${token}, as a bearer token or as the password of any user.`,
+  );
 });

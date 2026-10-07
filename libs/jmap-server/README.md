@@ -74,27 +74,53 @@ an edge runtime.
 
 ## Supported methods
 
-| Method                                          | Notes                                                                                                    |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `Core/echo`                                     |                                                                                                          |
-| `Mailbox/get`, `/changes`, `/query`, `/set`     | Including `updatedProperties`, `sortAsTree`, `filterAsTree`, `onDestroyRemoveEmails`.                    |
-| `Email/get`                                     | Metadata, headers in every `header:Name:asForm` variant, body structure, body values.                    |
-| `Email/query`                                   | All RFC 8621 filter conditions except `text` and `body`; sorting; `collapseThreads`; paging and anchors. |
-| `Email/set`                                     | Update `keywords` and `mailboxIds`; destroy.                                                             |
-| `Email/import`                                  |                                                                                                          |
-| `Email/changes`, `Thread/get`, `Thread/changes` |                                                                                                          |
-| `Mailbox/queryChanges`, `Email/queryChanges`    | Always answer `cannotCalculateChanges`, which the spec allows.                                           |
+| Method                                              | Notes                                                                                                                                                |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Core/echo`                                         |                                                                                                                                                      |
+| `Mailbox/get`, `/changes`, `/query`, `/set`         | Including `updatedProperties`, `sortAsTree`, `filterAsTree`, `onDestroyRemoveEmails`.                                                                |
+| `Email/get`                                         | Metadata, headers in every `header:Name:asForm` variant, body structure, body values.                                                                |
+| `Email/query`                                       | All RFC 8621 filter conditions except `text` and `body`; sorting; `collapseThreads`; paging and anchors.                                             |
+| `Email/set`                                         | Create (drafts and messages to send) from `textBody` / `htmlBody` / `attachments` or a `bodyStructure`; update `keywords` and `mailboxIds`; destroy. |
+| `Email/import`                                      |                                                                                                                                                      |
+| `Email/changes`, `Thread/get`, `Thread/changes`     |                                                                                                                                                      |
+| `Identity/get`, `/changes`                          | Identities come from the `identities` option; `Identity/set` refuses changes.                                                                        |
+| `EmailSubmission/set`, `/get`, `/changes`, `/query` | Sends immediately through the `transport` option, with `onSuccessUpdateEmail` and `onSuccessDestroyEmail`.                                           |
+| `Mailbox/queryChanges`, `Email/queryChanges`        | Always answer `cannotCalculateChanges`, which the spec allows.                                                                                       |
 
 Also implemented: result references, creation-id references across calls,
 `ifInState`, `maxChanges` paging, request and object limits, and mailbox
 counts (`totalEmails`, `unreadEmails`, `totalThreads`, `unreadThreads`) that
 are kept correct under concurrent writes.
 
+### Sending
+
+The submission capability is offered only when the server is given a
+`transport` (see `@mailless/transport-ses`) and, usually, `identities`:
+
+```ts
+const jmap = createJmapServer({
+  storage,
+  urls,
+  transport, // { send(message, envelope) }
+  identities: (auth) => [
+    { id: 'main', email: 'me@example.com', name: 'Me' },
+    { id: 'any', email: '*@example.com' }, // any address at the domain
+  ],
+});
+```
+
+A message can only be submitted if every address in its `From` header, and
+the envelope sender, is covered by the chosen identity. The `Bcc` header is
+removed from what is sent and kept on the stored copy. Header values supplied
+by clients are rejected if they contain line breaks, so a draft cannot be used
+to add or override headers.
+
 ### Not implemented yet
 
-- Creating emails with `Email/set` (drafts), `Email/copy`, `Email/parse`,
-  `SearchSnippet/get`.
-- `Identity`, `EmailSubmission` (sending) and `VacationResponse`.
+- Delayed sending and cancelling: messages are handed over at once, so
+  `undoStatus` is always `final` and delivery status is not tracked.
+- `Email/copy`, `Email/parse`, `SearchSnippet/get`, `VacationResponse`.
+- Per-part headers, and non-text content from `bodyValues`, when creating.
 - Push (EventSource or WebSocket).
 - Full-text search: `text` and `body` filters answer `unsupportedFilter`.
 

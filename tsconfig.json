@@ -23,6 +23,9 @@
     },
     {
       "path": "./apps/mailless-service"
+    },
+    {
+      "path": "./libs/transport-ses"
     }
   ],
   "compilerOptions": {}

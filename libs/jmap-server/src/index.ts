@@ -1,6 +1,7 @@
 export {
   createJmapServer,
   DEFAULT_LIMITS,
+  type IdentityInput,
   type JmapServer,
   type JmapServerOptions,
   type JmapServerUrls,
@@ -26,4 +27,8 @@ export {
   type WriteOp,
 } from './lib/storage.js';
 export { type ImportedEmail, type ImportOptions } from './lib/mail/email.js';
-export { type MailEnvelope, type MailTransport } from './lib/transport.js';
+export {
+  MailRejectedError,
+  type MailEnvelope,
+  type MailTransport,
+} from './lib/transport.js';
