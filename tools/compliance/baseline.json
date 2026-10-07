@@ -1,0 +1,419 @@
+{
+  "t/AddressBook/changes/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/AddressBook/foreign-account.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/AddressBook/get/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/AddressBook/set/create.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/AddressBook/set/destroy.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/AddressBook/set/on-destroy-remove-contacts.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/AddressBook/set/on-success-set-is-default.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/AddressBook/set/update.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/Blob/copy/basic.t": {
+    "status": "skip",
+    "reason": "test requires implementation of pool_account_pair"
+  },
+  "t/Blob/foreign-account.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:blob"
+  },
+  "t/Calendar/changes/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/Calendar/foreign-account.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/Calendar/get/an-entity.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/Calendar/get/no-ids.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/Calendar/set/create.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/Calendar/set/destroy.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/Calendar/set/update.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/CalendarEvent/changes/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/CalendarEvent/copy/basic.t": {
+    "status": "skip",
+    "reason": "test requires implementation of pool_account_pair"
+  },
+  "t/CalendarEvent/foreign-account.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/CalendarEvent/get/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/CalendarEvent/query/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/CalendarEvent/query/expand-recurrences.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/CalendarEvent/queryChanges/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/CalendarEvent/set/create.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/CalendarEvent/set/destroy.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/CalendarEvent/set/update.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:calendars"
+  },
+  "t/ContactCard/changes/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/ContactCard/copy/basic.t": {
+    "status": "skip",
+    "reason": "test requires implementation of pool_account_pair"
+  },
+  "t/ContactCard/foreign-account.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/ContactCard/get/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/ContactCard/query/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/ContactCard/queryChanges/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/ContactCard/set/create.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/ContactCard/set/destroy.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/ContactCard/set/update.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:contacts"
+  },
+  "t/Email/copy/basic.t": {
+    "status": "skip",
+    "reason": "test requires implementation of pool_account_pair"
+  },
+  "t/Email/get/attachments.t": {
+    "status": "fail",
+    "failed": [
+      "image/audio/video in html only, attached",
+      "image/audio/video in text and html, not attached",
+      "image/audio/video in text only, attached"
+    ]
+  },
+  "t/Email/get/body-properties.t": {
+    "status": "fail",
+    "failed": [
+      "limit to all body properties",
+      "no bodyProperties specified, defaults returned"
+    ]
+  },
+  "t/Email/get/body-structure-and-attachments.t": {
+    "status": "fail",
+    "failed": [
+      "bodyStructure attributes are as expected",
+      "order of parts is correct and includes expected parts"
+    ]
+  },
+  "t/Email/get/fetch-all-body-values.t": {
+    "status": "fail",
+    "failed": ["explicit true fetchAllBodyValues supplied"]
+  },
+  "t/Email/get/fetch-html-body-values.t": {
+    "status": "fail",
+    "failed": ["explicit true fetchHTMLBodyValues supplied"]
+  },
+  "t/Email/get/fetch-text-body-values.t": {
+    "status": "fail",
+    "failed": ["explicit true fetchTextBodyValues supplied"]
+  },
+  "t/Email/get/header-header-field-name.t": {
+    "status": "fail",
+    "failed": ["asDate"]
+  },
+  "t/Email/get/html-body.t": {
+    "status": "fail",
+    "failed": [
+      "got 3 parts",
+      "htmlBody attributes are as expected",
+      "order of parts is correct and includes expected parts"
+    ]
+  },
+  "t/Email/get/text-body.t": {
+    "status": "fail",
+    "failed": [
+      "got 5 parts",
+      "order of parts is correct and includes expected parts",
+      "textBody attributes are as expected"
+    ]
+  },
+  "t/Email/import/bad-values.t": {
+    "status": "fail",
+    "failed": ["EmailImport object -> required fields", "blobId"]
+  },
+  "t/Email/import/good-imports.t": {
+    "status": "fail",
+    "failed": [
+      "multiple mailboxes",
+      "single mailbox import, all values",
+      "single mailbox import, default values"
+    ]
+  },
+  "t/Email/import/one-fails-another-succeeds.t": {
+    "status": "fail",
+    "failed": ["email looks good"]
+  },
+  "t/Email/query/filtering.t": {
+    "status": "fail",
+    "failed": [
+      "allInThreadHaveKeyword filter, none match that all have",
+      "noneInThreadHaveKeyword filter, match, don't get some back",
+      "someInThreadHaveKeyword filter, match"
+    ]
+  },
+  "t/Email/queryChanges/simple.t": {
+    "status": "fail",
+    "failed": [
+      "a removal that doesn't match",
+      "a removal that matches",
+      "added message that doesn't match",
+      "added message that matches",
+      "no changes"
+    ]
+  },
+  "t/Email/set/create/attachments-using-blob-id.t": {
+    "status": "fail",
+    "failed": [
+      "attachments create",
+      "got the id",
+      "no sentence found with name \"Email/get\""
+    ]
+  },
+  "t/Email/set/create/attachments.t": {
+    "status": "fail",
+    "failed": [
+      "attachments create",
+      "got the id",
+      "no sentence found with name \"Email/get\""
+    ]
+  },
+  "t/Email/set/create/body-structure-subparts.t": {
+    "status": "fail",
+    "failed": [
+      "got the id",
+      "no sentence found with name \"Email/get\"",
+      "textBody create"
+    ]
+  },
+  "t/Email/set/create/body-structure.t": {
+    "status": "fail",
+    "failed": ["get looks good", "unnamed"]
+  },
+  "t/Email/set/create/content-transfer-encoding-not-allowed.t": {
+    "status": "fail",
+    "failed": ["cannot specify Content-Transfer-Encoding"]
+  },
+  "t/Email/set/create/email-body-value-restrictions.t": {
+    "status": "fail",
+    "failed": ["explicit true"]
+  },
+  "t/Email/set/create/header-header-field-name.t": {
+    "status": "fail",
+    "failed": [
+      ":all suffix can provide a list",
+      "asAddresses",
+      "asDate",
+      "asMessageIds",
+      "asText",
+      "asURLs"
+    ]
+  },
+  "t/Email/set/create/headers-property-forbidden-in-body-structure.t": {
+    "status": "fail",
+    "failed": ["got invalidProperties error"]
+  },
+  "t/Email/set/create/html-body-using-blob-id.t": {
+    "status": "fail",
+    "failed": ["get looks good", "unnamed"]
+  },
+  "t/Email/set/create/html-body.t": {
+    "status": "fail",
+    "failed": ["get looks good", "unnamed"]
+  },
+  "t/Email/set/create/no-duplicate-header-representations.t": {
+    "status": "fail",
+    "failed": ["sanity check"]
+  },
+  "t/Email/set/create/no-duplicate-structural-representations.t": {
+    "status": "fail",
+    "failed": ["got invalidProperties error"]
+  },
+  "t/Email/set/create/no-size-with-partid.t": {
+    "status": "fail",
+    "failed": ["cannot have size with partId"]
+  },
+  "t/Email/set/create/text-body-using-blob-id.t": {
+    "status": "fail",
+    "failed": ["body value content matches original blob", "get looks good"]
+  },
+  "t/Email/set/create/text-body.t": {
+    "status": "fail",
+    "failed": ["get looks good", "unnamed"]
+  },
+  "t/Email/set/if-in-state.t": {
+    "status": "fail",
+    "failed": ["got current state"]
+  },
+  "t/EmailSubmission/changes/basic.t": {
+    "status": "fail",
+    "failed": ["no changes from current state"]
+  },
+  "t/Identity/set/basic.t": {
+    "status": "fail",
+    "failed": ["update name"]
+  },
+  "t/MDN/foreign-account.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:mdn"
+  },
+  "t/MDN/parse/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:mdn"
+  },
+  "t/Mailbox/get/limiting-properties-in-response.t": {
+    "status": "fail",
+    "failed": ["properties => null gives us all properties"]
+  },
+  "t/Mailbox/get/some-entities.t": {
+    "status": "fail",
+    "failed": ["Limit by id", "No arguments", "null ids"]
+  },
+  "t/Mailbox/query/filtering-with-filter-operators.t": {
+    "status": "fail",
+    "failed": ["OR - two conditions, diff conds"]
+  },
+  "t/Mailbox/query/sorting-and-limiting.t": {
+    "status": "fail",
+    "failed": [
+      "sort by name, explicit ascending order, explicit position too high"
+    ]
+  },
+  "t/Mailbox/queryChanges/basic.t": {
+    "status": "fail",
+    "failed": [
+      "canCalculateChanges is true",
+      "created mailbox appears in added",
+      "destroyed mailbox appears in removed",
+      "no changes"
+    ]
+  },
+  "t/Mailbox/set/create/immutable-fields.t": {
+    "status": "fail",
+    "failed": ["immutable properties with wrong values is not okay"]
+  },
+  "t/Mailbox/set/update/basic.t": {
+    "status": "fail",
+    "failed": [
+      "can hand in immutable fields if they are same",
+      "cannot change immutable fields"
+    ]
+  },
+  "t/Principal/foreign-account.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:principals"
+  },
+  "t/Principal/get/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:principals"
+  },
+  "t/Principal/getAvailability/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:principals urn:ietf:params:jmap:calendars"
+  },
+  "t/Quota/foreign-account.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:quota"
+  },
+  "t/Quota/get/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:quota"
+  },
+  "t/Quota/query/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:quota"
+  },
+  "t/VacationResponse/foreign-account.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:vacationresponse"
+  },
+  "t/VacationResponse/get/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:vacationresponse"
+  },
+  "t/VacationResponse/set/basic.t": {
+    "status": "skip",
+    "reason": "server does not support urn:ietf:params:jmap:vacationresponse"
+  },
+  "t/getMessages-htmlBody.t": {
+    "status": "fail",
+    "failed": ["text body is correct"]
+  },
+  "t/previews.t": {
+    "status": "fail",
+    "failed": ["getMessageList", "getMessages"]
+  }
+}

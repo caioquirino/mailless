@@ -48,3 +48,21 @@ jobs:
       - run: pnpm nx sync:check
       - run: pnpm nx format:check
       - run: pnpm nx affected -t lint typecheck validate test build
+
+  # Fastmail's JMAP-TestSuite against the dev server. Fails when something that
+  # passed in tools/compliance/baseline.json no longer does.
+  compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm compliance

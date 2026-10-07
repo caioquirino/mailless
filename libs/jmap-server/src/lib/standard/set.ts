@@ -44,6 +44,55 @@ export function resolveCreationReference(
   return ctx.createdIds.get(id.slice(1));
 }
 
+/** The creation ids of the same call that an object being created refers to. */
+function referencedCreations(
+  value: unknown,
+  creationIds: ReadonlySet<string>,
+  found: Set<string>,
+): void {
+  const note = (text: string) => {
+    if (text.startsWith('#') && creationIds.has(text.slice(1))) {
+      found.add(text.slice(1));
+    }
+  };
+  if (typeof value === 'string') note(value);
+  else if (Array.isArray(value)) {
+    for (const item of value) referencedCreations(item, creationIds, found);
+  } else if (typeof value === 'object' && value !== null) {
+    for (const [key, item] of Object.entries(value)) {
+      // Ids are also used as keys, as in mailboxIds.
+      note(key);
+      referencedCreations(item, creationIds, found);
+    }
+  }
+}
+
+/**
+ * Orders creations so that an object comes after the ones it refers to by
+ * creation id (RFC 8620 §5.3), whatever order the client listed them in.
+ * Objects that refer to each other in a circle keep their given order.
+ */
+function inReferenceOrder(
+  create: Array<[string, Record<string, unknown>]>,
+): Array<[string, Record<string, unknown>]> {
+  const creationIds = new Set(create.map(([creationId]) => creationId));
+  const ordered: Array<[string, Record<string, unknown>]> = [];
+  const state = new Map<string, 'visiting' | 'done'>();
+  const byId = new Map(create);
+  const visit = (creationId: string) => {
+    if (state.has(creationId)) return;
+    state.set(creationId, 'visiting');
+    const input = byId.get(creationId) as Record<string, unknown>;
+    const references = new Set<string>();
+    referencedCreations(input, creationIds, references);
+    for (const reference of references) visit(reference);
+    state.set(creationId, 'done');
+    ordered.push([creationId, input]);
+  };
+  for (const [creationId] of create) visit(creationId);
+  return ordered;
+}
+
 const NOT_SUPPORTED = (type: string, action: string) =>
   new SetFailure('forbidden', `${type} objects cannot be ${action}`);
 
@@ -57,7 +106,7 @@ export async function standardSet(
   args: SetArgumentsLike,
 ): Promise<SetResponse<Record<string, unknown>>> {
   const accountId = requireAccount(ctx, args.accountId);
-  const create = Object.entries(args.create ?? {});
+  const create = inReferenceOrder(Object.entries(args.create ?? {}));
   const update = Object.entries(args.update ?? {});
   const destroy = args.destroy ?? [];
 

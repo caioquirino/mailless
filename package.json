@@ -18,7 +18,8 @@
     "dev": "nx serve dev-server",
     "services:up": "nx run @mailless/source:local-services",
     "services:down": "docker compose down",
-    "infra": "node tools/infra.mjs"
+    "infra": "node tools/infra.mjs",
+    "compliance": "nx run dev-server:build && node tools/compliance/run.mjs"
   },
   "dependencies": {},
   "devDependencies": {

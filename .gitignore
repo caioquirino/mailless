@@ -60,3 +60,6 @@ test-output
 *.tfplan
 infra/.build/
 infra/**/terraform.tfvars
+
+# The latest full outcome of `pnpm compliance`; the baseline next to it is what is kept
+tools/compliance/results.json

@@ -74,8 +74,9 @@ curl -s -H "$AUTH" -H 'Content-Type: application/json' http://127.0.0.1:8080/jma
 ```
 
 To add mail, `POST` a raw message to `/jmap/upload/dev` and pass the returned
-`blobId` to `Email/import`. The dev server keeps everything in memory, has one
-fixed account, and listens on localhost only.
+`blobId` to `Email/import`. The dev server keeps everything in memory and
+listens on localhost only. Besides the `dev` account, signing in over Basic
+with any plain user name creates an empty account of that name.
 
 ## Development
 
@@ -103,6 +104,10 @@ from `docker-compose.yml`. Nx starts those containers before the tests that
 need them, so Docker has to be available. When the test files are run without
 Nx and the services are not there, those tests are skipped; set
 `REQUIRE_LOCAL_SERVICES=1` (as CI does) to make that a failure.
+
+`pnpm compliance` runs Fastmail's independent JMAP test suite against the dev
+server and fails if something that passed before no longer does. It needs
+Docker; see [`tools/compliance`](tools/compliance).
 
 This is an [Nx](https://nx.dev) workspace. Build, test and lint tooling
 (TypeScript, Vitest, ESLint, esbuild) is installed at the versions Nx pins and

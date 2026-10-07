@@ -555,6 +555,33 @@ export function describeJmapConformance(
       h = await createHarness(factory);
     });
 
+    it('creates objects in the order their references need', async () => {
+      // The child is listed first; it can only be created after its parent.
+      const { created, notCreated } = await h.call('Mailbox/set', {
+        create: {
+          child: { name: 'Child', parentId: '#parent' },
+          grandchild: { name: 'Grandchild', parentId: '#child' },
+          parent: { name: 'Parent' },
+          loopA: { name: 'A', parentId: '#loopB' },
+          loopB: { name: 'B', parentId: '#loopA' },
+        },
+      });
+      expect(Object.keys(created).sort()).toEqual([
+        'child',
+        'grandchild',
+        'parent',
+      ]);
+      expect(Object.keys(notCreated).sort()).toEqual(['loopA', 'loopB']);
+      const { list } = await h.call('Mailbox/get', {
+        ids: [created.child.id, created.grandchild.id],
+        properties: ['parentId'],
+      });
+      expect(list).toEqual([
+        { id: created.child.id, parentId: created.parent.id },
+        { id: created.grandchild.id, parentId: created.child.id },
+      ]);
+    });
+
     it('provisions the standard mailboxes once', async () => {
       await h.server.provisionAccount(AUTH);
       const { list, notFound, state } = await h.call('Mailbox/get', {
