@@ -313,6 +313,102 @@ export function describeJmapConformance(
       });
     });
 
+    it('answers that there are no push subscriptions, and declines to create any', async () => {
+      const response = await h.server.handleRequest(
+        {
+          using: [CAPABILITY_CORE],
+          methodCalls: [
+            ['PushSubscription/get', { ids: null }, 'a'],
+            [
+              'PushSubscription/get',
+              { ids: ['p1'], properties: ['deviceClientId'] },
+              'b',
+            ],
+            [
+              'PushSubscription/set',
+              {
+                create: {
+                  n: { deviceClientId: 'd', url: 'https://push.example/x' },
+                },
+                update: { p1: { expires: null } },
+                destroy: ['p2'],
+              },
+              'c',
+            ],
+            ['PushSubscription/get', { accountId: AUTH.accountId }, 'd'],
+          ],
+        },
+        AUTH,
+      );
+      expect(response.methodResponses).toEqual([
+        ['PushSubscription/get', { list: [], notFound: [] }, 'a'],
+        ['PushSubscription/get', { list: [], notFound: ['p1'] }, 'b'],
+        [
+          'PushSubscription/set',
+          {
+            created: null,
+            updated: null,
+            destroyed: null,
+            notCreated: {
+              n: {
+                type: 'forbidden',
+                description:
+                  'Push notifications are not available on this server',
+              },
+            },
+            notUpdated: { p1: { type: 'notFound' } },
+            notDestroyed: { p2: { type: 'notFound' } },
+          },
+          'c',
+        ],
+        // Push subscriptions belong to the user, not an account, so accountId is not an argument.
+        ['error', expect.objectContaining({ type: 'invalidArguments' }), 'd'],
+      ]);
+    });
+
+    it('summarises each request by method name and outcome, without any data', async () => {
+      const summaries: unknown[] = [];
+      const server = createJmapServer({
+        storage: h.adapter,
+        urls: URLS,
+        onRequest: (summary) => summaries.push(summary),
+      });
+      await server.handleRequest(
+        {
+          using: [CAPABILITY_CORE, CAPABILITY_MAIL],
+          methodCalls: [
+            ['Core/echo', { secret: 'do-not-log-me' }, 'a'],
+            ['Nope/get', {}, 'b'],
+            [
+              'Mailbox/set',
+              {
+                accountId: AUTH.accountId,
+                create: {
+                  ok: { name: 'Private folder name' },
+                  bad: { name: '' },
+                },
+                destroy: ['missing'],
+              },
+              'c',
+            ],
+          ],
+        },
+        AUTH,
+      );
+      expect(summaries).toEqual([
+        {
+          calls: ['Core/echo', 'Nope/get', 'Mailbox/set'],
+          results: [
+            'Core/echo',
+            'error:unknownMethod',
+            'Mailbox/set!invalidProperties,notFound',
+          ],
+        },
+      ]);
+      expect(JSON.stringify(summaries)).not.toContain('do-not-log-me');
+      expect(JSON.stringify(summaries)).not.toContain('Private folder name');
+    });
+
     it('keeps processing after a failed call', async () => {
       const responses = await h.request([
         ['Nope/get', {}],
@@ -2570,12 +2666,16 @@ export function describeJmapConformance(
       expect(h.sent).toHaveLength(1);
 
       const inbox = await h.mailbox('inbox');
-      const reply = await h.deliver(inbox, {
-        from: 'Bob <bob@example.org>',
-        subject: 'Re: Dinner on Friday?',
-        inReplyTo: '<relay-1@relay.example>',
-        references: '<relay-1@relay.example>',
-      });
+      const reply = await h.deliver(
+        inbox,
+        {
+          from: 'Bob <bob@example.org>',
+          subject: 'Re: Dinner on Friday?',
+          inReplyTo: '<relay-1@relay.example>',
+          references: '<relay-1@relay.example>',
+        },
+        { receivedAt: '2040-01-01T00:00:00Z' },
+      );
       expect(reply.threadId).toBe(sent.threadId);
       expect(
         (await h.call('Thread/get', { ids: [sent.threadId] })).list[0].emailIds,

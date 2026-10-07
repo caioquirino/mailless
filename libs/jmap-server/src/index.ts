@@ -5,6 +5,7 @@ export {
   type JmapServer,
   type JmapServerOptions,
   type JmapServerUrls,
+  type RequestSummary,
 } from './lib/server.js';
 export {
   type AuthContext,

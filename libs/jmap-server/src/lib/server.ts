@@ -15,8 +15,10 @@ import {
   type Session,
   type UploadResponse,
 } from '@mailless/jmap-core';
+import { z } from 'zod';
 import {
   generateId,
+  parseArguments,
   type AuthContext,
   type MethodContext,
   type MethodDefinition,
@@ -77,6 +79,12 @@ export interface JmapServerOptions {
    */
   onMethodError?: (method: string, type: string, description?: string) => void;
   /**
+   * Called once per request with what was asked and how each call fared:
+   * method names and outcome types only, never arguments or results. Meant
+   * for logs that show how clients use the server.
+   */
+  onRequest?: (summary: RequestSummary) => void;
+  /**
    * How outgoing mail leaves. When set, the server offers the submission
    * capability (Identity and EmailSubmission methods).
    */
@@ -88,6 +96,17 @@ export interface JmapServerOptions {
   identities?: (
     auth: AuthContext,
   ) => IdentityInput[] | Promise<IdentityInput[]>;
+}
+
+export interface RequestSummary {
+  /** The methods called, in order. */
+  calls: string[];
+  /**
+   * The outcome of each response, in order: the method name, `error:<type>`,
+   * or for `/set` responses with rejected objects, the name followed by the
+   * distinct SetError types, such as `Email/set!forbidden`.
+   */
+  results: string[];
 }
 
 export interface IdentityInput {
@@ -179,6 +198,55 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     capability: CAPABILITY_CORE,
     handler: async (args) => args,
   });
+  // Push is not offered, so there are never any subscriptions. Clients ask anyway when
+  // setting up an account, and "none" is the answer they can work with.
+  const PushSubscriptionGet = z.strictObject({
+    ids: z.array(z.string()).nullish(),
+    properties: z.array(z.string()).nullish(),
+  });
+  methods.set('PushSubscription/get', {
+    capability: CAPABILITY_CORE,
+    handler: async (args) => {
+      const { ids } = parseArguments(PushSubscriptionGet, args);
+      return { list: [], notFound: ids ?? [] };
+    },
+  });
+  const PushSubscriptionSet = z.strictObject({
+    create: z.record(z.string(), z.record(z.string(), z.unknown())).nullish(),
+    update: z.record(z.string(), z.record(z.string(), z.unknown())).nullish(),
+    destroy: z.array(z.string()).nullish(),
+  });
+  methods.set('PushSubscription/set', {
+    capability: CAPABILITY_CORE,
+    handler: async (args) => {
+      const { create, update, destroy } = parseArguments(
+        PushSubscriptionSet,
+        args,
+      );
+      const refuse = (keys: string[], type: string, description?: string) =>
+        keys.length === 0
+          ? null
+          : Object.fromEntries(
+              keys.map((key) => [
+                key,
+                { type, ...(description ? { description } : {}) },
+              ]),
+            );
+      return {
+        created: null,
+        updated: null,
+        destroyed: null,
+        notCreated: refuse(
+          Object.keys(create ?? {}),
+          'forbidden',
+          'Push notifications are not available on this server',
+        ),
+        notUpdated: refuse(Object.keys(update ?? {}), 'notFound'),
+        notDestroyed: refuse(destroy ?? [], 'notFound'),
+      };
+    },
+  });
+
   for (const group of [mailboxMethods, emailMethods, threadMethods]) {
     for (const [name, handler] of Object.entries(group)) {
       methods.set(name, { capability: CAPABILITY_MAIL, handler });
@@ -309,6 +377,25 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
           }
         }
       }
+
+      options.onRequest?.({
+        calls: methodCalls.map(([name]) => name),
+        results: methodResponses.map(([name, result]) => {
+          if (name === 'error') return `error:${String(result['type'])}`;
+          const rejected = ['notCreated', 'notUpdated', 'notDestroyed'].flatMap(
+            (property) =>
+              Object.values(
+                (result[property] as Record<
+                  string,
+                  { type?: string }
+                > | null) ?? {},
+              ).map((error) => String(error.type)),
+          );
+          return rejected.length === 0
+            ? name
+            : `${name}!${[...new Set(rejected)].join(',')}`;
+        }),
+      });
 
       return {
         methodResponses,

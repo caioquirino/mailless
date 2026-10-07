@@ -130,6 +130,10 @@ export const handler = createLambdaHttpHandler({
           identitiesFor(mailboxes, auth.accountId, accountNames),
         onError: (error, method) =>
           console.error(JSON.stringify({ method, error: String(error) })),
+        // What each request asked for and how it fared, by name only: this is how a
+        // client's expectations show up without logging anyone's mail.
+        onRequest: (summary) =>
+          console.log(JSON.stringify({ event: 'request', ...summary })),
         // Method names and error types only; descriptions name properties, never values.
         onMethodError: (method, type, description) =>
           console.log(
