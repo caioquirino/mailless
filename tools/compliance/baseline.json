@@ -147,50 +147,6 @@
     "status": "skip",
     "reason": "test requires implementation of pool_account_pair"
   },
-  "t/Email/get/attachments.t": {
-    "status": "fail",
-    "failed": [
-      "image/audio/video in html only, attached",
-      "image/audio/video in text and html, not attached",
-      "image/audio/video in text only, attached"
-    ]
-  },
-  "t/Email/get/body-properties.t": {
-    "status": "fail",
-    "failed": [
-      "limit to all body properties",
-      "no bodyProperties specified, defaults returned"
-    ]
-  },
-  "t/Email/get/body-structure-and-attachments.t": {
-    "status": "fail",
-    "failed": [
-      "bodyStructure attributes are as expected",
-      "order of parts is correct and includes expected parts"
-    ]
-  },
-  "t/Email/get/header-header-field-name.t": {
-    "status": "fail",
-    "failed": [
-      "asDate"
-    ]
-  },
-  "t/Email/get/html-body.t": {
-    "status": "fail",
-    "failed": [
-      "got 3 parts",
-      "htmlBody attributes are as expected",
-      "order of parts is correct and includes expected parts"
-    ]
-  },
-  "t/Email/get/text-body.t": {
-    "status": "fail",
-    "failed": [
-      "got 5 parts",
-      "order of parts is correct and includes expected parts",
-      "textBody attributes are as expected"
-    ]
-  },
   "t/Email/import/bad-values.t": {
     "status": "fail",
     "failed": [

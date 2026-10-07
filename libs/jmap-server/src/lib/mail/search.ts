@@ -1,7 +1,7 @@
 import type { EmailAddress } from '@mailless/jmap-core';
 import type { MethodContext } from '../context.js';
 import { ConflictError, type StoredRecord, type WriteOp } from '../storage.js';
-import { htmlToText, type ParsedMessage } from './mime.js';
+import { htmlToText, partText, type ParsedMessage } from './mime.js';
 import { EMAIL, type EmailRecord, type EmailValue } from './model.js';
 
 /*
@@ -31,7 +31,6 @@ export type EmailTextValue = {
 };
 type EmailTextRecord = StoredRecord<EmailTextValue>;
 
-const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
 // Scripts written without spaces between words: each character is a word of its
@@ -145,27 +144,31 @@ export function searchableHeaders(email: EmailValue): string {
   );
 }
 
-/** The readable text of a message body: the plain text part, or the HTML part without its markup. */
+/** The readable text of a message body: its plain text parts, or its HTML parts without their markup. */
 export function bodyText(parsed: ParsedMessage): string {
-  const part = (partId: string | null) =>
-    parsed.parts.find((candidate) => candidate.partId === partId);
-  const text = part(parsed.textPartId);
-  if (text) return decoder.decode(text.data);
-  const html = part(parsed.htmlPartId);
-  return html ? htmlToText(decoder.decode(html.data)) : '';
+  const byId = new Map(parsed.parts.map((part) => [part.partId, part]));
+  const texts = (ids: readonly string[], type: string) =>
+    ids.flatMap((id) => {
+      const part = byId.get(id);
+      return part?.type === type ? [partText(part).value] : [];
+    });
+  const plain = texts(parsed.textBody, 'text/plain');
+  if (plain.length > 0) return plain.join('\n');
+  return texts(parsed.htmlBody, 'text/html').map(htmlToText).join('\n');
 }
 
 /** What to store for a message so that it can be searched. */
 export function extractText(parsed: ParsedMessage): EmailTextValue {
-  const attachments = parsed.parts.filter((part) =>
-    parsed.attachmentPartIds.includes(part.partId),
+  const attachments = parsed.parts.filter(
+    (part) => part.partId !== null && parsed.attachments.includes(part.partId),
   );
   const pieces = [bodyText(parsed)];
   for (const attachment of attachments) {
     if (!attachment.type.startsWith('text/')) continue;
-    const content = decoder.decode(
-      attachment.data.subarray(0, MAX_ATTACHMENT_TEXT_BYTES),
-    );
+    const content = partText({
+      ...attachment,
+      data: attachment.data.subarray(0, MAX_ATTACHMENT_TEXT_BYTES),
+    }).value;
     pieces.push(
       attachment.type === 'text/html' ? htmlToText(content) : content,
     );

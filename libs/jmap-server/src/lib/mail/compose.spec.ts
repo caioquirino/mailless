@@ -31,7 +31,8 @@ describe('composeMessage', () => {
     const message = decoder.decode(raw);
     expect(message).toContain('Content-Transfer-Encoding: 7bit');
     expect(message).toContain('MIME-Version: 1.0');
-    expect(message.endsWith('Line one\r\nLine two\r\n')).toBe(true);
+    // Nothing follows the body: a line break there would be part of the text.
+    expect(message.endsWith('Line one\r\nLine two')).toBe(true);
 
     const parsed = await parse(raw);
     expect(parsed.subject).toBe('Hello');

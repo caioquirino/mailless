@@ -43,8 +43,19 @@ export type StoredBodyPart = {
   charset: string | null;
   disposition: string | null;
   cid: string | null;
+  /** The part's own header fields. Empty for the root, whose headers are the email's. */
+  headers?: EmailHeader[];
+  language?: string[] | null;
+  location?: string | null;
   subParts: StoredBodyPart[] | null;
 };
+
+/**
+ * The version of the body layout stored with an email. Emails stored before
+ * the MIME tree was kept as it is in the message have none, and their layout
+ * is read from the message again when it is asked for.
+ */
+export const BODY_LAYOUT_VERSION = 2;
 
 /** Email metadata kept in the metadata store. Body content stays in the raw message blob. */
 export type EmailValue = {
@@ -69,6 +80,7 @@ export type EmailValue = {
   hasAttachment: boolean;
   preview: string;
   bodyStructure: StoredBodyPart;
+  layout?: number;
   /**
    * Ids the transport gave this message when it was sent, in place of its own
    * Message-ID. Not shown to clients; used so that replies find their thread.

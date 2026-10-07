@@ -14,6 +14,7 @@ import {
   UTCDateSchema,
   type Comparator,
   type EmailAddress,
+  type EmailHeader,
   type SetResponse,
 } from '@mailless/jmap-core';
 import { z } from 'zod';
@@ -57,6 +58,7 @@ import {
   buildBodyLayout,
   InvalidMessageError,
   parseMessage,
+  partText,
   splitPartBlobId,
 } from './mime.js';
 import {
@@ -73,6 +75,7 @@ import {
 } from './search.js';
 import {
   baseSubject,
+  BODY_LAYOUT_VERSION,
   EMAIL,
   EMAIL_DELIVERY,
   isValidKeyword,
@@ -129,6 +132,13 @@ const BODY_PROPERTIES = [
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
+const LAYOUT_PROPERTIES = [
+  'bodyStructure',
+  'textBody',
+  'htmlBody',
+  'attachments',
+  'bodyValues',
+];
 
 /** Reads a blob by id: an uploaded blob, a stored message, or one decoded part of a stored message. */
 export async function readBlob(
@@ -189,22 +199,33 @@ function leafParts(part: StoredBodyPart): StoredBodyPart[] {
 function projectPart(
   part: StoredBodyPart,
   selection: PropertySelection,
+  /** The email's headers, which are also those of its outermost part. */
+  rootHeaders?: EmailHeader[],
+  /** Within bodyStructure a multipart always shows its parts: without them the tree is no tree. */
+  asTree = false,
 ): Record<string, unknown> {
+  const headers = rootHeaders ?? part.headers ?? [];
   const result: Record<string, unknown> = {};
   for (const property of selection.plain) {
-    if (property === 'headers') result[property] = [];
+    if (property === 'headers') result[property] = headers;
     else if (property === 'language' || property === 'location') {
-      result[property] = null;
+      result[property] = part[property] ?? null;
     } else if (property === 'subParts') {
       result[property] =
-        part.subParts?.map((child) => projectPart(child, selection)) ?? null;
+        part.subParts?.map((child) =>
+          projectPart(child, selection, undefined, asTree),
+        ) ?? null;
     } else {
       result[property] = part[property as keyof StoredBodyPart];
     }
   }
-  // Part-level headers are not kept, so header properties on parts are always empty.
   for (const [property, header] of selection.headers) {
-    result[property] = header.all ? [] : null;
+    result[property] = readHeaderProperty(headers, header);
+  }
+  if (asTree && part.subParts && !('subParts' in result)) {
+    result['subParts'] = part.subParts.map((child) =>
+      projectPart(child, selection, undefined, true),
+    );
   }
   return result;
 }
@@ -234,10 +255,11 @@ async function loadBodyValues(
   const parsed = await parseMessage(raw);
   const values: Record<string, unknown> = {};
   for (const part of parsed.parts) {
-    if (!partIds.has(part.partId)) continue;
+    if (part.partId === null || !partIds.has(part.partId)) continue;
+    const { value, isEncodingProblem } = partText(part);
     values[part.partId] = {
-      ...truncateUtf8(decoder.decode(part.data), maxBytes),
-      isEncodingProblem: false,
+      ...truncateUtf8(value, maxBytes),
+      isEncodingProblem,
     };
   }
   return values;
@@ -259,13 +281,39 @@ async function toEmailObject(
   selection: PropertySelection,
   bodySelection: PropertySelection,
 ): Promise<Record<string, unknown>> {
-  const email = record.value;
+  let email = record.value;
+  // An email stored under the older, simplified layout: read the real one from the message.
+  if (
+    email.layout !== BODY_LAYOUT_VERSION &&
+    selection.plain.some((property) => LAYOUT_PROPERTIES.includes(property))
+  ) {
+    const raw = await ctx.blobs.get(ctx.auth.accountId, email.blobId);
+    if (raw) {
+      try {
+        email = {
+          ...email,
+          ...buildBodyLayout(await parseMessage(raw), email.blobId),
+        };
+      } catch (error) {
+        if (!(error instanceof InvalidMessageError)) throw error;
+      }
+    }
+  }
   const leaves = leafParts(email.bodyStructure);
   const byPartId = new Map(leaves.map((part) => [part.partId, part]));
   const partList = (ids: readonly string[]) =>
     ids.flatMap((id) => {
       const part = byPartId.get(id);
-      return part ? [projectPart(part, bodySelection)] : [];
+      return part
+        ? [
+            projectPart(
+              part,
+              bodySelection,
+              // A message that is a single part: that part's headers are the email's.
+              part === email.bodyStructure ? email.headers : undefined,
+            ),
+          ]
+        : [];
     });
 
   const result: Record<string, unknown> = {};
@@ -275,7 +323,12 @@ async function toEmailObject(
         result[property] = record.id;
         break;
       case 'bodyStructure':
-        result[property] = projectPart(email.bodyStructure, bodySelection);
+        result[property] = projectPart(
+          email.bodyStructure,
+          bodySelection,
+          email.headers,
+          true,
+        );
         break;
       case 'textBody':
       case 'htmlBody':
@@ -946,6 +999,7 @@ export async function importMessage(
   const value: EmailValue = {
     ...parsed.metadata,
     ...buildBodyLayout(parsed, blobId),
+    layout: BODY_LAYOUT_VERSION,
     blobId,
     threadId,
     mailboxIds,

@@ -95,20 +95,20 @@ time of use at most once an hour.
 
 ## Supported methods
 
-| Method                                                                       | Notes                                                                                                                                                                           |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Core/echo`                                                                  |                                                                                                                                                                                 |
-| `Mailbox/get`, `/changes`, `/query`, `/set`                                  | Including `updatedProperties`, `sortAsTree`, `filterAsTree`, `onDestroyRemoveEmails`.                                                                                           |
-| `Email/get`                                                                  | Metadata, headers in every `header:Name:asForm` variant, body structure, body values.                                                                                           |
-| `Email/query`                                                                | Every RFC 8621 filter condition, including full-text `text` and `body`; sorting; `collapseThreads`; paging and anchors.                                                         |
-| `Email/set`                                                                  | Create (drafts and messages to send) from `textBody` / `htmlBody` / `attachments` or a `bodyStructure`; update `keywords` and `mailboxIds`; destroy.                            |
-| `Email/import`                                                               |                                                                                                                                                                                 |
-| `SearchSnippet/get`                                                          | Subject and body excerpts with matches wrapped in `<mark>`.                                                                                                                     |
-| `Email/changes`, `Thread/get`, `Thread/changes`                              |                                                                                                                                                                                 |
-| `Identity/get`, `/changes`, `/set`                                           | Which identities exist, and their addresses, come from the `identities` option. `Identity/set` changes the name, reply-to, bcc and signatures; it refuses to create or destroy. |
-| `EmailSubmission/set`, `/get`, `/changes`, `/query`, `/queryChanges`         | Sends immediately through the `transport` option, with `onSuccessUpdateEmail` and `onSuccessDestroyEmail`.                                                                      |
-| `PushSubscription/get`, `/set`                                               | With the `push` option; see [Push](#push). Without it, there are no subscriptions and none can be made.                                                                         |
-| `Mailbox/queryChanges`, `Email/queryChanges`, `EmailSubmission/queryChanges` | Always answer `cannotCalculateChanges`, which the spec allows.                                                                                                                  |
+| Method                                                                       | Notes                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Core/echo`                                                                  |                                                                                                                                                                                                                        |
+| `Mailbox/get`, `/changes`, `/query`, `/set`                                  | Including `updatedProperties`, `sortAsTree`, `filterAsTree`, `onDestroyRemoveEmails`.                                                                                                                                  |
+| `Email/get`                                                                  | Metadata, headers in every `header:Name:asForm` variant, the MIME tree as it is in the message with each part's headers, body values in the part's charset, and the body and attachment lists RFC 8621 §4.1.4 derives. |
+| `Email/query`                                                                | Every RFC 8621 filter condition, including full-text `text` and `body`; sorting; `collapseThreads`; paging and anchors.                                                                                                |
+| `Email/set`                                                                  | Create (drafts and messages to send) from `textBody` / `htmlBody` / `attachments` or a `bodyStructure`; update `keywords` and `mailboxIds`; destroy.                                                                   |
+| `Email/import`                                                               |                                                                                                                                                                                                                        |
+| `SearchSnippet/get`                                                          | Subject and body excerpts with matches wrapped in `<mark>`.                                                                                                                                                            |
+| `Email/changes`, `Thread/get`, `Thread/changes`                              |                                                                                                                                                                                                                        |
+| `Identity/get`, `/changes`, `/set`                                           | Which identities exist, and their addresses, come from the `identities` option. `Identity/set` changes the name, reply-to, bcc and signatures; it refuses to create or destroy.                                        |
+| `EmailSubmission/set`, `/get`, `/changes`, `/query`, `/queryChanges`         | Sends immediately through the `transport` option, with `onSuccessUpdateEmail` and `onSuccessDestroyEmail`.                                                                                                             |
+| `PushSubscription/get`, `/set`                                               | With the `push` option; see [Push](#push). Without it, there are no subscriptions and none can be made.                                                                                                                |
+| `Mailbox/queryChanges`, `Email/queryChanges`, `EmailSubmission/queryChanges` | Always answer `cannotCalculateChanges`, which the spec allows.                                                                                                                                                         |
 
 Also implemented: result references, creation-id references across calls,
 `ifInState`, `maxChanges` paging, request and object limits, and mailbox
@@ -229,11 +229,10 @@ message's text are searchable.
 
 ### Known simplifications
 
-- **MIME structure is normalised.** A message is exposed as a text body, an
-  HTML body and attachments under a synthesised `multipart/alternative` /
-  `multipart/mixed` tree. The original part tree and per-part headers are not
-  preserved. The raw message is always available through its `blobId`.
-- **`sentAt` is converted to UTC**; the sender's original offset is dropped.
+- **Emails stored by earlier versions** kept a simplified body layout. Their
+  real structure is read from the raw message whenever `bodyStructure`,
+  `textBody`, `htmlBody`, `attachments` or `bodyValues` is asked for, which
+  costs one read of the message.
 - **Queries are evaluated in memory** over the candidate records the adapter
   returns (one mailbox when the filter requires `inMailbox`, otherwise the
   whole account). That is fine for personal mailboxes and will not scale to

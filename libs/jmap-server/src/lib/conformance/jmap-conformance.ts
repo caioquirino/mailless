@@ -1074,7 +1074,7 @@ export function describeJmapConformance(
         ],
         cc: null,
         subject: 'Quarterly numbers',
-        sentAt: '2026-10-06T12:00:00Z',
+        sentAt: '2026-10-06T14:00:00+02:00',
         hasAttachment: false,
         preview: 'Line one. Line two with spaces.',
         bodyValues: {},
@@ -1255,7 +1255,8 @@ export function describeJmapConformance(
       expect(email['header:Message-ID:asMessageIds']).toEqual([
         'h1@example.com',
       ]);
-      expect(email['header:Date:asDate']).toBe('2026-10-06T12:00:00Z');
+      // The time as the sender wrote it, with their offset.
+      expect(email['header:Date:asDate']).toBe('2026-10-06T14:00:00+02:00');
       expect(email['header:List-Unsubscribe:asURLs']).toEqual([
         'https://example.com/u',
         'mailto:u@example.com',
@@ -1663,7 +1664,60 @@ export function describeJmapConformance(
       expect((await counts(inbox)).totalEmails).toBe(1);
     });
 
-    it('reads the same body text whether or not the message is multipart', async () => {
+    it('reads the real structure of an email stored under the older layout', async () => {
+      const inbox = await h.mailbox('inbox');
+      const { id } = await h.deliver(inbox, {
+        html: '<p>Rich</p>',
+        text: 'Plain',
+        attachment: {
+          name: 'a.bin',
+          type: 'application/x-thing',
+          base64: 'AAEC',
+        },
+      });
+      const properties = [
+        'bodyStructure',
+        'textBody',
+        'htmlBody',
+        'attachments',
+      ];
+      const read = async () =>
+        (await h.call('Email/get', { ids: [id], properties })).list[0];
+      const current = await read();
+      expect(current.bodyStructure.type).toBe('multipart/mixed');
+      expect(current.bodyStructure.subParts[0].type).toBe(
+        'multipart/alternative',
+      );
+
+      // As an older version left it: no layout version, and a structure that
+      // does not match the message.
+      const [record] = await h.adapter.metadata.get(AUTH.accountId, 'Email', [
+        id,
+      ]);
+      const { layout: _layout, ...value } = record?.value as Json;
+      await h.adapter.metadata.commit(AUTH.accountId, [
+        {
+          kind: 'update',
+          type: 'Email',
+          id,
+          expectedVersion: record?.version as number,
+          value: {
+            ...value,
+            bodyStructure: { ...value.bodyStructure, subParts: [] },
+            textBody: ['9'],
+            attachments: [],
+          },
+        },
+      ]);
+      expect(await read()).toEqual(current);
+      // Properties kept with the email need no second look at the message.
+      expect(
+        (await h.call('Email/get', { ids: [id], properties: ['subject'] }))
+          .list[0].subject,
+      ).toBe('Hello');
+    });
+
+    it('reads a body exactly as the message holds it', async () => {
       const inbox = await h.mailbox('inbox');
       const bodies: string[] = [];
       for (const raw of [
@@ -1683,11 +1737,12 @@ export function describeJmapConformance(
           })
         ).list;
         expect(email.preview).toBe('Just this line.');
-        expect(email.textBody[0].size).toBe(15);
         bodies.push(email.bodyValues[email.textBody[0].partId].value);
       }
+      // A body that is the whole message keeps the line break it ends with;
+      // inside a multipart, the line break before the delimiter is not the part's.
       expect(bodies).toEqual([
-        'Just this line.',
+        'Just this line.\n',
         'Just this line.',
         'Just this line.',
       ]);

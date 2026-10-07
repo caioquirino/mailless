@@ -307,8 +307,11 @@ export function composeMessage(
     assertSingleLine(value);
     return fold(name, value);
   });
+  // No line break is added after a body that is the whole message: it would
+  // become part of the text. After a multipart's last delimiter it is customary.
   return encoder.encode(
-    [...lines, 'MIME-Version: 1.0', renderPart(body), ''].join(CRLF),
+    [...lines, 'MIME-Version: 1.0', renderPart(body)].join(CRLF) +
+      (body.subParts ? CRLF : ''),
   );
 }
 

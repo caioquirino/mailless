@@ -5,8 +5,7 @@ import {
   type EmailHeader,
 } from '@mailless/jmap-core';
 import { addressParser, decodeWords, type Address } from 'postal-mime';
-import { toUtcDate } from '../context.js';
-import { parseMessageIds } from './mime.js';
+import { parseMailDate, parseMessageIds } from './mime.js';
 
 const FORMS = [
   'asRaw',
@@ -94,10 +93,8 @@ function convert(value: string, form: HeaderForm): unknown {
       return asGroupedAddresses(value);
     case 'asMessageIds':
       return parseMessageIds(unfold(value));
-    case 'asDate': {
-      const date = new Date(unfold(value).trim());
-      return Number.isNaN(date.getTime()) ? null : toUtcDate(date);
-    }
+    case 'asDate':
+      return parseMailDate(value);
     case 'asURLs': {
       const urls = [...unfold(value).matchAll(/<([^<>]+)>/g)].map(
         (match) => match[1] as string,
