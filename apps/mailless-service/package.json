@@ -37,6 +37,7 @@
           "additionalEntryPoints": [
             "apps/mailless-service/src/api.ts",
             "apps/mailless-service/src/events.ts",
+            "apps/mailless-service/src/push.ts",
             "apps/mailless-service/src/admin.ts"
           ]
         },

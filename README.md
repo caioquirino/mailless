@@ -33,8 +33,9 @@ be served by functions that only run while a request is in flight.
 Also in this repository:
 
 - [`apps/mailless-service`](apps/mailless-service): the Lambda functions: the
-  SES ingest function, which imports inbound mail; the JMAP API; and the
-  function that records delivery, bounce and complaint reports.
+  SES ingest function, which imports inbound mail; the JMAP API; the function
+  that records delivery, bounce and complaint reports; and the function that
+  sends push notifications.
 - [`apps/dev-server`](apps/dev-server): a small local JMAP server over
   in-memory storage for trying things out.
 - [`infra/`](infra): Terraform for SES receiving, S3, DynamoDB and the ingest
@@ -131,7 +132,8 @@ wrapper around `handleRequest`.
 5. ~~Delivery, bounce and complaint reporting~~
 6. App passwords (written, being tried out); multi-factor sign-in
 7. `jmap-client`
-8. Push over WebSocket, `/queryChanges`, first npm release
+8. ~~Push notifications through push subscriptions~~; push over WebSocket,
+   `/queryChanges`, first npm release
 9. Self-hosted build with docker-compose
 
 ## License

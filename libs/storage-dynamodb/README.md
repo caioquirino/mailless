@@ -31,6 +31,12 @@ input; the Terraform in [`infra/`](../../infra) creates the same shape.
 | Change log  | `L#<account>#<type>`                 | `<sequence>#<id>` |
 | State       | `S#<account>`                        | `<type>`          |
 
+Every commit writes the state item of each data type it changed. A table
+stream filtered on `STATE_KEY_PREFIX` therefore reports each change once, and
+`parseStateKey` turns a stream record's key into `{ accountId, type }`. That
+is how push notifications are driven without the writer having to wait for
+them.
+
 ## Behaviour worth knowing
 
 - **Every commit is one transaction**, so records, index entries, the change

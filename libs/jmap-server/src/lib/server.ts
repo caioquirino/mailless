@@ -15,10 +15,8 @@ import {
   type Session,
   type UploadResponse,
 } from '@mailless/jmap-core';
-import { z } from 'zod';
 import {
   generateId,
-  parseArguments,
   type AuthContext,
   type MethodContext,
   type MethodDefinition,
@@ -43,7 +41,15 @@ import {
   type DeliveryUpdate,
 } from './mail/submission.js';
 import { threadMethods } from './mail/thread.js';
-import type { StorageAdapter } from './storage.js';
+import {
+  pushMethods,
+  pushMethodsWhenDisabled,
+  pushStateChange,
+  resolvePushOptions,
+  type PushOptions,
+  type PushReport,
+} from './push/subscription.js';
+import type { MetadataStore, StorageAdapter } from './storage.js';
 import type { MailTransport } from './transport.js';
 
 export const DEFAULT_LIMITS: CoreCapability = {
@@ -96,6 +102,18 @@ export interface JmapServerOptions {
   identities?: (
     auth: AuthContext,
   ) => IdentityInput[] | Promise<IdentityInput[]>;
+  /**
+   * Lets clients register push subscriptions (RFC 8620 §7.2). The server then
+   * makes HTTPS requests to URLs that clients name, so this is off unless
+   * asked for. Pushes go out when `pushStateChange` is called.
+   */
+  push?: PushOptions;
+  /**
+   * Called after every write the server makes, with the data types whose
+   * state moved. A host that runs as one process can call `pushStateChange`
+   * from here; others learn of changes from their database instead.
+   */
+  onStateChange?: (accountId: string, types: string[]) => void;
 }
 
 export interface RequestSummary {
@@ -160,7 +178,40 @@ export interface JmapServer {
     submissionId: string,
     updates: Record<string, DeliveryUpdate>,
   ): Promise<boolean>;
+  /**
+   * Tells the account's push subscriptions that data changed. `types` names
+   * the data types that changed; without it, all are reported. Does nothing
+   * when push is not configured. Failures to reach a push service are counted
+   * in the result, not thrown.
+   */
+  pushStateChange(
+    accountId: string,
+    types?: readonly string[],
+  ): Promise<PushReport>;
   registerMethod(name: string, definition: MethodDefinition): void;
+}
+
+/** Wraps a store so that every successful commit is reported. */
+function reportingCommits(
+  store: MetadataStore,
+  onStateChange: (accountId: string, types: string[]) => void,
+): MetadataStore {
+  return {
+    getState: (accountId, type) => store.getState(accountId, type),
+    get: (accountId, type, ids) => store.get(accountId, type, ids),
+    list: (accountId, type, index) => store.list(accountId, type, index),
+    getChanges: (accountId, type, sinceState) =>
+      store.getChanges(accountId, type, sinceState),
+    async commit(accountId, ops, commitOptions) {
+      await store.commit(accountId, ops, commitOptions);
+      if (ops.length === 0) return;
+      try {
+        onStateChange(accountId, [...new Set(ops.map((op) => op.type))]);
+      } catch {
+        // The write happened; a failing listener must not make it look otherwise.
+      }
+    },
+  };
 }
 
 function hash(text: string): string {
@@ -193,59 +244,21 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     JSON.stringify([capabilities, mailAccountCapability, options.urls]),
   );
 
+  const metadata = options.onStateChange
+    ? reportingCommits(options.storage.metadata, options.onStateChange)
+    : options.storage.metadata;
+
   const methods = new Map<string, MethodDefinition>();
   methods.set('Core/echo', {
     capability: CAPABILITY_CORE,
     handler: async (args) => args,
   });
-  // Push is not offered, so there are never any subscriptions. Clients ask anyway when
-  // setting up an account, and "none" is the answer they can work with.
-  const PushSubscriptionGet = z.strictObject({
-    ids: z.array(z.string()).nullish(),
-    properties: z.array(z.string()).nullish(),
-  });
-  methods.set('PushSubscription/get', {
-    capability: CAPABILITY_CORE,
-    handler: async (args) => {
-      const { ids } = parseArguments(PushSubscriptionGet, args);
-      return { list: [], notFound: ids ?? [] };
-    },
-  });
-  const PushSubscriptionSet = z.strictObject({
-    create: z.record(z.string(), z.record(z.string(), z.unknown())).nullish(),
-    update: z.record(z.string(), z.record(z.string(), z.unknown())).nullish(),
-    destroy: z.array(z.string()).nullish(),
-  });
-  methods.set('PushSubscription/set', {
-    capability: CAPABILITY_CORE,
-    handler: async (args) => {
-      const { create, update, destroy } = parseArguments(
-        PushSubscriptionSet,
-        args,
-      );
-      const refuse = (keys: string[], type: string, description?: string) =>
-        keys.length === 0
-          ? null
-          : Object.fromEntries(
-              keys.map((key) => [
-                key,
-                { type, ...(description ? { description } : {}) },
-              ]),
-            );
-      return {
-        created: null,
-        updated: null,
-        destroyed: null,
-        notCreated: refuse(
-          Object.keys(create ?? {}),
-          'forbidden',
-          'Push notifications are not available on this server',
-        ),
-        notUpdated: refuse(Object.keys(update ?? {}), 'notFound'),
-        notDestroyed: refuse(destroy ?? [], 'notFound'),
-      };
-    },
-  });
+  const push = options.push ? resolvePushOptions(options.push) : undefined;
+  for (const [name, handler] of Object.entries(
+    push ? pushMethods(push) : pushMethodsWhenDisabled,
+  )) {
+    methods.set(name, { capability: CAPABILITY_CORE, handler });
+  }
 
   for (const group of [mailboxMethods, emailMethods, threadMethods]) {
     for (const [name, handler] of Object.entries(group)) {
@@ -260,7 +273,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
 
   const makeContext = (auth: AuthContext): MethodContext => ({
     auth,
-    store: options.storage.metadata,
+    store: metadata,
     blobs: options.storage.blobs,
     limits,
     createdIds: new Map(),
@@ -440,6 +453,11 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
 
     recordDelivery(auth, submissionId, updates) {
       return recordDelivery(makeContext(auth), submissionId, updates);
+    },
+
+    async pushStateChange(accountId, types) {
+      if (!push) return { sent: 0, failed: 0, removed: 0 };
+      return pushStateChange(metadata, push, accountId, types);
     },
 
     registerMethod(name, definition) {

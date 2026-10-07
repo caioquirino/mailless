@@ -125,6 +125,8 @@ export const handler = createLambdaHttpHandler({
         // A Lambda invocation carries at most 6 MB, and binary uploads arrive base64-encoded.
         limits: { maxSizeRequest: 5_000_000, maxSizeUpload: 4_000_000 },
         transport,
+        // Mail apps register where to be told of new mail. The push function does the telling.
+        push: {},
         // An account may send from the addresses that deliver to it.
         identities: (auth) =>
           identitiesFor(mailboxes, auth.accountId, accountNames),

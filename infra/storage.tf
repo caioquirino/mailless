@@ -198,6 +198,10 @@ resource "aws_dynamodb_table" "metadata" {
   range_key                   = "sk"
   deletion_protection_enabled = true
 
+  # Which items changed, without their contents: this is what push notifications are driven by.
+  stream_enabled   = true
+  stream_view_type = "KEYS_ONLY"
+
   attribute {
     name = "pk"
     type = "S"

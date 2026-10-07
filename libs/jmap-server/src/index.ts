@@ -30,6 +30,12 @@ export {
 export { type ImportedEmail, type ImportOptions } from './lib/mail/email.js';
 export { type DeliveryUpdate } from './lib/mail/submission.js';
 export {
+  isPublicHttpsUrl,
+  PUSHED_TYPES,
+  type PushOptions,
+  type PushReport,
+} from './lib/push/subscription.js';
+export {
   MailRejectedError,
   type MailEnvelope,
   type MailReceipt,

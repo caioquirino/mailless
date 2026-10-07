@@ -1,3 +1,5 @@
+import { createServer as createHttpServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import {
   CreateTableCommand,
   DeleteTableCommand,
@@ -12,6 +14,7 @@ import {
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { createJmapServer } from '@mailless/jmap-server';
 import { createAppPasswordStore } from '@mailless/jmap-server/auth';
+import { InMemoryBlobStore } from '@mailless/jmap-server/memory';
 import { buildMessage } from '@mailless/jmap-server/testing';
 import {
   DynamoDbMetadataStore,
@@ -181,6 +184,115 @@ describe.skipIf(!reachable)('delivery events Lambda bundle', () => {
         ),
       ),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe.skipIf(!reachable)('push Lambda bundle', () => {
+  it('tells a verified subscription what changed, from a stream record', async () => {
+    Object.assign(process.env, {
+      AWS_REGION: 'us-east-1',
+      AWS_ACCESS_KEY_ID: credentials.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: credentials.secretAccessKey,
+      AWS_ENDPOINT_URL_DYNAMODB: dynamoEndpoint,
+      AWS_ENDPOINT_URL_S3: s3Endpoint,
+      TABLE_NAME: tableName,
+      BUCKET: bucket,
+    });
+
+    // A stand-in push service on this machine.
+    const received: Array<Record<string, unknown>> = [];
+    const pushService = createHttpServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => {
+        received.push(JSON.parse(Buffer.concat(chunks).toString()));
+        response.writeHead(201).end();
+      });
+    });
+    await new Promise<void>((resolve) =>
+      pushService.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = pushService.address() as AddressInfo;
+
+    try {
+      // Subscribe through a server that accepts a local URL; the deployed one would refuse it.
+      const account = { accountId: 'acc-push', username: 'push@example.com' };
+      const jmap = createJmapServer({
+        storage: {
+          metadata: new DynamoDbMetadataStore({
+            client: DynamoDBDocumentClient.from(dynamo),
+            tableName,
+          }),
+          // Kept out of the bucket, which another test counts the objects of.
+          blobs: new InMemoryBlobStore(),
+        },
+        urls: { api: 'x', download: 'x', upload: 'x', eventSource: 'x' },
+        push: { allowUrl: () => true },
+      });
+      const set = async (args: Record<string, unknown>) =>
+        (
+          await jmap.handleRequest(
+            {
+              using: ['urn:ietf:params:jmap:core'],
+              methodCalls: [['PushSubscription/set', args, 'c']],
+            },
+            account,
+          )
+        ).methodResponses[0]?.[1] as Record<string, never>;
+      const created = await set({
+        create: {
+          s: {
+            deviceClientId: 'device',
+            url: `http://127.0.0.1:${port}/push`,
+            types: ['Email', 'EmailDelivery'],
+          },
+        },
+      });
+      const id = (created['created'] as { s: { id: string } }).s.id;
+      expect(received[0]).toMatchObject({ '@type': 'PushVerification' });
+      await set({
+        update: {
+          [id]: { verificationCode: received[0]?.['verificationCode'] },
+        },
+      });
+      await jmap.provisionAccount(account);
+      await jmap.importMessage(
+        account,
+        new TextEncoder().encode(buildMessage({ subject: 'Pushed' })),
+        { mailboxRole: 'inbox', delivery: true },
+      );
+
+      const bundle = new URL('../dist/push.mjs', import.meta.url).href;
+      const { handler } = (await import(
+        /* @vite-ignore */ bundle
+      )) as typeof import('./push.js');
+      const stateItem = (accountId: string, type: string) => ({
+        eventName: 'MODIFY',
+        dynamodb: { Keys: { pk: { S: `S#${accountId}` }, sk: { S: type } } },
+      });
+      await handler({
+        Records: [
+          stateItem('acc-push', 'Email'),
+          stateItem('acc-push', 'Thread'),
+          stateItem('acc-push', 'EmailDelivery'),
+          stateItem('acc-nobody', 'Email'),
+        ],
+      } as unknown as Parameters<typeof handler>[0]);
+
+      expect(received).toHaveLength(2);
+      const states = (
+        received[1] as { changed: Record<string, Record<string, string>> }
+      ).changed['acc-push'];
+      expect(received[1]?.['@type']).toBe('StateChange');
+      // Thread changed too, but this subscription did not ask about it.
+      expect(Object.keys(states ?? {}).sort()).toEqual([
+        'Email',
+        'EmailDelivery',
+      ]);
+      expect(states?.['Email']).toMatch(/^[1-9][0-9]*$/);
+    } finally {
+      pushService.close();
+    }
   });
 });
 

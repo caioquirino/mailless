@@ -6,6 +6,7 @@ import {
   RequestError,
   type Invocation,
 } from '@mailless/jmap-core';
+import { createDecipheriv, createECDH, hkdfSync } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createJmapServer, type JmapServer } from '../server.js';
 import type { StorageAdapter } from '../storage.js';
@@ -28,6 +29,57 @@ const URLS = {
 };
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+// The receiving side of a push subscription with keys (the example keys of RFC 8291).
+const RECEIVER_PRIVATE = 'q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94';
+const RECEIVER_KEYS = {
+  p256dh:
+    'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4',
+  auth: 'BTBZMqHH6r4Tts7J_aSIgg',
+};
+
+/** Decrypts a Web Push body (RFC 8291) as the client holding the keys would. */
+function decryptPush(body: Uint8Array): Json {
+  const salt = body.subarray(0, 16);
+  const keyLength = body[20] as number;
+  const senderPublic = body.subarray(21, 21 + keyLength);
+  const receiver = createECDH('prime256v1');
+  receiver.setPrivateKey(Buffer.from(RECEIVER_PRIVATE, 'base64url'));
+  const derive = (
+    key: Uint8Array,
+    keySalt: Uint8Array,
+    info: Uint8Array,
+    length: number,
+  ) => Buffer.from(hkdfSync('sha256', key, keySalt, info, length));
+  const keyMaterial = derive(
+    receiver.computeSecret(senderPublic),
+    Buffer.from(RECEIVER_KEYS.auth, 'base64url'),
+    Buffer.concat([
+      encoder.encode('WebPush: info\0'),
+      receiver.getPublicKey(),
+      senderPublic,
+    ]),
+    32,
+  );
+  const decipher = createDecipheriv(
+    'aes-128-gcm',
+    derive(
+      keyMaterial,
+      salt,
+      encoder.encode('Content-Encoding: aes128gcm\0'),
+      16,
+    ),
+    derive(keyMaterial, salt, encoder.encode('Content-Encoding: nonce\0'), 12),
+  );
+  const ciphertext = body.subarray(21 + keyLength);
+  decipher.setAuthTag(ciphertext.subarray(ciphertext.length - 16));
+  const plaintext = Buffer.concat([
+    decipher.update(ciphertext.subarray(0, ciphertext.length - 16)),
+    decipher.final(),
+  ]);
+  // The last byte is the 0x02 that ends the record.
+  return JSON.parse(plaintext.subarray(0, plaintext.length - 1).toString());
+}
 
 export interface MessageOptions {
   from?: string;
@@ -2938,6 +2990,549 @@ export function describeJmapConformance(
       );
       expect(response.methodResponses[0]?.[1]).toEqual({
         type: 'unknownMethod',
+      });
+    });
+  });
+
+  describe(`${name}: push`, () => {
+    let h: Harness;
+    let server: JmapServer;
+    let now: Date;
+    /** Every request the server made to a push service, with the body as sent. */
+    let pushed: Array<{
+      url: string;
+      headers: Record<string, string>;
+      body: Uint8Array;
+    }>;
+    /** The status the fake push service answers with, and any headers. */
+    let answer: { status: number; headers?: Record<string, string> };
+    let stateChanges: Array<{ accountId: string; types: string[] }>;
+
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      now = new Date('2026-10-07T12:00:00Z');
+      pushed = [];
+      answer = { status: 201 };
+      stateChanges = [];
+      server = createJmapServer({
+        storage: h.adapter,
+        urls: URLS,
+        onStateChange: (accountId, types) =>
+          stateChanges.push({ accountId, types }),
+        push: {
+          now: () => now,
+          maxSubscriptions: 3,
+          fetch: async (input, init) => {
+            pushed.push({
+              url: String(input),
+              headers: init?.headers as Record<string, string>,
+              body: init?.body as Uint8Array,
+            });
+            if (answer.status === 0) throw new Error('connection refused');
+            return new Response(null, answer);
+          },
+        },
+      });
+    });
+
+    const call = async (name: string, args: Json): Promise<Json> => {
+      const response = await server.handleRequest(
+        { using: [CAPABILITY_CORE], methodCalls: [[name, args, 'c']] },
+        AUTH,
+      );
+      return response.methodResponses[0];
+    };
+    const set = async (args: Json): Promise<Json> => {
+      const [name, result] = await call('PushSubscription/set', args);
+      expect(name, JSON.stringify(result)).toBe('PushSubscription/set');
+      return result;
+    };
+    const json = (index: number): Json =>
+      JSON.parse(decoder.decode(pushed[index]?.body));
+    /** Creates a subscription and confirms it, as a client that received the verification would. */
+    const subscribe = async (overrides: Json = {}): Promise<string> => {
+      const before = pushed.length;
+      const { created, notCreated } = await set({
+        create: {
+          s: {
+            deviceClientId: 'device-1',
+            url: 'https://push.example.net/v1/abc',
+            ...overrides,
+          },
+        },
+      });
+      expect(notCreated, JSON.stringify(notCreated)).toBeNull();
+      const verification = overrides.keys
+        ? decryptPush(pushed[before]?.body as Uint8Array)
+        : json(before);
+      const { updated } = await set({
+        update: {
+          [created.s.id]: { verificationCode: verification.verificationCode },
+        },
+      });
+      expect(updated).toEqual({ [created.s.id]: null });
+      pushed.length = before;
+      return created.s.id;
+    };
+
+    it('verifies a new subscription before pushing anything to it', async () => {
+      const { created } = await set({
+        create: {
+          s: {
+            deviceClientId: 'device-1',
+            url: 'https://push.example.net/v1/abc?device=1',
+            types: ['Email', 'Mailbox'],
+          },
+        },
+      });
+      const id = created.s.id;
+      // The longest lifetime the server allows, since none was asked for.
+      expect(created.s).toEqual({ id, expires: '2026-11-06T12:00:00Z' });
+
+      expect(pushed).toHaveLength(1);
+      expect(pushed[0]?.url).toBe('https://push.example.net/v1/abc?device=1');
+      expect(pushed[0]?.headers).toEqual({
+        TTL: '86400',
+        'Content-Type': 'application/json',
+      });
+      const verification = json(0);
+      expect(verification).toEqual({
+        '@type': 'PushVerification',
+        pushSubscriptionId: id,
+        verificationCode: expect.stringMatching(/^[A-Za-z0-9]{20,}$/),
+      });
+
+      // Until the client echoes the code, the URL hears nothing more.
+      const inbox = await h.mailbox('inbox');
+      await h.deliver(inbox);
+      expect(await server.pushStateChange(AUTH.accountId)).toEqual({
+        sent: 0,
+        failed: 0,
+        removed: 0,
+      });
+      expect(pushed).toHaveLength(1);
+
+      const wrong = await set({ update: { [id]: { verificationCode: 'no' } } });
+      expect(wrong.notUpdated[id]).toMatchObject({
+        type: 'invalidProperties',
+        properties: ['verificationCode'],
+      });
+      expect((await call('PushSubscription/get', { ids: [id] }))[1]).toEqual({
+        list: [
+          {
+            id,
+            deviceClientId: 'device-1',
+            verificationCode: null,
+            expires: '2026-11-06T12:00:00Z',
+            types: ['Email', 'Mailbox'],
+          },
+        ],
+        notFound: [],
+      });
+
+      const right = await set({
+        update: { [id]: { verificationCode: verification.verificationCode } },
+      });
+      expect(right.updated).toEqual({ [id]: null });
+      expect(
+        (await call('PushSubscription/get', { ids: null }))[1].list[0]
+          .verificationCode,
+      ).toBe(verification.verificationCode);
+
+      expect(await server.pushStateChange(AUTH.accountId)).toEqual({
+        sent: 1,
+        failed: 0,
+        removed: 0,
+      });
+      expect(pushed).toHaveLength(2);
+      expect(pushed[1]?.headers).toEqual({
+        TTL: '86400',
+        Topic: id,
+        'Content-Type': 'application/json',
+      });
+      // Only the types the client asked for, each with the state its /get would return.
+      expect(json(1)).toEqual({
+        '@type': 'StateChange',
+        changed: {
+          [AUTH.accountId]: {
+            Email: (await h.call('Email/get', { ids: [] })).state,
+            Mailbox: (await h.call('Mailbox/get', { ids: [] })).state,
+          },
+        },
+      });
+    });
+
+    it('pushes only the types that changed, to subscriptions that want them', async () => {
+      await subscribe({ deviceClientId: 'all', types: null });
+      await subscribe({
+        deviceClientId: 'delivery-only',
+        url: 'https://push.example.net/v1/delivery',
+        types: ['EmailDelivery', 'CalendarEvent'],
+      });
+
+      expect(await server.pushStateChange(AUTH.accountId, ['Thread'])).toEqual({
+        sent: 1,
+        failed: 0,
+        removed: 0,
+      });
+      expect(Object.keys(json(0).changed[AUTH.accountId])).toEqual(['Thread']);
+
+      pushed.length = 0;
+      await server.pushStateChange(AUTH.accountId);
+      expect(pushed).toHaveLength(2);
+      const byUrl = Object.fromEntries(
+        pushed.map((push, index) => [push.url, json(index)]),
+      );
+      expect(
+        Object.keys(
+          byUrl['https://push.example.net/v1/abc'].changed[AUTH.accountId],
+        ).sort(),
+      ).toEqual([
+        'Email',
+        'EmailDelivery',
+        'EmailSubmission',
+        'Mailbox',
+        'Thread',
+      ]);
+      expect(
+        Object.keys(
+          byUrl['https://push.example.net/v1/delivery'].changed[AUTH.accountId],
+        ),
+      ).toEqual(['EmailDelivery']);
+
+      // Types that are never pushed, and other accounts, reach nobody.
+      pushed.length = 0;
+      await server.pushStateChange(AUTH.accountId, ['PushSubscription']);
+      await server.pushStateChange('acc2');
+      expect(pushed).toHaveLength(0);
+    });
+
+    it('moves the EmailDelivery state only when mail arrives from outside', async () => {
+      const state = () =>
+        h.adapter.metadata.getState(AUTH.accountId, 'EmailDelivery');
+      const initial = await state();
+      const inbox = await h.mailbox('inbox');
+
+      // A message the client uploads is not a delivery.
+      await h.deliver(inbox);
+      expect(await state()).toBe(initial);
+
+      const raw = (subject: string) =>
+        encoder.encode(buildMessage({ subject }));
+      await server.importMessage(AUTH, raw('first'), {
+        mailboxRole: 'inbox',
+        delivery: true,
+        idempotencyKey: 'delivery-1',
+      });
+      const first = await state();
+      expect(first).not.toBe(initial);
+      expect(first).toBe((await h.call('Email/get', { ids: [] })).state);
+      expect(stateChanges.at(-1)).toEqual({
+        accountId: AUTH.accountId,
+        types: expect.arrayContaining(['Email', 'Thread', 'EmailDelivery']),
+      });
+
+      // The same delivery again changes nothing; another one does.
+      await server.importMessage(AUTH, raw('first'), {
+        mailboxRole: 'inbox',
+        delivery: true,
+        idempotencyKey: 'delivery-1',
+      });
+      expect(await state()).toBe(first);
+      await Promise.all(
+        ['second', 'third', 'fourth'].map((subject) =>
+          server.importMessage(AUTH, raw(subject), {
+            mailboxRole: 'inbox',
+            delivery: true,
+          }),
+        ),
+      );
+      expect(await state()).not.toBe(first);
+      expect((await h.call('Email/query', {})).ids).toHaveLength(5);
+    });
+
+    it('encrypts pushes for a subscription that has keys', async () => {
+      const id = await subscribe({ keys: RECEIVER_KEYS });
+      await server.pushStateChange(AUTH.accountId, ['Email']);
+
+      expect(pushed).toHaveLength(1);
+      expect(pushed[0]?.headers).toEqual({
+        TTL: '86400',
+        Topic: id,
+        'Content-Type': 'application/octet-stream',
+        'Content-Encoding': 'aes128gcm',
+      });
+      expect(decoder.decode(pushed[0]?.body)).not.toContain('StateChange');
+      expect(decryptPush(pushed[0]?.body as Uint8Array)).toEqual({
+        '@type': 'StateChange',
+        changed: { [AUTH.accountId]: { Email: expect.any(String) } },
+      });
+    });
+
+    it('never returns the URL or the keys', async () => {
+      const id = await subscribe({ keys: RECEIVER_KEYS });
+      const [, all] = await call('PushSubscription/get', {});
+      expect(Object.keys(all.list[0]).sort()).toEqual([
+        'deviceClientId',
+        'expires',
+        'id',
+        'types',
+        'verificationCode',
+      ]);
+      expect(
+        (
+          await call('PushSubscription/get', {
+            ids: [id, 'missing'],
+            properties: ['deviceClientId'],
+          })
+        )[1],
+      ).toEqual({
+        list: [{ id, deviceClientId: 'device-1' }],
+        notFound: ['missing'],
+      });
+      for (const property of ['url', 'keys']) {
+        expect(
+          await call('PushSubscription/get', { properties: [property] }),
+        ).toEqual([
+          'error',
+          expect.objectContaining({ type: 'forbidden' }),
+          'c',
+        ]);
+      }
+      expect(await call('PushSubscription/get', { properties: ['x'] })).toEqual(
+        ['error', expect.objectContaining({ type: 'invalidArguments' }), 'c'],
+      );
+      // Subscriptions belong to the user who made them.
+      const other = await server.handleRequest(
+        {
+          using: [CAPABILITY_CORE],
+          methodCalls: [['PushSubscription/get', { ids: [id] }, 'c']],
+        },
+        { accountId: 'acc2', username: 'other@example.com' },
+      );
+      expect(other.methodResponses[0]?.[1]).toEqual({
+        list: [],
+        notFound: [id],
+      });
+    });
+
+    it('refuses subscriptions it could not safely push to', async () => {
+      const refusal = async (overrides: Json) =>
+        (
+          await set({
+            create: {
+              s: {
+                deviceClientId: 'device-1',
+                url: 'https://push.example.net/x',
+                ...overrides,
+              },
+            },
+          })
+        ).notCreated?.s;
+
+      for (const url of [
+        'http://push.example.net/x',
+        'https://127.0.0.1/x',
+        'https://2130706433/x',
+        'https://0x7f.1/x',
+        'https://[::1]/x',
+        'https://169.254.169.254/latest/meta-data',
+        'https://localhost/x',
+        'https://printer.local/x',
+        'https://db.internal./x',
+        'https://intranet/x',
+        'https://user:secret@push.example.net/x',
+        'ftp://push.example.net/x',
+        '/relative',
+        `https://push.example.net/${'x'.repeat(3000)}`,
+        42,
+        null,
+      ]) {
+        expect(await refusal({ url }), String(url)).toMatchObject({
+          type: 'invalidProperties',
+          properties: ['url'],
+        });
+      }
+      for (const [property, value] of [
+        ['deviceClientId', ''],
+        ['deviceClientId', 7],
+        ['verificationCode', 'guess'],
+        ['expires', '2026-10-07T11:59:59Z'],
+        ['expires', 'tomorrow'],
+        ['types', 'Email'],
+        ['types', [1]],
+        ['keys', { p256dh: RECEIVER_KEYS.p256dh }],
+        ['keys', { p256dh: 'AAAA', auth: RECEIVER_KEYS.auth }],
+        ['keys', 'secret'],
+        ['id', 'chosen-by-client'],
+      ] as Array<[string, Json]>) {
+        expect(
+          await refusal({ [property]: value }),
+          `${property}=${JSON.stringify(value)}`,
+        ).toMatchObject({ type: 'invalidProperties', properties: [property] });
+      }
+      // Nothing was stored, and nothing was sent anywhere.
+      expect((await call('PushSubscription/get', {}))[1].list).toEqual([]);
+      expect(pushed).toHaveLength(0);
+    });
+
+    it('limits lifetime and number, and lets a client renew, narrow and remove', async () => {
+      const id = await subscribe({ expires: '2026-10-08T12:00:00.000Z' });
+      const read = async () =>
+        (await call('PushSubscription/get', { ids: [id] }))[1].list[0];
+      expect((await read()).expires).toBe('2026-10-08T12:00:00Z');
+
+      // Further than the server allows: shortened, and the client is told.
+      const renewed = await set({
+        update: { [id]: { expires: '2030-01-01T00:00:00Z', types: ['Email'] } },
+      });
+      expect(renewed.updated).toEqual({
+        [id]: { expires: '2026-11-06T12:00:00Z' },
+      });
+      expect(await read()).toMatchObject({
+        expires: '2026-11-06T12:00:00Z',
+        types: ['Email'],
+        // Renewing does not require verifying again.
+        verificationCode: expect.any(String),
+      });
+
+      const bad = await set({
+        update: {
+          [id]: { url: 'https://elsewhere.example.net/' },
+          missing: { types: null },
+        },
+        destroy: ['absent'],
+      });
+      expect(bad.notUpdated[id]).toMatchObject({
+        type: 'invalidProperties',
+        properties: ['url'],
+      });
+      expect(bad.notUpdated.missing).toEqual({ type: 'notFound' });
+      expect(bad.notDestroyed.absent).toEqual({ type: 'notFound' });
+
+      await subscribe({ deviceClientId: 'device-2' });
+      await subscribe({ deviceClientId: 'device-3' });
+      const full = await set({
+        create: {
+          s: { deviceClientId: 'device-4', url: 'https://push.example.net/4' },
+        },
+      });
+      expect(full.notCreated.s).toMatchObject({ type: 'overQuota' });
+
+      const removed = await set({ destroy: [id] });
+      expect(removed.destroyed).toEqual([id]);
+      expect(await read()).toBeUndefined();
+      await subscribe({ deviceClientId: 'device-4' });
+    });
+
+    it('stops pushing to subscriptions that expired or are no longer known', async () => {
+      const shortLived = await subscribe({
+        deviceClientId: 'short',
+        expires: '2026-10-08T12:00:00Z',
+      });
+      const longLived = await subscribe({ deviceClientId: 'long' });
+      const ids = async () =>
+        (await call('PushSubscription/get', {}))[1].list.map(
+          (subscription: Json) => subscription.id,
+        );
+
+      now = new Date('2026-10-08T12:00:00Z');
+      expect(await ids()).toEqual([longLived]);
+      expect(
+        (await set({ update: { [shortLived]: { expires: null } } })).notUpdated[
+          shortLived
+        ],
+      ).toEqual({ type: 'notFound' });
+      expect(await server.pushStateChange(AUTH.accountId)).toEqual({
+        sent: 1,
+        failed: 0,
+        removed: 1,
+      });
+      expect(
+        await h.adapter.metadata.list(AUTH.accountId, 'PushSubscription'),
+      ).toHaveLength(1);
+
+      // The push service says the subscription is gone: forget it.
+      answer = { status: 410 };
+      expect(await server.pushStateChange(AUTH.accountId)).toEqual({
+        sent: 0,
+        failed: 0,
+        removed: 1,
+      });
+      expect(await ids()).toEqual([]);
+    });
+
+    it('survives push services that fail, and slows down when asked', async () => {
+      const id = await subscribe();
+
+      for (const status of [500, 301, 0]) {
+        answer = { status };
+        expect(
+          await server.pushStateChange(AUTH.accountId),
+          String(status),
+        ).toEqual({ sent: 0, failed: 1, removed: 0 });
+      }
+      expect(pushed).toHaveLength(3);
+
+      answer = { status: 429, headers: { 'Retry-After': '120' } };
+      expect(await server.pushStateChange(AUTH.accountId)).toMatchObject({
+        failed: 1,
+      });
+      answer = { status: 201 };
+      pushed.length = 0;
+      now = new Date(now.getTime() + 119_000);
+      expect(await server.pushStateChange(AUTH.accountId)).toEqual({
+        sent: 0,
+        failed: 0,
+        removed: 0,
+      });
+      expect(pushed).toHaveLength(0);
+      now = new Date(now.getTime() + 2_000);
+      expect(await server.pushStateChange(AUTH.accountId)).toMatchObject({
+        sent: 1,
+      });
+      // None of this is visible to the client as a change to its subscription.
+      expect(
+        (await call('PushSubscription/get', { ids: [id] }))[1].list[0],
+      ).not.toHaveProperty('pausedUntil');
+
+      // A subscription whose verification never arrived stays, unverified.
+      answer = { status: 0 };
+      const { created } = await set({
+        create: {
+          s: { deviceClientId: 'device-2', url: 'https://down.example.net/' },
+        },
+      });
+      expect(created.s.id).toEqual(expect.any(String));
+    });
+
+    it('reports every write to onStateChange, and nothing for reads', async () => {
+      stateChanges.length = 0;
+      await server.handleRequest(
+        {
+          using: [CAPABILITY_CORE, CAPABILITY_MAIL],
+          methodCalls: [
+            ['Mailbox/get', { accountId: AUTH.accountId }, 'a'],
+            [
+              'Mailbox/set',
+              {
+                accountId: AUTH.accountId,
+                create: { m: { name: 'Projects' } },
+              },
+              'b',
+            ],
+          ],
+        },
+        AUTH,
+      );
+      expect(stateChanges).toEqual([
+        { accountId: AUTH.accountId, types: ['Mailbox'] },
+      ]);
+      // A server without push answers the call and does nothing.
+      expect(await h.server.pushStateChange(AUTH.accountId)).toEqual({
+        sent: 0,
+        failed: 0,
+        removed: 0,
       });
     });
   });

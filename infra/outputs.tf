@@ -30,6 +30,11 @@ output "events_dead_letter_queue" {
   value       = aws_sqs_queue.events_dead_letters.url
 }
 
+output "push_dead_letter_queue" {
+  description = "Batches of changes that could not be pushed to mail apps. It should stay empty."
+  value       = aws_sqs_queue.push_dead_letters.url
+}
+
 output "receiving_active" {
   description = "Whether SES is routing inbound mail through this stack."
   value       = var.activate_receipt_rule_set

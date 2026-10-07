@@ -38,12 +38,13 @@ response, as JMAP requires.
 
 Other entry points on the server object:
 
-| Method                                                             | Purpose                                                                                  |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `upload(auth, accountId, bytes, type)`                             | Store a blob; returns the JMAP upload response.                                          |
-| `download(auth, accountId, blobId)`                                | Bytes of an uploaded blob, a stored message, or one decoded body part; `null` if absent. |
-| `importMessage(auth, raw, { mailboxIds, keywords?, receivedAt? })` | Store a raw RFC 5322 message as an Email. Use this for inbound delivery.                 |
-| `registerMethod(name, { capability, handler })`                    | Add or replace a method.                                                                 |
+| Method                                                                        | Purpose                                                                                  |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `upload(auth, accountId, bytes, type)`                                        | Store a blob; returns the JMAP upload response.                                          |
+| `download(auth, accountId, blobId)`                                           | Bytes of an uploaded blob, a stored message, or one decoded body part; `null` if absent. |
+| `importMessage(auth, raw, { mailboxIds, keywords?, receivedAt?, delivery? })` | Store a raw RFC 5322 message as an Email. For inbound mail, pass `delivery: true`.       |
+| `pushStateChange(accountId, types?)`                                          | Tell the account's push subscriptions that data changed. See [Push](#push).              |
+| `registerMethod(name, { capability, handler })`                               | Add or replace a method.                                                                 |
 
 ### HTTP
 
@@ -105,6 +106,7 @@ time of use at most once an hour.
 | `Email/changes`, `Thread/get`, `Thread/changes`     |                                                                                                                                                      |
 | `Identity/get`, `/changes`                          | Identities come from the `identities` option; `Identity/set` refuses changes.                                                                        |
 | `EmailSubmission/set`, `/get`, `/changes`, `/query` | Sends immediately through the `transport` option, with `onSuccessUpdateEmail` and `onSuccessDestroyEmail`.                                           |
+| `PushSubscription/get`, `/set`                      | With the `push` option; see [Push](#push). Without it, there are no subscriptions and none can be made.                                              |
 | `Mailbox/queryChanges`, `Email/queryChanges`        | Always answer `cannotCalculateChanges`, which the spec allows.                                                                                       |
 
 Also implemented: result references, creation-id references across calls,
@@ -142,13 +144,67 @@ submission. When the transport later learns what happened, the host calls
 `deliveryStatus`. A known outcome is never undone by a late or repeated report,
 except that a failure overrides an earlier success.
 
+### Push
+
+With the `push` option, clients can register push subscriptions (RFC 8620
+§7.2): a URL at a push service, to which the server POSTs a small `StateChange`
+object whenever the account's data changes. This is how a mail app on a phone
+learns of new mail without keeping a connection open.
+
+```ts
+const jmap = createJmapServer({
+  storage,
+  urls,
+  push: {}, // defaults: 16 subscriptions per account, 30-day lifetime
+  // In a single long-running process, push as soon as something is written:
+  onStateChange: (accountId, types) =>
+    void jmap.pushStateChange(accountId, types),
+});
+```
+
+The server does not decide by itself when to push; the host calls
+`pushStateChange(accountId, types?)`. A single process can do that from
+`onStateChange`, as above. A host made of short-lived functions should not,
+because the function may stop before the request to the push service is made:
+there, drive it from the database's change feed instead, as
+[`apps/mailless-service`](../../apps/mailless-service) does with a DynamoDB
+stream. The call returns counts (`sent`, `failed`, `removed`) and never throws
+because a push service is unreachable.
+
+What it does and guards against:
+
+- **Verification.** A new subscription is sent a `PushVerification` object and
+  receives nothing else until the client echoes the code, so the server cannot
+  be pointed at a URL whose owner did not ask for it.
+- **Where it will connect.** Only `https` URLs whose host is a domain name
+  outside the suffixes reserved for private use; never an IP address. Redirects
+  are not followed. Replace the rule with `push.allowUrl`. The host name is not
+  resolved, so if the server runs where private addresses are reachable, also
+  restrict its outgoing connections.
+- **Encryption.** A subscription with `keys` gets every push encrypted to them
+  (RFC 8291, `aes128gcm`), so the push service cannot read it.
+- **Privacy.** `url` and `keys` are never returned by `PushSubscription/get`.
+  A push carries state strings only: which kinds of data changed, nothing
+  about the mail.
+- **Lifetime.** Subscriptions expire (clients renew by updating `expires`),
+  and are removed when their push service answers 404 or 410. After a 429 the
+  subscription is left alone for as long as `Retry-After` says.
+- **`EmailDelivery`.** This state moves only for mail imported with
+  `importMessage(..., { delivery: true })`, so a client can subscribe to new
+  mail without being woken by its own edits.
+
+Not done: subscriptions belong to the account rather than to the credentials
+that created them, so revoking one device's password does not remove its
+subscription (it expires on its own); and there is no VAPID, which browser
+push services require.
+
 ### Not implemented yet
 
 - Delayed sending and cancelling: messages are handed over at once, so
   `undoStatus` is always `final`.
 - `Email/copy`, `Email/parse`, `SearchSnippet/get`, `VacationResponse`.
 - Per-part headers, and non-text content from `bodyValues`, when creating.
-- Push (EventSource or WebSocket).
+- Push over EventSource or WebSocket; push subscriptions are supported.
 - Full-text search: `text` and `body` filters answer `unsupportedFilter`.
 
 ### Known simplifications

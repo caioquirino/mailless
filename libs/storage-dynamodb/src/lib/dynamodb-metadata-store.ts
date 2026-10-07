@@ -60,11 +60,37 @@ const STATE_PATTERN = /^(0|[1-9][0-9]*)$/;
 
 const enc = encodeURIComponent;
 
+/**
+ * Partition keys of state items start with this. A state item is written by
+ * every commit, so a table stream filtered on the prefix sees each change to
+ * an account's data exactly once per data type.
+ */
+export const STATE_KEY_PREFIX = 'S#';
+
+/**
+ * Reads the account and data type from the key of a state item, as found in a
+ * stream record. Returns null for the key of any other kind of item.
+ */
+export function parseStateKey(key: {
+  pk?: string;
+  sk?: string;
+}): { accountId: string; type: string } | null {
+  if (!key.pk?.startsWith(STATE_KEY_PREFIX) || !key.sk) return null;
+  try {
+    return {
+      accountId: decodeURIComponent(key.pk.slice(STATE_KEY_PREFIX.length)),
+      type: decodeURIComponent(key.sk),
+    };
+  } catch {
+    return null;
+  }
+}
+
 const recordPk = (account: string, type: string) =>
   `R#${enc(account)}#${enc(type)}`;
 const logPk = (account: string, type: string) =>
   `L#${enc(account)}#${enc(type)}`;
-const statePk = (account: string) => `S#${enc(account)}`;
+const statePk = (account: string) => `${STATE_KEY_PREFIX}${enc(account)}`;
 const padSeq = (seq: number) => String(seq).padStart(SEQ_DIGITS, '0');
 
 function indexPk(

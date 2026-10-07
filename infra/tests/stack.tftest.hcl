@@ -52,7 +52,8 @@ mock_provider "aws" {
 
   mock_resource "aws_dynamodb_table" {
     defaults = {
-      arn = "arn:aws:dynamodb:eu-west-1:123456789012:table/mock-table"
+      arn        = "arn:aws:dynamodb:eu-west-1:123456789012:table/mock-table"
+      stream_arn = "arn:aws:dynamodb:eu-west-1:123456789012:table/mock-table/stream/2026-10-07T00:00:00.000"
     }
   }
 
@@ -96,6 +97,7 @@ variables {
   ingest_bundle             = "tests/fixture-bundle.mjs"
   api_bundle                = "tests/fixture-bundle.mjs"
   events_bundle             = "tests/fixture-bundle.mjs"
+  push_bundle               = "tests/fixture-bundle.mjs"
 
   # Every other variable is pinned too: Terraform loads a local terraform.tfvars
   # into tests, and these must not depend on whoever runs them.
@@ -464,7 +466,7 @@ run "delivery_reporting" {
       toset(keys(aws_cloudwatch_metric_alarm.reputation)) == toset(["bounce-rate", "complaint-rate"]) &&
       aws_cloudwatch_metric_alarm.reputation["bounce-rate"].threshold < 0.05 &&
       aws_cloudwatch_metric_alarm.reputation["complaint-rate"].threshold < 0.001 &&
-      toset(keys(aws_cloudwatch_metric_alarm.dead_letters)) == toset(["ingest", "delivery-events"])
+      toset(keys(aws_cloudwatch_metric_alarm.dead_letters)) == toset(["ingest", "delivery-events", "push"])
     )
     error_message = "Alarms must fire before SES's own review thresholds, and on any unprocessed message."
   }
@@ -472,6 +474,53 @@ run "delivery_reporting" {
   assert {
     condition     = length(aws_sns_topic_subscription.alarm_email) == 0
     error_message = "Nobody is emailed unless an alarm address is given."
+  }
+}
+
+run "push_notifications" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_dynamodb_table.metadata.stream_enabled &&
+      aws_dynamodb_table.metadata.stream_view_type == "KEYS_ONLY"
+    )
+    error_message = "The table's stream must carry keys only, never mail metadata."
+  }
+
+  assert {
+    condition = (
+      jsondecode(one(one(aws_lambda_event_source_mapping.push.filter_criteria).filter).pattern) == {
+        eventName = ["INSERT", "MODIFY"]
+        dynamodb  = { Keys = { pk = { S = [{ prefix = "S#" }] } } }
+      }
+    )
+    error_message = "Only state changes may invoke the push function."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_event_source_mapping.push.maximum_retry_attempts == 2 &&
+      aws_lambda_event_source_mapping.push.maximum_record_age_in_seconds <= 600 &&
+      one(one(aws_lambda_event_source_mapping.push.destination_config).on_failure).destination_arn == aws_sqs_queue.push_dead_letters.arn
+    )
+    error_message = "A batch that keeps failing must be set aside quickly instead of holding up later changes."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.push.statement :
+      !contains(statement.resources, "*") && alltrue([
+        for action in statement.actions :
+        !endswith(action, ":*") && action != "*" && !startswith(action, "s3:") && !startswith(action, "ses:")
+      ])
+    ])
+    error_message = "The push role must have no wildcards, no access to mail content and no way to send mail."
+  }
+
+  assert {
+    condition     = length(aws_lambda_function.push.vpc_config) == 0
+    error_message = "The push function must stay outside any VPC: it calls push services named by clients and must not be able to reach private addresses."
   }
 }
 

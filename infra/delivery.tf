@@ -222,6 +222,7 @@ locals {
   dead_letter_queues = {
     ingest          = aws_sqs_queue.ingest_dead_letters.name
     delivery-events = aws_sqs_queue.events_dead_letters.name
+    push            = aws_sqs_queue.push_dead_letters.name
   }
 }
 
@@ -242,7 +243,7 @@ resource "aws_cloudwatch_metric_alarm" "reputation" {
   ok_actions          = [aws_sns_topic.alarms.arn]
 }
 
-# A message in one of these queues is mail or a delivery report that could not be processed.
+# A message in one of these queues is mail, a delivery report or a batch of changes that could not be processed.
 resource "aws_cloudwatch_metric_alarm" "dead_letters" {
   for_each = local.dead_letter_queues
 

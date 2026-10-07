@@ -41,6 +41,7 @@ import {
   type SetArgumentsLike,
   type SetSpec,
 } from '../standard/set.js';
+import type { WriteOp } from '../storage.js';
 import { buildDraft } from './draft.js';
 import { destroyEmail, getEmail, mutateThread } from './email-store.js';
 import {
@@ -59,6 +60,7 @@ import {
 import {
   baseSubject,
   EMAIL,
+  EMAIL_DELIVERY,
   isValidKeyword,
   MAILBOX,
   type EmailRecord,
@@ -743,6 +745,12 @@ export interface ImportOptions {
    * email the first one created. Use the delivery id of the inbound message.
    */
   idempotencyKey?: string;
+  /**
+   * Set for mail arriving from outside, as opposed to a message a client
+   * uploads. It moves the EmailDelivery state, which is what clients watch to
+   * learn of new mail.
+   */
+  delivery?: boolean;
 }
 
 export interface ImportedEmail {
@@ -824,6 +832,30 @@ async function stableSuffix(key: string): Promise<string> {
   return hex;
 }
 
+const DELIVERY_COUNTER = 'counter';
+
+/** Moves the EmailDelivery state. The counter record exists only to be written to. */
+async function deliveryOps(ctx: MethodContext): Promise<WriteOp[]> {
+  const [counter] = await ctx.store.get(ctx.auth.accountId, EMAIL_DELIVERY, [
+    DELIVERY_COUNTER,
+  ]);
+  return [
+    counter
+      ? {
+          kind: 'increment',
+          type: EMAIL_DELIVERY,
+          id: DELIVERY_COUNTER,
+          deltas: { count: 1 },
+        }
+      : {
+          kind: 'create',
+          type: EMAIL_DELIVERY,
+          id: DELIVERY_COUNTER,
+          value: { count: 1 },
+        },
+  ];
+}
+
 /**
  * Stores a raw RFC 5322 message as an Email. This is the one entry point for
  * new mail, used by Email/import and by inbound delivery.
@@ -887,10 +919,14 @@ export async function importMessage(
 
   await ctx.blobs.put(accountId, blobId, raw);
   try {
-    await mutateThread(ctx, threadId, (emails) =>
-      emails.some((email) => email.id === id)
-        ? []
-        : [{ kind: 'create', id, value }],
+    await mutateThread(
+      ctx,
+      threadId,
+      (emails) =>
+        emails.some((email) => email.id === id)
+          ? []
+          : [{ kind: 'create', id, value }],
+      options.delivery ? () => deliveryOps(ctx) : undefined,
     );
   } catch (error) {
     // A concurrent import with the same key may have won; its blob must not be removed.

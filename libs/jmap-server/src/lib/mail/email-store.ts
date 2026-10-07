@@ -132,6 +132,8 @@ export async function mutateThread(
   compute: (
     emails: EmailRecord[],
   ) => EmailMutation[] | Promise<EmailMutation[]>,
+  /** Further writes for the same commit, made only when `compute` changes something. */
+  alongside?: () => Promise<WriteOp[]>,
 ): Promise<void> {
   const accountId = ctx.auth.accountId;
 
@@ -221,6 +223,7 @@ export async function mutateThread(
       threadContribution(after.values()),
     );
     ops.push(...(await mailboxCountOps(ctx, deltas)));
+    if (alongside) ops.push(...(await alongside()));
 
     await commit(ctx, ops);
   });

@@ -18,11 +18,20 @@ const auth = { accountId: 'dev', username: 'dev@mailless.test' };
 const jmap: JmapServer = createJmapServer({
   storage: new InMemoryStorageAdapter(),
   urls: jmapUrls(baseUrl),
+  // Push subscriptions may point anywhere here, including plain http on this machine.
+  push: { allowUrl: () => true },
+  onStateChange: (accountId, types) =>
+    void jmap
+      .pushStateChange(accountId, types)
+      .catch((error: unknown) => console.error('push failed:', error)),
   onError: (error, method) => console.error(`${method} failed:`, error),
   // There is nowhere to send mail to from here, so everything sent comes back to the inbox.
   transport: {
     send: async (message, envelope) => {
-      await jmap.importMessage(auth, message, { mailboxRole: 'inbox' });
+      await jmap.importMessage(auth, message, {
+        mailboxRole: 'inbox',
+        delivery: true,
+      });
       // Report the delivery a moment later, as a real transport would.
       const submissionId = envelope.tags?.['submission'];
       if (submissionId) {

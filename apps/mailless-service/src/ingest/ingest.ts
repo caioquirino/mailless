@@ -66,6 +66,7 @@ async function ingestRecord(
     try {
       await deps.jmap.importMessage(auth, raw, {
         mailboxRole: isSpam ? 'junk' : 'inbox',
+        delivery: true,
         ...(isSpam ? { keywords: { $junk: true as const } } : {}),
         ...(receivedAt ? { receivedAt } : {}),
         // SES retries failed invocations; the key makes a repeat a no-op for accounts already done.

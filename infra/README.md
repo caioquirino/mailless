@@ -26,6 +26,7 @@ through SES.
 | Certificate and `mail.<domain>` (with Route53)           | The API's own hostname, plus an SRV record so clients can find it from an address.                                                       |
 | MAIL FROM subdomain                                      | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                                            |
 | SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message. |
+| Table stream and push Lambda                             | Tells mail apps that registered for it when something changed, so new mail shows up without refreshing.                                  |
 | CloudWatch alarms                                        | Bounce rate, complaint rate, and anything left in a dead-letter queue.                                                                   |
 | Route53 records (optional)                               | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.                           |
 
@@ -180,6 +181,25 @@ These commands need your AWS credentials: app passwords are created from the
 command line, not through the API, so nothing reachable from the internet can
 mint one.
 
+### Push notifications
+
+A mail app that supports JMAP push registers a push subscription when it signs
+in; there is nothing to configure. From then on, every change to the mailbox
+is reported to the app's push service within a second or two, and the app
+fetches what changed.
+
+- A push says which kinds of data changed (for example `Email`,
+  `EmailDelivery`) and their new state strings. It never contains addresses,
+  subjects or content, and it is encrypted when the app supplies keys.
+- The push function only connects to `https` addresses with public host names,
+  and only after the app has proved it receives what is sent there.
+- Subscriptions last at most 30 days unless the app renews them, and an
+  account can hold 16.
+- The function logs the kinds of data and counts only:
+  `{"event":"push","types":["Email","EmailDelivery","Thread"],"sent":1,"failed":0,"removed":0}`
+  in `/aws/lambda/<name>-push`. `sent` staying at 0 means no app has a verified
+  subscription.
+
 ### What is accepted
 
 - **Email address or name, with an app password** (HTTP Basic). The
@@ -209,8 +229,9 @@ aws logs tail /aws/lambda/mailless-ingest --since 10m
 ```
 
 The logs carry SES message ids and outcomes only, never addresses or content.
-The dead-letter queues (`ingest_dead_letter_queue` and
-`events_dead_letter_queue` outputs) should stay empty. Delivery reports are
+The dead-letter queues (`ingest_dead_letter_queue`,
+`events_dead_letter_queue` and `push_dead_letter_queue` outputs) should stay
+empty. Delivery reports are
 logged in `/aws/lambda/<name>-delivery-events`, again without addresses.
 API requests appear in `/aws/apigateway/<name>` (route, status, timing) and
 errors in `/aws/lambda/<name>-api`.

@@ -4,6 +4,12 @@ import type { IndexKeys, JsonObject, StoredRecord } from '../storage.js';
 export const MAILBOX = 'Mailbox';
 export const EMAIL = 'Email';
 export const THREAD = 'Thread';
+/**
+ * Not a type with objects of its own: its state moves only when mail arrives
+ * from outside, so a client can ask to be told about new mail and nothing
+ * else (RFC 8621 §1.5).
+ */
+export const EMAIL_DELIVERY = 'EmailDelivery';
 
 export const MAILBOX_COUNT_PROPERTIES = [
   'totalEmails',
