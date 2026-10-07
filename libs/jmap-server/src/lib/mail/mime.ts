@@ -104,15 +104,57 @@ function toBytes(content: ArrayBuffer | Uint8Array | string): Uint8Array {
   return content instanceof Uint8Array ? content : new Uint8Array(content);
 }
 
-function htmlToText(html: string): string {
+// The named character references of HTML 4 for U+00A0 to U+00FF, in code point order.
+const LATIN1_ENTITIES =
+  'nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr ' +
+  'deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest ' +
+  'Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ' +
+  'ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig ' +
+  'agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml ' +
+  'eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml';
+
+const NAMED_ENTITIES = new Map<string, string>([
+  ...LATIN1_ENTITIES.split(' ').map((name, index): [string, string] => [
+    name,
+    String.fromCharCode(160 + index),
+  ]),
+  ['nbsp', ' '],
+  ['amp', '&'],
+  ['lt', '<'],
+  ['gt', '>'],
+  ['quot', '"'],
+  ['apos', "'"],
+  ['ndash', '\u2013'],
+  ['mdash', '\u2014'],
+  ['lsquo', '\u2018'],
+  ['rsquo', '\u2019'],
+  ['ldquo', '\u201c'],
+  ['rdquo', '\u201d'],
+  ['bull', '\u2022'],
+  ['hellip', '\u2026'],
+  ['euro', '\u20ac'],
+  ['trade', '\u2122'],
+]);
+
+/** The text a reader would see: markup, styles and scripts removed, character references decoded. */
+export function htmlToText(html: string): string {
   return html
+    .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<(style|script|head)[\s\S]*?<\/\1>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"');
+    .replace(
+      /&(?:#(\d+)|#x([0-9a-f]+)|([a-z][a-z0-9]*));/gi,
+      (entity, dec, hex, name) => {
+        if (name !== undefined) {
+          return NAMED_ENTITIES.get(name as string) ?? entity;
+        }
+        const code =
+          dec !== undefined ? Number(dec) : parseInt(hex as string, 16);
+        return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+          ? String.fromCodePoint(code)
+          : ' ';
+      },
+    );
 }
 
 function makePreview(

@@ -100,9 +100,10 @@ time of use at most once an hour.
 | `Core/echo`                                         |                                                                                                                                                      |
 | `Mailbox/get`, `/changes`, `/query`, `/set`         | Including `updatedProperties`, `sortAsTree`, `filterAsTree`, `onDestroyRemoveEmails`.                                                                |
 | `Email/get`                                         | Metadata, headers in every `header:Name:asForm` variant, body structure, body values.                                                                |
-| `Email/query`                                       | All RFC 8621 filter conditions except `text` and `body`; sorting; `collapseThreads`; paging and anchors.                                             |
+| `Email/query`                                       | Every RFC 8621 filter condition, including full-text `text` and `body`; sorting; `collapseThreads`; paging and anchors.                              |
 | `Email/set`                                         | Create (drafts and messages to send) from `textBody` / `htmlBody` / `attachments` or a `bodyStructure`; update `keywords` and `mailboxIds`; destroy. |
 | `Email/import`                                      |                                                                                                                                                      |
+| `SearchSnippet/get`                                 | Subject and body excerpts with matches wrapped in `<mark>`.                                                                                          |
 | `Email/changes`, `Thread/get`, `Thread/changes`     |                                                                                                                                                      |
 | `Identity/get`, `/changes`                          | Identities come from the `identities` option; `Identity/set` refuses changes.                                                                        |
 | `EmailSubmission/set`, `/get`, `/changes`, `/query` | Sends immediately through the `transport` option, with `onSuccessUpdateEmail` and `onSuccessDestroyEmail`.                                           |
@@ -198,14 +199,33 @@ that created them, so revoking one device's password does not remove its
 subscription (it expires on its own); and there is no VAPID, which browser
 push services require.
 
+### Full-text search
+
+`text` looks in From, To, Cc, Bcc, Subject, attachment file names and the
+body; `body` looks in the body only, which includes text attachments. The body
+is the plain text part, or the HTML part with its markup removed.
+
+- Words outside quotes must all be present, in any order, and each also
+  matches longer words it begins: `invoic` finds "invoice".
+- Text in single or double quotes is a phrase, matched word for word.
+- Case, accents and punctuation are ignored. Chinese, Japanese, Thai and other
+  scripts written without spaces are matched character by character.
+
+There is no search service behind this. Each email has a companion record
+holding its words, written and destroyed in the same commit as the email, and
+a search reads those records. That costs nothing while idle and is always
+consistent; like other queries here, it reads every candidate, which suits
+personal mailboxes. Emails stored before search existed are caught up on by
+the first search that covers them. Only about the first 60,000 characters of a
+message's text are searchable.
+
 ### Not implemented yet
 
 - Delayed sending and cancelling: messages are handed over at once, so
   `undoStatus` is always `final`.
-- `Email/copy`, `Email/parse`, `SearchSnippet/get`, `VacationResponse`.
+- `Email/copy`, `Email/parse`, `VacationResponse`.
 - Per-part headers, and non-text content from `bodyValues`, when creating.
 - Push over EventSource or WebSocket; push subscriptions are supported.
-- Full-text search: `text` and `body` filters answer `unsupportedFilter`.
 
 ### Known simplifications
 

@@ -96,6 +96,29 @@ export function requiredConditionValues(
   );
 }
 
+/** Whether any condition of the filter, at any depth, has one of these properties. */
+export function filterUses(
+  filter: Condition | null | undefined,
+  properties: readonly string[],
+): boolean {
+  if (!filter) return false;
+  if (!isOperator(filter)) {
+    return properties.some((property) =>
+      Object.prototype.hasOwnProperty.call(filter, property),
+    );
+  }
+  const conditions = filter['conditions'];
+  return (
+    Array.isArray(conditions) &&
+    conditions.some(
+      (condition) =>
+        typeof condition === 'object' &&
+        condition !== null &&
+        filterUses(condition as Condition, properties),
+    )
+  );
+}
+
 export function filterAndSort<T extends { id: string }>(
   items: readonly T[],
   filter: Condition | null | undefined,

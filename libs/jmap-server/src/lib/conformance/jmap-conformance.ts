@@ -92,6 +92,8 @@ export interface MessageOptions {
   date?: string;
   text?: string;
   html?: string;
+  /** With `html`: leave out the plain text alternative. */
+  htmlOnly?: boolean;
   attachment?: { name: string; type: string; base64: string };
   headers?: string[];
 }
@@ -117,7 +119,9 @@ export function buildMessage(options: MessageOptions = {}): string {
     : null;
 
   let body: string[];
-  if (htmlPart) {
+  if (htmlPart && options.htmlOnly) {
+    body = htmlPart;
+  } else if (htmlPart) {
     body = [
       'Content-Type: multipart/alternative; boundary="alt"',
       '',
@@ -1871,12 +1875,6 @@ export function describeJmapConformance(
 
       it('rejects what it cannot evaluate', async () => {
         expect(
-          (await h.fail('Email/query', { filter: { text: 'budget' } })).type,
-        ).toBe('unsupportedFilter');
-        expect(
-          (await h.fail('Email/query', { filter: { body: 'budget' } })).type,
-        ).toBe('unsupportedFilter');
-        expect(
           (await h.fail('Email/query', { filter: { nope: true } })).type,
         ).toBe('invalidArguments');
         expect(
@@ -3534,6 +3532,336 @@ export function describeJmapConformance(
         failed: 0,
         removed: 0,
       });
+    });
+  });
+
+  describe(`${name}: full-text search`, () => {
+    let h: Harness;
+    let inbox: string;
+    let archive: string;
+    let ids: Record<string, string>;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      inbox = await h.mailbox('inbox');
+      archive = await h.mailbox('archive');
+      ids = {};
+      const deliver = async (
+        key: string,
+        box: string,
+        options: MessageOptions,
+      ) => (ids[key] = (await h.deliver(box, options)).id);
+      await deliver('budget', inbox, {
+        from: 'Jörg Müller <jorg@example.org>',
+        to: 'Me <me@example.com>',
+        subject: 'Quarterly numbers',
+        text: 'The budget review is on Thursday.\nPlease bring the café receipts & <notes>.',
+      });
+      await deliver('party', inbox, {
+        from: 'Carol <carol@example.org>',
+        cc: 'Dave Budgetson <dave@example.net>',
+        subject: 'Surprise party',
+        html: '<html><head><style>.budget { color: red }</style></head><body><p>Cake &amp; candles at <b>eight</b>&#33; R&eacute;sum&#xE9;s welcome.</p><!-- budget --></body></html>',
+        htmlOnly: true,
+      });
+      await deliver('report', archive, {
+        from: 'Reports <reports@example.org>',
+        subject: 'Monthly report',
+        text: 'See the attached file.',
+        attachment: {
+          name: 'budget-2026.txt',
+          type: 'text/plain',
+          base64: Buffer.from('Travel costs were under the forecast.').toString(
+            'base64',
+          ),
+        },
+      });
+    });
+
+    const search = async (filter: Json, extra: Json = {}) =>
+      (await h.call('Email/query', { filter, ...extra })).ids as string[];
+    const names = async (filter: Json, extra: Json = {}) => {
+      const found = await search(filter, extra);
+      return Object.keys(ids)
+        .filter((key) => found.includes(ids[key] as string))
+        .sort();
+    };
+
+    it('finds text in the body', async () => {
+      expect(await names({ body: 'thursday' })).toEqual(['budget']);
+      expect(await names({ body: 'THURSDAY review' })).toEqual(['budget']);
+      expect(await names({ body: 'cafe' })).toEqual(['budget']);
+      expect(await names({ body: 'review friday' })).toEqual([]);
+      // Words from the subject or the sender are not in the body.
+      expect(await names({ body: 'quarterly' })).toEqual([]);
+      expect(await names({ body: 'jorg' })).toEqual([]);
+    });
+
+    it('finds text in the headers as well with a text filter', async () => {
+      expect(await names({ text: 'quarterly' })).toEqual(['budget']);
+      expect(await names({ text: 'jorg' })).toEqual(['budget']);
+      expect(await names({ text: 'carol@example.org' })).toEqual(['party']);
+      // Cc, a sender name, the body, and an attachment's file name.
+      expect(await names({ text: 'budget' })).toEqual([
+        'budget',
+        'party',
+        'report',
+      ]);
+      // The words may be spread over the subject and the body.
+      expect(await names({ text: 'numbers thursday' })).toEqual(['budget']);
+      expect(await names({ text: 'numbers eight' })).toEqual([]);
+    });
+
+    it('treats quoted text as a phrase and other words as beginnings', async () => {
+      expect(await names({ body: '"budget review"' })).toEqual(['budget']);
+      expect(await names({ body: '"review budget"' })).toEqual([]);
+      expect(await names({ body: "'bring the cafe'" })).toEqual(['budget']);
+      expect(await names({ body: 'thurs rev' })).toEqual(['budget']);
+      expect(await names({ body: '"thurs"' })).toEqual([]);
+      expect(await names({ body: 'ursday' })).toEqual([]);
+    });
+
+    it('searches the text of HTML bodies, not their markup', async () => {
+      expect(await names({ body: 'cake candles eight' })).toEqual(['party']);
+      expect(await names({ body: 'resumes' })).toEqual(['party']);
+      expect(await names({ body: '"at eight"' })).toEqual(['party']);
+      for (const markup of ['style', 'color', 'html', 'amp', 'budget']) {
+        expect(await names({ body: markup }), markup).toEqual(
+          markup === 'budget' ? ['budget'] : [],
+        );
+      }
+    });
+
+    it('searches text attachments', async () => {
+      expect(await names({ body: 'forecast' })).toEqual(['report']);
+      expect(await names({ text: '"travel costs"' })).toEqual(['report']);
+    });
+
+    it('combines with other conditions, operators, sorting and paging', async () => {
+      expect(await names({ text: 'budget', inMailbox: inbox })).toEqual([
+        'budget',
+        'party',
+      ]);
+      expect(await names({ text: 'budget', inMailbox: archive })).toEqual([
+        'report',
+      ]);
+      expect(
+        await names({
+          operator: 'AND',
+          conditions: [
+            { text: 'budget' },
+            { operator: 'NOT', conditions: [{ body: 'thursday' }] },
+          ],
+        }),
+      ).toEqual(['party', 'report']);
+      expect(
+        await names({
+          operator: 'OR',
+          conditions: [{ body: 'candles' }, { body: 'forecast' }],
+        }),
+      ).toEqual(['party', 'report']);
+      expect(
+        await search(
+          { text: 'budget' },
+          { sort: [{ property: 'subject' }], position: 1, limit: 1 },
+        ),
+      ).toEqual([ids['budget']]);
+      const total = await h.call('Email/query', {
+        filter: { text: 'budget' },
+        calculateTotal: true,
+        limit: 1,
+      });
+      expect(total.total).toBe(3);
+      expect(await names({ text: '' })).toEqual(['budget', 'party', 'report']);
+      expect((await h.fail('Email/query', { filter: { text: 7 } })).type).toBe(
+        'invalidArguments',
+      );
+    });
+
+    it('follows messages as they are created, sent and destroyed', async () => {
+      const drafts = await h.mailbox('drafts');
+      const { created } = await h.call('Email/set', {
+        create: {
+          d: {
+            mailboxIds: { [drafts]: true },
+            from: [{ email: 'me@example.com' }],
+            to: [{ email: 'bob@example.org' }],
+            subject: 'Itinerary',
+            bodyValues: { b: { value: 'Flight to Zürich leaves at noon.' } },
+            textBody: [{ partId: 'b', type: 'text/plain' }],
+          },
+        },
+      });
+      expect(await search({ body: 'zurich noon' })).toEqual([created.d.id]);
+
+      await h.call('Email/set', { destroy: [created.d.id, ids['budget']] });
+      expect(await search({ body: 'zurich' })).toEqual([]);
+      expect(await names({ text: 'budget' })).toEqual(['party', 'report']);
+      // The searchable text went with the messages.
+      expect(
+        (await h.adapter.metadata.list(AUTH.accountId, 'EmailText'))
+          .map((record) => record.id)
+          .sort(),
+      ).toEqual([ids['party'], ids['report']].sort());
+
+      // Emptying a mailbox removes the text of what was only there.
+      await h.call('Mailbox/set', {
+        destroy: [archive],
+        onDestroyRemoveEmails: true,
+      });
+      expect(
+        (await h.adapter.metadata.list(AUTH.accountId, 'EmailText')).map(
+          (record) => record.id,
+        ),
+      ).toEqual([ids['party']]);
+    });
+
+    it('catches up on messages stored before search existed', async () => {
+      // As left by an older version: emails without their searchable text, and
+      // text left behind by an email that is gone.
+      const texts = await h.adapter.metadata.list(AUTH.accountId, 'EmailText');
+      await h.adapter.metadata.commit(AUTH.accountId, [
+        ...texts.map((record) => ({
+          kind: 'destroy' as const,
+          type: 'EmailText',
+          id: record.id,
+        })),
+      ]);
+      await h.adapter.metadata.commit(AUTH.accountId, [
+        {
+          kind: 'create',
+          type: 'EmailText',
+          id: 'em-gone',
+          value: { v: 1, body: ' budget ', names: ' ' },
+        },
+        {
+          kind: 'create',
+          type: 'EmailText',
+          id: ids['party'] as string,
+          value: { v: 0, body: ' outdated ', names: ' ' },
+        },
+      ]);
+
+      // A search limited to one mailbox only catches up on that mailbox.
+      expect(await names({ body: 'forecast', inMailbox: archive })).toEqual([
+        'report',
+      ]);
+      expect(
+        (await h.adapter.metadata.list(AUTH.accountId, 'EmailText'))
+          .map((record) => record.id)
+          .sort(),
+      ).toEqual([ids['party'], ids['report'], 'em-gone'].sort());
+
+      expect(await names({ text: 'budget' })).toEqual([
+        'budget',
+        'party',
+        'report',
+      ]);
+      expect(await names({ body: 'candles' })).toEqual(['party']);
+      expect(await names({ body: 'outdated' })).toEqual([]);
+      const after = await h.adapter.metadata.list(AUTH.accountId, 'EmailText');
+      expect(after.map((record) => record.id).sort()).toEqual(
+        Object.values(ids).sort(),
+      );
+      expect(after.every((record) => record.value['v'] === 1)).toBe(true);
+
+      // None of that is a change to the mail itself.
+      const state = (await h.call('Email/get', { ids: [] })).state;
+      await names({ text: 'budget' });
+      expect((await h.call('Email/get', { ids: [] })).state).toBe(state);
+    });
+
+    it('returns highlighted snippets with SearchSnippet/get', async () => {
+      const snippets = async (filter: Json, emailIds: string[]) =>
+        h.call('SearchSnippet/get', { filter, emailIds });
+
+      const result = await snippets({ text: 'budget quarter' }, [
+        ids['budget'] as string,
+        'missing',
+        ids['party'] as string,
+      ]);
+      expect(result).toEqual({
+        accountId: AUTH.accountId,
+        list: [
+          {
+            emailId: ids['budget'],
+            subject: '<mark>Quarterly</mark> numbers',
+            preview:
+              'The <mark>budget</mark> review is on Thursday. Please bring the café receipts &amp; &lt;notes&gt;.',
+          },
+          // It matched through the Cc header, which has no snippet.
+          { emailId: ids['party'], subject: null, preview: null },
+        ],
+        notFound: ['missing'],
+      });
+
+      // An HTML body is shown as text; a subject filter marks only the subject.
+      expect(
+        (await snippets({ body: '"at eight" cake' }, [ids['party'] as string]))
+          .list[0],
+      ).toEqual({
+        emailId: ids['party'],
+        subject: null,
+        preview:
+          '<mark>Cake</mark> &amp; candles <mark>at eight</mark> ! Résumés welcome.',
+      });
+      const bySubject = await snippets(
+        {
+          operator: 'AND',
+          conditions: [
+            { subject: 'party' },
+            { inMailbox: inbox },
+            { operator: 'NOT', conditions: [{ body: 'cake' }] },
+          ],
+        },
+        [ids['party'] as string],
+      );
+      expect(bySubject).toMatchObject({
+        list: [
+          {
+            subject: 'Surprise <mark>party</mark>',
+            // What a match must not contain is not highlighted.
+            preview: null,
+          },
+        ],
+        notFound: null,
+      });
+
+      // Without anything to look for there is nothing to highlight.
+      for (const filter of [null, { hasKeyword: '$seen' }]) {
+        expect(
+          (await snippets(filter, [ids['budget'] as string])).list,
+        ).toEqual([{ emailId: ids['budget'], subject: null, preview: null }]);
+      }
+
+      expect(
+        (
+          await h.fail('SearchSnippet/get', {
+            filter: { nope: 1 },
+            emailIds: [],
+          })
+        ).type,
+      ).toBe('invalidArguments');
+      expect(
+        (
+          await h.fail('SearchSnippet/get', {
+            emailIds: Array.from({ length: 501 }, (_, index) => `e${index}`),
+          })
+        ).type,
+      ).toBe('requestTooLarge');
+    });
+
+    it('keeps a snippet of a long body within 255 octets', async () => {
+      const filler = 'Lorem ipsum dolor sit amet, consectetur adipiscing. ';
+      const { id } = await h.deliver(inbox, {
+        subject: 'Long one',
+        text: `${filler.repeat(30)}The überraschung is ready. ${filler.repeat(30)}`,
+      });
+      const { list } = await h.call('SearchSnippet/get', {
+        filter: { body: 'uberraschung' },
+        emailIds: [id],
+      });
+      expect(encoder.encode(list[0].preview).length).toBeLessThanOrEqual(255);
+      expect(list[0].preview).toContain('<mark>überraschung</mark> is ready.');
     });
   });
 }

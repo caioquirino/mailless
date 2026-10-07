@@ -13,9 +13,16 @@ import {
   type MailboxCounts,
   type ThreadRecord,
 } from './model.js';
+import { destroyTextOps, emailTextOp, type EmailTextValue } from './search.js';
 
 export type EmailMutation =
-  | { kind: 'create'; id: string; value: EmailValue }
+  | {
+      kind: 'create';
+      id: string;
+      value: EmailValue;
+      /** The email's searchable text, stored alongside it. */
+      text?: EmailTextValue;
+    }
   | {
       kind: 'update';
       id: string;
@@ -158,6 +165,7 @@ export async function mutateThread(
           value: asJson(mutation.value),
           indexes: emailIndexes(mutation.value),
         });
+        if (mutation.text) ops.push(emailTextOp(mutation.id, mutation.text));
         continue;
       }
 
@@ -223,6 +231,15 @@ export async function mutateThread(
       threadContribution(after.values()),
     );
     ops.push(...(await mailboxCountOps(ctx, deltas)));
+    // An email's searchable text goes when it does.
+    ops.push(
+      ...(await destroyTextOps(
+        ctx,
+        mutations.flatMap((mutation) =>
+          mutation.kind === 'destroy' ? [mutation.id] : [],
+        ),
+      )),
+    );
     if (alongside) ops.push(...(await alongside()));
 
     await commit(ctx, ops);

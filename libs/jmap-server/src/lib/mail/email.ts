@@ -30,9 +30,11 @@ import { loadForGet } from '../standard/get.js';
 import {
   compareStrings,
   filterAndSort,
+  filterUses,
   paginate,
   requiredConditionValues,
   type CompareFn,
+  validateFilter,
   type QuerySpec,
 } from '../standard/query.js';
 import {
@@ -57,6 +59,18 @@ import {
   parseMessage,
   splitPartBlobId,
 } from './mime.js';
+import {
+  bodyText,
+  extractText,
+  highlight,
+  loadSearchText,
+  matchesSearch,
+  MAX_SNIPPET_BYTES,
+  parseSearch,
+  searchableHeaders,
+  type EmailTextValue,
+  type SearchQuery,
+} from './search.js';
 import {
   baseSubject,
   EMAIL,
@@ -308,6 +322,8 @@ async function toEmailObject(
 interface EmailItem {
   id: string;
   email: EmailValue;
+  /** Present when the filter searches inside messages. */
+  text?: EmailTextValue;
 }
 
 type ThreadIndex = Map<string, EmailValue[]>;
@@ -334,6 +350,8 @@ const CONDITION_VALIDATORS: Record<string, (value: unknown) => boolean> = {
   hasKeyword: isString,
   notKeyword: isString,
   hasAttachment: isBoolean,
+  text: isString,
+  body: isString,
   from: isString,
   to: isString,
   cc: isString,
@@ -344,8 +362,8 @@ const CONDITION_VALIDATORS: Record<string, (value: unknown) => boolean> = {
     ((value as string[]).length === 1 || (value as string[]).length === 2),
 };
 
-/** Conditions that need message bodies, which no search backend indexes yet. */
-const UNSUPPORTED_CONDITIONS = ['text', 'body'];
+/** Conditions that look inside messages, for which the searchable text has to be loaded. */
+const TEXT_CONDITIONS = ['text', 'body'];
 
 const THREAD_KEYWORD_PROPERTIES = [
   'allInThreadHaveKeyword',
@@ -385,15 +403,24 @@ function threadKeywordCount(
 }
 
 function emailQuerySpec(threads: ThreadIndex): QuerySpec<EmailItem> {
+  const searches = new Map<string, SearchQuery>();
+  const search = (text: string): SearchQuery => {
+    let query = searches.get(text);
+    if (!query) searches.set(text, (query = parseSearch(text)));
+    return query;
+  };
+  const headerTexts = new WeakMap<EmailValue, string>();
+  const headerText = (email: EmailValue): string => {
+    let text = headerTexts.get(email);
+    if (text === undefined) {
+      headerTexts.set(email, (text = searchableHeaders(email)));
+    }
+    return text;
+  };
+
   return {
     validateCondition(condition) {
       for (const [key, value] of Object.entries(condition)) {
-        if (UNSUPPORTED_CONDITIONS.includes(key)) {
-          throw new MethodError(
-            'unsupportedFilter',
-            `Filtering on "${key}" needs full-text search, which is not available`,
-          );
-        }
         const validator = CONDITION_VALIDATORS[key];
         if (!validator) {
           throw new MethodError(
@@ -410,10 +437,20 @@ function emailQuerySpec(threads: ThreadIndex): QuerySpec<EmailItem> {
       }
     },
 
-    matches({ email }, condition) {
+    matches({ email, text }, condition) {
       for (const [key, value] of Object.entries(condition)) {
         let ok: boolean;
         switch (key) {
+          case 'text':
+            ok = matchesSearch(search(value as string), [
+              headerText(email),
+              text?.names ?? '',
+              text?.body ?? '',
+            ]);
+            break;
+          case 'body':
+            ok = matchesSearch(search(value as string), [text?.body ?? '']);
+            break;
           case 'inMailbox':
             ok = email.mailboxIds[value as string] === true;
             break;
@@ -925,7 +962,7 @@ export async function importMessage(
       (emails) =>
         emails.some((email) => email.id === id)
           ? []
-          : [{ kind: 'create', id, value }],
+          : [{ kind: 'create', id, value, text: extractText(parsed) }],
       options.delivery ? () => deliveryOps(ctx) : undefined,
     );
   } catch (error) {
@@ -979,6 +1016,42 @@ async function importOne(
   return { ...imported };
 }
 
+// -------------------------------------------------------- SearchSnippet/get
+
+const SearchSnippetArgumentsSchema = z.strictObject({
+  accountId: z.string(),
+  filter: z.record(z.string(), z.unknown()).nullish(),
+  emailIds: z.array(z.string()),
+});
+
+/**
+ * What to highlight for a filter: the text of the given conditions, wherever
+ * they appear. Conditions under a NOT are left out, since they describe what
+ * a match does not contain.
+ */
+function snippetSearch(
+  filter: Record<string, unknown> | null | undefined,
+  conditions: readonly string[],
+): SearchQuery {
+  const phrases: SearchQuery['phrases'] = [];
+  const visit = (node: Record<string, unknown>) => {
+    if (Array.isArray(node['conditions'])) {
+      if (node['operator'] === 'NOT') return;
+      for (const child of node['conditions']) {
+        visit(child as Record<string, unknown>);
+      }
+      return;
+    }
+    for (const name of conditions) {
+      if (typeof node[name] === 'string') {
+        phrases.push(...parseSearch(node[name]).phrases);
+      }
+    }
+  };
+  if (filter) visit(filter);
+  return { phrases };
+}
+
 // ------------------------------------------------------------------ methods
 
 export const emailMethods: Record<string, MethodHandler> = {
@@ -1015,13 +1088,11 @@ export const emailMethods: Record<string, MethodHandler> = {
     const accountId = requireAccount(ctx, args.accountId);
     const state = await ctx.store.getState(accountId, EMAIL);
 
-    const needsThreads = THREAD_KEYWORD_PROPERTIES.some(
-      (property) =>
-        JSON.stringify(args.filter ?? {}).includes(`"${property}"`) ||
-        (args.sort ?? []).some(
-          (comparator) => comparator.property === property,
-        ),
-    );
+    const needsThreads =
+      filterUses(args.filter, THREAD_KEYWORD_PROPERTIES) ||
+      (args.sort ?? []).some((comparator) =>
+        THREAD_KEYWORD_PROPERTIES.includes(comparator.property),
+      );
     const mailboxes = requiredConditionValues(args.filter, 'inMailbox');
     const narrowTo =
       mailboxes.length === 1 && typeof mailboxes[0] === 'string'
@@ -1049,11 +1120,34 @@ export const emailMethods: Record<string, MethodHandler> = {
       }
     }
 
+    const spec = emailQuerySpec(threads);
+    // Checked before any text is loaded, so a bad filter costs nothing.
+    if (args.filter) {
+      validateFilter(args.filter, (condition) =>
+        spec.validateCondition(condition),
+      );
+    }
+    const texts = filterUses(args.filter, TEXT_CONDITIONS)
+      ? await loadSearchText(
+          ctx,
+          candidates,
+          narrowTo === undefined,
+          parseMessage,
+        )
+      : undefined;
+
     let sorted = filterAndSort(
-      candidates.map((record) => ({ id: record.id, email: record.value })),
+      candidates.map((record) => {
+        const text = texts?.get(record.id);
+        return {
+          id: record.id,
+          email: record.value,
+          ...(text ? { text } : {}),
+        };
+      }),
       args.filter,
       args.sort,
-      emailQuerySpec(threads),
+      spec,
     );
     if (args.collapseThreads) {
       const seen = new Set<string>();
@@ -1071,6 +1165,78 @@ export const emailMethods: Record<string, MethodHandler> = {
         args,
         state,
       ),
+    };
+  },
+
+  'SearchSnippet/get': async (rawArgs, ctx) => {
+    const args = parseArguments(SearchSnippetArgumentsSchema, rawArgs);
+    const accountId = requireAccount(ctx, args.accountId);
+    const emailIds = [...new Set(args.emailIds)];
+    if (emailIds.length > ctx.limits.maxObjectsInGet) {
+      throw new MethodError(
+        'requestTooLarge',
+        `Snippets for at most ${ctx.limits.maxObjectsInGet} emails may be requested at once`,
+      );
+    }
+    if (args.filter) {
+      const spec = emailQuerySpec(new Map());
+      validateFilter(args.filter, (condition) =>
+        spec.validateCondition(condition),
+      );
+    }
+    const inSubject = snippetSearch(args.filter, ['text', 'subject']);
+    const inBody = snippetSearch(args.filter, ['text', 'body']);
+
+    const records = (await ctx.store.get(
+      accountId,
+      EMAIL,
+      emailIds,
+    )) as unknown as EmailRecord[];
+    const byId = new Map(records.map((record) => [record.id, record]));
+    const previews = new Map<string, string | null>();
+    if (inBody.phrases.length > 0) {
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(8, records.length) }, async () => {
+          while (next < records.length) {
+            const record = records[next++] as EmailRecord;
+            const raw = await ctx.blobs.get(accountId, record.value.blobId);
+            if (!raw) continue;
+            try {
+              previews.set(
+                record.id,
+                highlight(
+                  bodyText(await parseMessage(raw)),
+                  inBody,
+                  MAX_SNIPPET_BYTES,
+                ),
+              );
+            } catch (error) {
+              if (!(error instanceof InvalidMessageError)) throw error;
+            }
+          }
+        }),
+      );
+    }
+
+    const notFound = emailIds.filter((id) => !byId.has(id));
+    return {
+      accountId,
+      list: emailIds.flatMap((id) => {
+        const record = byId.get(id);
+        if (!record) return [];
+        return [
+          {
+            emailId: id,
+            subject:
+              inSubject.phrases.length > 0
+                ? highlight(record.value.subject ?? '', inSubject)
+                : null,
+            preview: previews.get(id) ?? null,
+          },
+        ];
+      }),
+      notFound: notFound.length > 0 ? notFound : null,
     };
   },
 
