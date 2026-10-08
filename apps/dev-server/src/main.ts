@@ -65,6 +65,8 @@ async function accountFor(username: string): Promise<AuthContext> {
 const jmap: JmapServer = createJmapServer({
   storage: new InMemoryStorageAdapter(),
   urls: jmapUrls(baseUrl),
+  // Enough room for trying things out, and a quota for clients to show.
+  quota: { maxOctets: 1024 * 1024 * 1024 },
   // A held message is sent by a timer. It is lost if the server stops first, like everything else here.
   scheduler: {
     schedule: async ({ accountId, submissionId, sendAt }) => {

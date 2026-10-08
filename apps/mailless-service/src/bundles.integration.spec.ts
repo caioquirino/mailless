@@ -321,7 +321,7 @@ describe.skipIf(!reachable)('push Lambda bundle', () => {
         'Email',
         'EmailDelivery',
       ]);
-      expect(states?.['Email']).toMatch(/^[1-9][0-9]*$/);
+      expect(states?.['Email']).toMatch(/^s[1-9][0-9]*$/);
     } finally {
       pushService.close();
     }

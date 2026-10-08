@@ -129,6 +129,16 @@ export function filterAndSort<T extends { id: string }>(
 ): T[] {
   if (filter) validateFilter(filter, (c) => spec.validateCondition(c));
   const comparators = (sort ?? []).map((comparator) => {
+    if (
+      comparator.collation !== undefined &&
+      comparator.collation !== null &&
+      !COLLATIONS.includes(comparator.collation)
+    ) {
+      throw new MethodError(
+        'unsupportedSort',
+        `The collation "${comparator.collation}" is not supported`,
+      );
+    }
     const compare = spec.comparator(comparator);
     return comparator.isAscending === false
       ? (a: T, b: T) => compare(b, a)
@@ -192,10 +202,41 @@ export function paginate(
   };
 }
 
-export function compareStrings(a: string, b: string): number {
-  const left = a.toLowerCase();
-  const right = b.toLowerCase();
-  return left < right ? -1 : left > right ? 1 : 0;
+/**
+ * The collations a comparator may name (RFC 8620 §5.5, from the registry of
+ * RFC 4790). Without one, text is compared octet by octet, which puts capital
+ * letters before small ones; `i;ascii-casemap` ignores the case of ASCII
+ * letters.
+ */
+export const COLLATIONS = ['i;ascii-casemap', 'i;octet'];
+
+const encoder = new TextEncoder();
+
+function compareOctets(a: string, b: string): number {
+  if (a === b) return 0;
+  const left = encoder.encode(a);
+  const right = encoder.encode(b);
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index++) {
+    const difference = (left[index] as number) - (right[index] as number);
+    if (difference !== 0) return difference < 0 ? -1 : 1;
+  }
+  return left.length < right.length ? -1 : left.length > right.length ? 1 : 0;
+}
+
+function foldAscii(text: string): string {
+  return text.replace(/[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+/** Compares two strings the way a comparator's collation asks. */
+export function compareStrings(
+  a: string,
+  b: string,
+  collation?: string | null,
+): number {
+  return collation === 'i;ascii-casemap'
+    ? compareOctets(foldAscii(a), foldAscii(b))
+    : compareOctets(a, b);
 }
 
 export interface QueryChangesInput {

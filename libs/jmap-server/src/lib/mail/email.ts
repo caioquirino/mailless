@@ -50,6 +50,7 @@ import {
   type SetSpec,
 } from '../standard/set.js';
 import type { WriteOp } from '../storage.js';
+import { usedOctets } from '../quota.js';
 import { buildDraft } from './draft.js';
 import { sendVacationReply } from './vacation.js';
 import { destroyEmail, getEmail, mutateThread } from './email-store.js';
@@ -623,15 +624,24 @@ function emailQuerySpec(threads: ThreadIndex): QuerySpec<EmailItem> {
           return (a, b) => a.email.size - b.email.size;
         case 'from':
           return (a, b) =>
-            compareStrings(sortKey(a.email.from), sortKey(b.email.from));
+            compareStrings(
+              sortKey(a.email.from),
+              sortKey(b.email.from),
+              comparator.collation,
+            );
         case 'to':
           return (a, b) =>
-            compareStrings(sortKey(a.email.to), sortKey(b.email.to));
+            compareStrings(
+              sortKey(a.email.to),
+              sortKey(b.email.to),
+              comparator.collation,
+            );
         case 'subject':
           return (a, b) =>
             compareStrings(
               baseSubject(a.email.subject),
               baseSubject(b.email.subject),
+              comparator.collation,
             );
         case 'hasKeyword': {
           const name = needsKeyword();
@@ -904,7 +914,9 @@ async function findThread(
       value: key,
     })) as unknown as EmailRecord[];
     const match = related.find(
-      (record) => baseSubject(record.value.subject) === subject,
+      (record) =>
+        !ctx.threadsRequireSameSubject ||
+        baseSubject(record.value.subject) === subject,
     );
     if (match) return match.value.threadId;
   }
@@ -1018,6 +1030,16 @@ export async function importMessage(
       throw new SetFailure('invalidEmail', error.message);
     }
     throw error;
+  }
+
+  // Mail arriving from outside is never turned away for lack of room: the
+  // sender could do nothing about it. What the user adds themself is.
+  if (
+    !options.delivery &&
+    ctx.quotaOctets !== null &&
+    (await usedOctets(ctx)) + raw.length > ctx.quotaOctets
+  ) {
+    throw new SetFailure('overQuota', 'The account has no room for this');
   }
 
   const threadId =

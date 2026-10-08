@@ -11,6 +11,7 @@ import {
   type MetadataStore,
   type WriteOp,
 } from './storage.js';
+import type { Principal } from './principals.js';
 import type { MailTransport, SendScheduler } from './transport.js';
 
 /** Who is making the request. Authentication happens in the host, before the server is called. */
@@ -45,6 +46,14 @@ export interface MethodContext {
   forAccount(accountId: string): MethodContext | undefined;
   /** Whether the user may only read this account. */
   isReadOnly: boolean;
+  /** The most octets of mail the account may hold, or null for no limit. */
+  quotaOctets: number | null;
+  /** The capabilities the request said it uses. */
+  using: readonly string[];
+  /** The user making the request, whichever account the call acts on. */
+  user: AuthContext;
+  /** The principals the user may see: whoever owns each account they may use. */
+  principals(): Promise<Principal[]>;
   store: MetadataStore;
   blobs: BlobStore;
   limits: CoreCapability;
@@ -63,6 +72,10 @@ export interface MethodContext {
   scheduler?: SendScheduler;
   /** The longest a message may be held, in seconds; 0 when it cannot be. */
   maxDelayedSend: number;
+  /** What `isSubscribed` is on a mailbox created without saying. */
+  subscribeByDefault: boolean;
+  /** Whether a reply must keep the subject to join the thread of what it answers. */
+  threadsRequireSameSubject: boolean;
   /** The addresses the caller may send from. */
   identities(): Promise<ResolvedIdentity[]>;
   /** Told what became of the vacation response for a delivered message. */
@@ -122,7 +135,10 @@ export function requireCopyAccounts(
     );
   }
   const from = ctx.forAccount(fromAccountId);
-  if (!from) throw new MethodError('fromAccountNotFound');
+  // RFC 8620 §5.4 also defines `fromAccountNotFound` for this. `accountNotFound`
+  // is what other servers answer and what clients written against them expect,
+  // and it says the same thing about an account the user cannot use.
+  if (!from) throw new MethodError('accountNotFound');
   return { from, to: ctx };
 }
 

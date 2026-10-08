@@ -32,15 +32,20 @@ run, including the scenarios that passed.
 
 ## What is and is not in scope
 
-The suite covers more than this server sets out to do. Skipped by design:
-contacts, calendars, principals, quotas and MDN are separate specifications.
-Skipped for now: `VacationResponse`, the blob extension, and the tests that
-need two accounts sharing data.
+Every test the suite runs against this server passes; `baseline.json` lists
+only the files that are skipped. Those cover calendars, which this server
+does not implement, and one test of a principal's availability, which needs
+calendars.
 
-A failure is not always a bug here. Each assertion in the suite cites the text
-it enforces; read that first. Where the suite expects something the RFC leaves
-open, add a `note` to the entry in `baseline.json` saying why it is being left;
-`--update` keeps notes for as long as their entry remains.
+The suite expects one particular behaviour in a few places where the RFCs
+allow several. The server follows the suite there, since that is what clients
+written against other servers expect; the choices are listed in the
+[`jmap-server` README](../../libs/jmap-server/README.md#choices-the-specification-leaves-open).
+
+When a test fails after a change, read the spec citation in its comments
+first. If the suite turns out to expect more than the RFC asks, a `note` on
+the entry in `baseline.json` records why it is being left; `--update` keeps
+notes for as long as their entry remains.
 
 ## How it is put together
 

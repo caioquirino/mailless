@@ -111,6 +111,11 @@ time of use at most once an hour.
 | `PushSubscription/get`, `/set`                                               | With the `push` option; see [Push](#push). Without it, there are no subscriptions and none can be made.                                                                                                                                    |
 | `Mailbox/queryChanges`, `Email/queryChanges`, `EmailSubmission/queryChanges` | Calculated from the change log, so a client can bring a cached result list up to date instead of fetching it again. Everything that changed is reported as removed and, if still a result, added back at its place, which the spec allows. |
 | `VacationResponse/get`, `/set`                                               | Offered when the server can send; see [Vacation response](#vacation-response).                                                                                                                                                             |
+| `Blob/upload`, `/get`, `/lookup`                                             | RFC 9404: make a blob from text, base64 and pieces of other blobs; read a blob or a range of it with digests; find the emails, threads and mailboxes that refer to one.                                                                    |
+| `Quota/get`, `/changes`, `/query`, `/queryChanges`                           | RFC 9425, with the `quota` option; see [Quota](#quota).                                                                                                                                                                                    |
+| `MDN/parse`, `/send`                                                         | RFC 9007 read receipts, offered when the server can send; see [Read receipts](#read-receipts).                                                                                                                                             |
+| `Principal/*`, `ShareNotification/*`                                         | RFC 9670; see [Principals](#principals).                                                                                                                                                                                                   |
+| `AddressBook/*`, `ContactCard/*`                                             | RFC 9610 contacts, with cards as JSContact (RFC 9553); see [Contacts](#contacts).                                                                                                                                                          |
 | `Email/copy`, `Blob/copy`                                                    | Between two accounts the user may use; see [Shared accounts](#shared-accounts). With `onSuccessDestroyOriginal`, a copy is a move.                                                                                                         |
 
 Also implemented: result references, creation-id references across calls,
@@ -290,6 +295,62 @@ If the transport refuses the message when its time comes, each recipient's
 throws and should be called again; a crash at the wrong instant can, rarely,
 send a message twice, never lose it.
 
+### Quota
+
+With `quota: { maxOctets }`, each account has one quota: the octets its mail
+takes up, against that limit. The count is kept in a record of its own that
+moves in the same commit as the mail, so it is always right, and an account
+from before the count existed is counted the first time it is needed.
+
+What the user adds beyond the limit (`Email/import`, `Email/set` create) is
+refused with `overQuota`. Mail imported with `delivery: true` is never refused:
+the sender could do nothing about a full mailbox. Without the option there is
+no quota to show, and nothing is limited.
+
+### Read receipts
+
+`MDN/parse` reads a message disposition notification, from this server or any
+other, and says which email it answers when there is exactly one with that
+Message-ID. `MDN/send` answers a message that asked for a receipt:
+
+- only a message with a `Disposition-Notification-To` header gets one, and it
+  goes to the address in that header and nowhere else;
+- the same request must set the `$mdnsent` keyword on the message, and a
+  message that has it is not answered again;
+- `includeOriginalMessage` attaches the original's headers, not its content.
+
+### Principals
+
+A principal stands for whoever owns an account. A user sees the principal of
+their own account and one for each account shared with them, in their own
+account; nothing else on the server is listed. The directory comes from what
+the host says about the user, so `Principal/set` refuses every change, and
+`Principal/changes` can only say "start over" when it has changed.
+
+`ShareNotification` objects can be read, queried and dismissed. The server
+does not create any yet: sharing is set by the host, not through the API, so
+there is no moment at which a change of rights is seen.
+
+### Contacts
+
+An account has address books, and cards in them. `provisionAccount` gives an
+account one address book, its default, when it has none. A card is stored as
+the client gave it, so properties from JSContact extensions survive; what RFC
+9553 defines is checked for its type and its mandatory members, and a card
+that fails is refused with the paths of what is wrong. The server adds what a
+card must have and the client left out: `uid`, `created`, `updated`.
+
+- `ContactCard/query` supports every filter and sort of RFC 9610. Text is
+  matched without regard to case; words may be anywhere, and a quoted phrase
+  must appear as it is. `ContactCard/queryChanges` is calculated.
+- A photo can be an uploaded blob (`blobId` in place of `uri`). It must be an
+  image, which is told from the content, not from what the upload claimed.
+  `ContactCard/copy` copies such files along with the card.
+- A card is one record, so it may take up 256 KiB at most. Larger files
+  belong in a blob. A `data:` URI is kept as it is and not turned into a blob.
+- `shareWith` is always null: access is given to a whole account (see
+  [Shared accounts](#shared-accounts)), not to one address book.
+
 ### Vacation response
 
 With a `transport`, the server offers the vacation response capability: one
@@ -310,6 +371,23 @@ mail from being delivered; `onAutoReply` is told what happened.
 ### Not implemented yet
 
 - Push over EventSource or WebSocket; push subscriptions are supported.
+
+### Choices the specification leaves open
+
+Where RFC 8620 and 8621 allow more than one behaviour, this server does what
+the other JMAP servers do, which is also what Fastmail's test suite expects:
+
+- **Sorting text** is octet by octet unless a comparator names a collation, so
+  capital letters come first. `i;ascii-casemap` ignores case.
+- **Threads** follow the reply chain. `threadsRequireSameSubject` adds the
+  check RFC 8621 §3 recommends, that a reply also keeps the subject.
+- **`isSubscribed`** is false on a new mailbox unless the client sets it.
+  `subscribeNewMailboxes` makes it true, for mail apps that show only
+  subscribed mailboxes.
+- **An account the user cannot use** is `accountNotFound` on either side of a
+  `/copy`, where the RFC also defines `fromAccountNotFound` for the source.
+- **State strings** always begin with a letter, so that none can be mistaken
+  for an empty value.
 
 ### Known simplifications
 

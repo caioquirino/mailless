@@ -1,13 +1,23 @@
 import {
   CAPABILITY_CORE,
   CAPABILITY_MAIL,
+  CAPABILITY_BLOB,
+  CAPABILITY_CONTACTS,
+  CAPABILITY_MDN,
+  CAPABILITY_PRINCIPALS,
+  CAPABILITY_QUOTA,
   CAPABILITY_SUBMISSION,
   CAPABILITY_VACATION,
   REQUEST_ERROR,
   RequestError,
   type Invocation,
 } from '@mailless/jmap-core';
-import { createDecipheriv, createECDH, hkdfSync } from 'node:crypto';
+import {
+  createDecipheriv,
+  createECDH,
+  createHash,
+  hkdfSync,
+} from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createJmapServer, type JmapServer } from '../server.js';
 import type { StorageAdapter } from '../storage.js';
@@ -24,6 +34,11 @@ const USING = [
   CAPABILITY_MAIL,
   CAPABILITY_SUBMISSION,
   CAPABILITY_VACATION,
+  CAPABILITY_BLOB,
+  CAPABILITY_QUOTA,
+  CAPABILITY_MDN,
+  CAPABILITY_PRINCIPALS,
+  CAPABILITY_CONTACTS,
 ];
 const URLS = {
   api: 'https://jmap.example.com/api',
@@ -675,7 +690,7 @@ export function describeJmapConformance(
         unreadEmails: 0,
         totalThreads: 0,
         unreadThreads: 0,
-        isSubscribed: true,
+        isSubscribed: false,
       });
       expect(inbox.myRights.mayAddItems).toBe(true);
     });
@@ -834,7 +849,7 @@ export function describeJmapConformance(
             name: 'Zeta',
             parentId: inbox,
             sortOrder: 1,
-            isSubscribed: false,
+            isSubscribed: true,
           },
           b: { name: 'Alpha', parentId: inbox, sortOrder: 2 },
         },
@@ -870,9 +885,8 @@ export function describeJmapConformance(
         }),
       ).toEqual(['Zeta', 'Alpha']);
       expect(await names({ filter: { name: 'ALP' } })).toEqual(['Alpha']);
-      expect(await names({ filter: { isSubscribed: false } })).toEqual([
-        'Zeta',
-      ]);
+      // A mailbox is subscribed only when the client says so.
+      expect(await names({ filter: { isSubscribed: true } })).toEqual(['Zeta']);
       expect(
         await names({
           filter: {
@@ -921,18 +935,19 @@ export function describeJmapConformance(
       const inbox = await h.mailbox('inbox');
       const created = await h.call('Mailbox/set', {
         create: {
-          a: { name: 'Keep', parentId: inbox, isSubscribed: false },
-          b: { name: 'Nested', parentId: '#a', isSubscribed: false },
+          a: { name: 'Keep', parentId: inbox, isSubscribed: true },
+          b: { name: 'Nested', parentId: '#a', isSubscribed: true },
         },
       });
       const flat = await h.call('Mailbox/query', {
-        filter: { isSubscribed: false },
+        filter: { isSubscribed: true },
       });
       expect(flat.ids.sort()).toEqual(
         [created.created.a.id, created.created.b.id].sort(),
       );
+      // Their parent, the inbox, does not match, so as a tree neither do they.
       const asTree = await h.call('Mailbox/query', {
-        filter: { isSubscribed: false },
+        filter: { isSubscribed: true },
         filterAsTree: true,
       });
       expect(asTree.ids).toEqual([]);
@@ -1383,6 +1398,186 @@ export function describeJmapConformance(
       ]);
     });
 
+    it('threads a reply with a new subject by what it answers, unless told to go by subject too', async () => {
+      const send = async (server: JmapServer, options: MessageOptions) =>
+        (
+          await server.importMessage(
+            AUTH,
+            encoder.encode(buildMessage(options)),
+            { mailboxRole: 'inbox' },
+          )
+        ).threadId;
+
+      const original = await send(h.server, {
+        subject: 'Budget',
+        messageId: '<b1@example.com>',
+      });
+      // By default the reply chain decides, whatever the subject became.
+      expect(
+        await send(h.server, {
+          subject: 'Holiday plans',
+          inReplyTo: '<b1@example.com>',
+        }),
+      ).toBe(original);
+
+      // With the option, a reply that changes the subject starts a thread of its own.
+      const bySubject = createJmapServer({
+        storage: h.adapter,
+        urls: URLS,
+        threadsRequireSameSubject: true,
+      });
+      expect(
+        await send(bySubject, {
+          subject: 'Something else entirely',
+          inReplyTo: '<b1@example.com>',
+        }),
+      ).not.toBe(original);
+      expect(
+        await send(bySubject, {
+          subject: 'RE: budget',
+          inReplyTo: '<b1@example.com>',
+        }),
+      ).toBe(original);
+    });
+
+    it('sorts text by the collation asked for', async () => {
+      await h.call('Mailbox/set', {
+        create: {
+          a: { name: 'alpha' },
+          b: { name: 'Beta' },
+          c: { name: 'gamma' },
+          d: { name: 'Émile' },
+        },
+      });
+      const names = async (comparator: Json) => {
+        const { ids } = await h.call('Mailbox/query', {
+          filter: { hasAnyRole: false },
+          sort: [{ property: 'name', ...comparator }],
+        });
+        const { list } = await h.call('Mailbox/get', {
+          ids,
+          properties: ['name'],
+        });
+        return ids.map(
+          (id: string) => list.find((mailbox: Json) => mailbox.id === id).name,
+        );
+      };
+      // Octet by octet unless told otherwise: capitals first, accented letters last.
+      expect(await names({})).toEqual(['Beta', 'alpha', 'gamma', 'Émile']);
+      expect(await names({ collation: 'i;octet' })).toEqual([
+        'Beta',
+        'alpha',
+        'gamma',
+        'Émile',
+      ]);
+      expect(await names({ collation: 'i;ascii-casemap' })).toEqual([
+        'alpha',
+        'Beta',
+        'gamma',
+        'Émile',
+      ]);
+      expect(
+        await names({ collation: 'i;ascii-casemap', isAscending: false }),
+      ).toEqual(['Émile', 'gamma', 'Beta', 'alpha']);
+      expect(
+        (
+          await h.fail('Mailbox/query', {
+            sort: [{ property: 'name', collation: 'i;klingon' }],
+          })
+        ).type,
+      ).toBe('unsupportedSort');
+      // The session says which collations there are.
+      expect(
+        (h.server.getSession(AUTH).capabilities[CAPABILITY_CORE] as Json)
+          .collationAlgorithms,
+      ).toEqual(['i;ascii-casemap', 'i;octet']);
+    });
+
+    it('never gives a state that could be taken for "no state"', async () => {
+      // Before anything was ever written, and after.
+      for (const [method, args] of [
+        ['Email/get', { ids: [] }],
+        ['Thread/get', { ids: [] }],
+        ['EmailSubmission/get', { ids: [] }],
+        ['VacationResponse/get', {}],
+      ] as Array<[string, Json]>) {
+        const { state } = await h.call(method, args);
+        expect(state, method).toMatch(/^s\d+$/);
+      }
+      const { queryState } = await h.call('Email/query', {});
+      expect(queryState).toMatch(/^s\d+\.s\d+$/);
+
+      // A state is good for exactly what it was given for.
+      const { state } = await h.call('Mailbox/get', { ids: [] });
+      const created = await h.call('Mailbox/set', {
+        ifInState: state,
+        create: { m: { name: 'Stated' } },
+      });
+      expect(created.oldState).toBe(state);
+      expect(
+        (await h.call('Mailbox/changes', { sinceState: state })).created,
+      ).toEqual([created.created.m.id]);
+      expect(
+        (
+          await h.fail('Mailbox/set', {
+            ifInState: state,
+            create: { n: { name: 'Stale' } },
+          })
+        ).type,
+      ).toBe('stateMismatch');
+      // The store's own numbering, without the letter, is not a state a client was ever given.
+      for (const stale of [state.slice(1), '0', '']) {
+        expect(
+          (await h.fail('Mailbox/changes', { sinceState: stale })).type,
+          JSON.stringify(stale),
+        ).toBe('cannotCalculateChanges');
+        expect(
+          (
+            await h.fail('Mailbox/set', {
+              ifInState: stale,
+              create: { n: { name: 'Stale' } },
+            })
+          ).type,
+        ).toBe('stateMismatch');
+      }
+    });
+
+    it('subscribes new mailboxes only where the server is set to', async () => {
+      const subscribing = createJmapServer({
+        storage: await factory(),
+        urls: URLS,
+        subscribeNewMailboxes: true,
+      });
+      await subscribing.provisionAccount(AUTH);
+      const run = async (method: string, args: Json) =>
+        (
+          await subscribing.handleRequest(
+            {
+              using: USING.slice(0, 2),
+              methodCalls: [
+                [method, { accountId: AUTH.accountId, ...args }, 'c'],
+              ],
+            },
+            AUTH,
+          )
+        ).methodResponses[0]?.[1] as Json;
+      const { created } = await run('Mailbox/set', {
+        create: {
+          plain: { name: 'Plain' },
+          explicit: { name: 'Explicit', isSubscribed: false },
+        },
+      });
+      expect(created.plain.isSubscribed).toBe(true);
+      const { list } = await run('Mailbox/get', {
+        properties: ['name', 'isSubscribed'],
+      });
+      expect(
+        list
+          .filter((mailbox: Json) => !mailbox.isSubscribed)
+          .map((mailbox: Json) => mailbox.name),
+      ).toEqual(['Explicit']);
+    });
+
     it('threads replies and keeps unrelated mail apart', async () => {
       const first = await h.deliver(
         inbox,
@@ -1408,15 +1603,10 @@ export function describeJmapConformance(
         },
         { receivedAt: '2026-10-01T12:00:00Z' },
       );
-      const sameReferenceOtherSubject = await h.deliver(inbox, {
-        subject: 'Something else entirely',
-        references: '<t1@example.com>',
-      });
       const unrelated = await h.deliver(inbox, { subject: 'Lunch?' });
 
       expect(reply.threadId).toBe(first.threadId);
       expect(later.threadId).toBe(first.threadId);
-      expect(sameReferenceOtherSubject.threadId).not.toBe(first.threadId);
       expect(unrelated.threadId).not.toBe(first.threadId);
 
       const { list, notFound } = await h.call('Thread/get', {
@@ -3726,10 +3916,13 @@ export function describeJmapConformance(
           byUrl['https://push.example.net/v1/abc'].changed[AUTH.accountId],
         ).sort(),
       ).toEqual([
+        'AddressBook',
+        'ContactCard',
         'Email',
         'EmailDelivery',
         'EmailSubmission',
         'Mailbox',
+        'Quota',
         'Thread',
       ]);
       expect(
@@ -3764,7 +3957,8 @@ export function describeJmapConformance(
       });
       const first = await state();
       expect(first).not.toBe(initial);
-      expect(first).toBe((await h.call('Email/get', { ids: [] })).state);
+      // The same commit moved both; clients see states with a letter in front.
+      expect(`s${first}`).toBe((await h.call('Email/get', { ids: [] })).state);
       expect(stateChanges.at(-1)).toEqual({
         accountId: AUTH.accountId,
         types: expect.arrayContaining(['Email', 'Thread', 'EmailDelivery']),
@@ -4962,8 +5156,9 @@ export function describeJmapConformance(
         expect((await copy(AUTH.accountId, 'acc2')).type).toBe(
           'accountNotFound',
         );
+        // An account the user cannot use is reported the same way on either side.
         expect((await copy('acc2', AUTH.accountId)).type).toBe(
-          'fromAccountNotFound',
+          'accountNotFound',
         );
         expect((await copy(AUTH.accountId, AUTH.accountId)).type).toBe(
           'invalidArguments',
@@ -6264,6 +6459,1783 @@ export function describeJmapConformance(
       expect(response.methodResponses[0]?.[1]).toEqual({ type: 'serverFail' });
       // Nothing is left looking as if it were waiting.
       expect((await one('EmailSubmission/query', {})).ids).toEqual([]);
+    });
+  });
+
+  describe(`${name}: blob management`, () => {
+    let h: Harness;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+    });
+    const text = async (blobId: string) =>
+      decoder.decode(
+        (await h.server.download(AUTH, AUTH.accountId, blobId)) as Uint8Array,
+      );
+
+    it('says in the session what it can do with blobs', () => {
+      const session = h.server.getSession(AUTH);
+      expect(session.capabilities[CAPABILITY_BLOB]).toEqual({});
+      expect(
+        session.accounts[AUTH.accountId]?.accountCapabilities[CAPABILITY_BLOB],
+      ).toEqual({
+        maxSizeBlobSet: 50_000_000,
+        maxDataSources: 64,
+        supportedTypeNames: ['Email', 'Mailbox', 'Thread'],
+        supportedDigestAlgorithms: ['sha-256', 'sha'],
+      });
+    });
+
+    it('makes blobs from text, base64 and pieces of other blobs', async () => {
+      const existing = await h.upload('0123456789');
+      const responses = await h.request([
+        [
+          'Blob/upload',
+          {
+            create: {
+              plain: {
+                data: [{ 'data:asText': 'Olá, ' }, { 'data:asText': 'mundo' }],
+                type: 'text/plain',
+              },
+              binary: { data: [{ 'data:asBase64': 'AAEC/w==' }] },
+              empty: { data: [] },
+              stitched: {
+                data: [
+                  { blobId: existing, offset: 2, length: 3 },
+                  { 'data:asText': '-' },
+                  { blobId: existing, offset: 8 },
+                  { blobId: '#plain', length: 2 },
+                ],
+              },
+            },
+          },
+        ],
+        // A later call can refer to what was just made.
+        [
+          'Blob/get',
+          { ids: ['#stitched'], properties: ['data:asText', 'size'] },
+        ],
+      ]);
+      const { created, notCreated } = responses[0]?.[1] as Json;
+      expect(notCreated).toBeNull();
+      expect(created.plain).toEqual({
+        id: created.plain.blobId,
+        accountId: AUTH.accountId,
+        blobId: expect.any(String),
+        type: 'text/plain',
+        size: 11,
+      });
+      expect(created.binary).toMatchObject({ type: null, size: 4 });
+      expect(created.empty.size).toBe(0);
+      expect(await text(created.plain.id)).toBe('Olá, mundo');
+      expect(await text(created.stitched.id)).toBe('234-89Ol');
+      expect([
+        ...((await h.server.download(
+          AUTH,
+          AUTH.accountId,
+          created.binary.id,
+        )) as Uint8Array),
+      ]).toEqual([0, 1, 2, 255]);
+      expect((responses[1]?.[1] as Json).list).toEqual([
+        { id: created.stitched.id, 'data:asText': '234-89Ol', size: 8 },
+      ]);
+    });
+
+    it('refuses pieces it would have to guess at', async () => {
+      const existing = await h.upload('0123456789');
+      const bad: Record<string, Json> = {
+        twoKinds: { data: [{ 'data:asText': 'a', 'data:asBase64': 'YQ==' }] },
+        noKind: { data: [{ offset: 1 }] },
+        notBase64: { data: [{ 'data:asBase64': 'not base64!' }] },
+        halfBase64: { data: [{ 'data:asBase64': 'YQ' }] },
+        notText: { data: [{ 'data:asText': 'a\ud800b' }] },
+        missing: { data: [{ blobId: 'nope' }] },
+        pastEnd: { data: [{ blobId: existing, offset: 8, length: 5 }] },
+        startsPastEnd: { data: [{ blobId: existing, offset: 11 }] },
+        notAList: { data: 'abc' },
+        tooMany: {
+          data: Array.from({ length: 65 }, () => ({ 'data:asText': 'x' })),
+        },
+        extra: { data: [], name: 'x' },
+      };
+      const { created, notCreated } = await h.call('Blob/upload', {
+        create: bad,
+      });
+      expect(created).toBeNull();
+      expect(Object.keys(notCreated).sort()).toEqual(Object.keys(bad).sort());
+      for (const [key, error] of Object.entries(notCreated)) {
+        expect((error as Json).type, key).toBe('invalidProperties');
+      }
+    });
+
+    it('reads a blob, or a range of it, as text or base64 with a digest', async () => {
+      const utf8 = await h.upload('The quick brown fox');
+      const binary = (
+        await h.call('Blob/upload', {
+          create: { b: { data: [{ 'data:asBase64': 'VGhlIIGBIGRvZw==' }] } },
+        })
+      ).created.b.id;
+      const get = async (args: Json) => (await h.call('Blob/get', args)).list;
+
+      // By default: the data, in whichever form it can take, and the size.
+      expect(await get({ ids: [utf8, binary] })).toEqual([
+        { id: utf8, 'data:asText': 'The quick brown fox', size: 19 },
+        {
+          id: binary,
+          'data:asBase64': 'VGhlIIGBIGRvZw==',
+          isEncodingProblem: true,
+          size: 10,
+        },
+      ]);
+      // Text explicitly asked for cannot be given for octets that are not text.
+      expect(await get({ ids: [binary], properties: ['data:asText'] })).toEqual(
+        [{ id: binary, 'data:asText': null, isEncodingProblem: true }],
+      );
+      expect(
+        await get({ ids: [binary], properties: ['data:asBase64'] }),
+      ).toEqual([{ id: binary, 'data:asBase64': 'VGhlIIGBIGRvZw==' }]);
+      // A range that is text on its own is fine.
+      expect(
+        await get({
+          ids: [utf8, binary],
+          offset: 0,
+          length: 3,
+          properties: ['data'],
+        }),
+      ).toEqual([
+        { id: utf8, 'data:asText': 'The' },
+        { id: binary, 'data:asText': 'The' },
+      ]);
+      // A range reaching past the end gives what there is, and says so.
+      expect(
+        await get({
+          ids: [utf8],
+          offset: 16,
+          length: 10,
+          properties: ['data', 'size'],
+        }),
+      ).toEqual([
+        { id: utf8, 'data:asText': 'fox', isTruncated: true, size: 19 },
+      ]);
+      expect(
+        await get({ ids: [utf8], offset: 30, properties: ['data'] }),
+      ).toEqual([{ id: utf8, 'data:asText': '', isTruncated: true }]);
+      // No length means "to the end", which is never a truncation.
+      expect(
+        await get({ ids: [utf8], offset: 10, properties: ['data'] }),
+      ).toEqual([{ id: utf8, 'data:asText': 'brown fox' }]);
+
+      // A digest is of the octets selected, in base64.
+      const digests = await get({
+        ids: [utf8],
+        properties: ['digest:sha-256', 'digest:sha', 'size'],
+      });
+      const digest = (algorithm: string, text: string) =>
+        createHash(algorithm).update(text).digest('base64');
+      expect(digests[0]).toEqual({
+        id: utf8,
+        'digest:sha-256': digest('sha256', 'The quick brown fox'),
+        'digest:sha': digest('sha1', 'The quick brown fox'),
+        size: 19,
+      });
+      const ranged = await get({
+        ids: [utf8],
+        length: 3,
+        properties: ['digest:sha-256'],
+      });
+      expect(ranged[0]['digest:sha-256']).toBe(digest('sha256', 'The'));
+
+      expect(
+        await h.call('Blob/get', {
+          ids: [utf8, 'missing'],
+          properties: ['size'],
+        }),
+      ).toMatchObject({
+        list: [{ id: utf8, size: 19 }],
+        notFound: ['missing'],
+      });
+      expect(
+        (await h.fail('Blob/get', { ids: [utf8], properties: ['digest:md4'] }))
+          .type,
+      ).toBe('invalidArguments');
+      expect((await h.fail('Blob/get', { ids: null })).type).toBe(
+        'requestTooLarge',
+      );
+    });
+
+    it('finds the emails, threads and mailboxes that refer to a blob', async () => {
+      const inbox = await h.mailbox('inbox');
+      const archive = await h.mailbox('archive');
+      const blobId = await h.upload(
+        buildMessage({
+          subject: 'With a file',
+          attachment: { name: 'a.txt', type: 'text/plain', base64: 'YWJj' },
+        }),
+      );
+      const { created } = await h.call('Email/import', {
+        emails: {
+          m: { blobId, mailboxIds: { [inbox]: true, [archive]: true } },
+        },
+      });
+      const [email] = (
+        await h.call('Email/get', {
+          ids: [created.m.id],
+          properties: ['attachments', 'blobId', 'threadId'],
+        })
+      ).list;
+      const loose = await h.upload('nobody refers to this');
+
+      const { list } = await h.call('Blob/lookup', {
+        typeNames: ['Email', 'Thread', 'Mailbox'],
+        ids: [email.blobId, email.attachments[0].blobId, loose, 'missing'],
+      });
+      const refersTo = {
+        Email: [created.m.id],
+        Thread: [email.threadId],
+        Mailbox: expect.arrayContaining([inbox, archive]),
+      };
+      expect(list).toEqual([
+        { id: email.blobId, matchedIds: refersTo },
+        // A part of a message is referred to by the same email.
+        { id: email.attachments[0].blobId, matchedIds: refersTo },
+        // A blob nobody refers to and one that does not exist look the same.
+        { id: loose, matchedIds: { Email: [], Thread: [], Mailbox: [] } },
+        { id: 'missing', matchedIds: { Email: [], Thread: [], Mailbox: [] } },
+      ]);
+      expect(
+        (
+          await h.call('Blob/lookup', {
+            typeNames: ['Email'],
+            ids: [email.blobId],
+          })
+        ).list,
+      ).toEqual([{ id: email.blobId, matchedIds: { Email: [created.m.id] } }]);
+      expect(
+        (await h.fail('Blob/lookup', { typeNames: ['Calendar'], ids: [] }))
+          .type,
+      ).toBe('unknownDataType');
+    });
+  });
+
+  describe(`${name}: quota`, () => {
+    let h: Harness;
+    let server: JmapServer;
+    let inbox: string;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      inbox = await h.mailbox('inbox');
+      server = createJmapServer({
+        storage: h.adapter,
+        urls: URLS,
+        quota: { maxOctets: 2000 },
+      });
+    });
+    const call = async (
+      method: string,
+      args: Json = {},
+      using = [CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_QUOTA],
+    ) =>
+      (
+        await server.handleRequest(
+          {
+            using,
+            methodCalls: [
+              [method, { accountId: AUTH.accountId, ...args }, 'c'],
+            ],
+          },
+          AUTH,
+        )
+      ).methodResponses[0]?.[1] as Json;
+    const message = (subject: string, size = 400) =>
+      encoder.encode(buildMessage({ subject, text: 'x'.repeat(size) }));
+    const used = async () => (await call('Quota/get')).list[0].used;
+
+    it('reports how much room the mail takes, against the limit', async () => {
+      expect(await call('Quota/get')).toEqual({
+        accountId: AUTH.accountId,
+        state: expect.any(String),
+        list: [
+          {
+            id: 'mail',
+            resourceType: 'octets',
+            used: 0,
+            hardLimit: 2000,
+            warnLimit: null,
+            softLimit: null,
+            scope: 'account',
+            name: AUTH.accountId,
+            description: null,
+            types: ['Email'],
+          },
+        ],
+        notFound: [],
+      });
+      const first = await server.importMessage(AUTH, message('One'), {
+        mailboxRole: 'inbox',
+      });
+      const second = await server.importMessage(AUTH, message('Two', 100), {
+        mailboxRole: 'inbox',
+      });
+      expect(await used()).toBe(first.size + second.size);
+      // Moving and flagging mail does not change how much there is.
+      await call('Email/set', {
+        update: { [first.id]: { 'keywords/$seen': true } },
+      });
+      expect(await used()).toBe(first.size + second.size);
+      await call('Email/set', { destroy: [first.id] });
+      expect(await used()).toBe(second.size);
+
+      expect(
+        await call('Quota/get', {
+          ids: ['mail', 'other'],
+          properties: ['used'],
+        }),
+      ).toMatchObject({
+        list: [{ id: 'mail', used: second.size }],
+        notFound: ['other'],
+      });
+    });
+
+    it('counts mail that was there before usage was kept track of', async () => {
+      // The harness delivered through a server without a quota, but the count is kept all the same.
+      const before = await h.deliver(inbox, { subject: 'Old' });
+      expect(await used()).toBe(before.size);
+      // An account whose count record is missing altogether is counted afresh.
+      const [record] = await h.adapter.metadata.get(AUTH.accountId, 'Quota', [
+        'mail',
+      ]);
+      await h.adapter.metadata.commit(AUTH.accountId, [
+        {
+          kind: 'destroy',
+          type: 'Quota',
+          id: 'mail',
+          expectedVersion: record?.version as number,
+        },
+      ]);
+      expect(await used()).toBe(before.size);
+      const added = await server.importMessage(AUTH, message('New', 50), {
+        mailboxRole: 'inbox',
+      });
+      expect(await used()).toBe(before.size + added.size);
+    });
+
+    it('refuses what the user adds beyond the limit, and never mail arriving', async () => {
+      await server.importMessage(AUTH, message('Fill', 1500), {
+        mailboxRole: 'inbox',
+      });
+      const blobId = (
+        await server.upload(
+          AUTH,
+          AUTH.accountId,
+          message('Too much', 600),
+          'message/rfc822',
+        )
+      ).blobId;
+      const refused = await call('Email/import', {
+        emails: { m: { blobId, mailboxIds: { [inbox]: true } } },
+      });
+      expect(refused.notCreated.m.type).toBe('overQuota');
+      const draft = await call('Email/set', {
+        create: {
+          d: {
+            mailboxIds: { [inbox]: true },
+            subject: 'x',
+            bodyValues: { b: { value: 'y'.repeat(600) } },
+            textBody: [{ partId: 'b' }],
+          },
+        },
+      });
+      expect(draft.notCreated.d.type).toBe('overQuota');
+      // Mail from outside is delivered regardless; the sender could do nothing about it.
+      await server.importMessage(AUTH, message('Delivered anyway', 600), {
+        mailboxRole: 'inbox',
+        delivery: true,
+      });
+      expect(await used()).toBeGreaterThan(2000);
+    });
+
+    it('says when only the usage changed, and answers queries', async () => {
+      const { state } = await call('Quota/get');
+      const { queryState, ids } = await call('Quota/query', {
+        calculateTotal: true,
+      });
+      expect(ids).toEqual(['mail']);
+      await server.importMessage(AUTH, message('One'), {
+        mailboxRole: 'inbox',
+      });
+      await server.importMessage(AUTH, message('Two'), {
+        mailboxRole: 'inbox',
+      });
+
+      const changes = await call('Quota/changes', { sinceState: state });
+      expect(changes).toMatchObject({
+        oldState: state,
+        created: [],
+        updated: ['mail'],
+        destroyed: [],
+        updatedProperties: ['used'],
+      });
+      expect((await call('Quota/get')).state).toBe(changes.newState);
+      expect(
+        (await call('Quota/changes', { sinceState: changes.newState }))
+          .updatedProperties,
+      ).toBeNull();
+      expect(
+        await call('Quota/queryChanges', { sinceQueryState: queryState }),
+      ).toMatchObject({
+        removed: ['mail'],
+        added: [{ id: 'mail', index: 0 }],
+      });
+
+      for (const [filter, expected] of [
+        [{ resourceType: 'octets' }, ['mail']],
+        [{ resourceType: 'count' }, []],
+        [{ scope: 'account', type: 'Email' }, ['mail']],
+        [{ type: 'Calendar' }, []],
+        [{ name: AUTH.accountId.toUpperCase() }, ['mail']],
+      ] as Array<[Json, string[]]>) {
+        expect(
+          (await call('Quota/query', { filter })).ids,
+          JSON.stringify(filter),
+        ).toEqual(expected);
+      }
+      expect(
+        (await call('Quota/query', { sort: [{ property: 'used' }] })).ids,
+      ).toEqual(['mail']);
+      expect((await call('Quota/query', { filter: { nope: 'x' } })).type).toBe(
+        'invalidArguments',
+      );
+      expect(
+        (await call('Quota/query', { sort: [{ property: 'nope' }] })).type,
+      ).toBe('unsupportedSort');
+    });
+
+    it('shows no quota without a limit, or to a client that did not ask about mail', async () => {
+      // No limit set: nothing to show.
+      expect((await h.call('Quota/get', {})).list).toEqual([]);
+      expect((await h.call('Quota/query', {})).ids).toEqual([]);
+      // A quota on mail means nothing to a request that does not use mail.
+      expect(
+        (await call('Quota/get', {}, [CAPABILITY_CORE, CAPABILITY_QUOTA])).list,
+      ).toEqual([]);
+    });
+  });
+
+  describe(`${name}: read receipts`, () => {
+    let h: Harness;
+    let inbox: string;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      inbox = await h.mailbox('inbox');
+    });
+
+    const asking = (extra: string[] = []) =>
+      buildMessage({
+        from: 'Bob <bob@example.org>',
+        to: 'Me <me@example.com>',
+        subject: 'Did you see this?',
+        messageId: '<asked@example.org>',
+        headers: [
+          'Disposition-Notification-To: Bob <bob@example.org>',
+          ...extra,
+        ],
+      });
+    const deliver = async (raw: string) => {
+      const blobId = await h.upload(raw);
+      return (
+        await h.call('Email/import', {
+          emails: { m: { blobId, mailboxIds: { [inbox]: true } } },
+        })
+      ).created.m.id as string;
+    };
+    const send = (
+      emailId: string,
+      mdn: Json = {},
+      patch: Json = { 'keywords/$mdnsent': true },
+    ) =>
+      h.request([
+        [
+          'MDN/send',
+          {
+            identityId: 'me',
+            send: {
+              r: {
+                forEmailId: emailId,
+                disposition: {
+                  actionMode: 'manual-action',
+                  sendingMode: 'mdn-sent-manually',
+                  type: 'displayed',
+                },
+                ...mdn,
+              },
+            },
+            ...(patch ? { onSuccessUpdateEmail: { '#r': patch } } : {}),
+          },
+        ],
+      ]);
+
+    it('sends a receipt to whoever asked for one, and marks the message', async () => {
+      const emailId = await deliver(asking());
+      const responses = await send(emailId, {
+        reportingUA: 'mailless-test; 1.0',
+        includeOriginalMessage: true,
+        extensionFields: { 'X-Note': 'hello' },
+      });
+      expect(responses.map((response) => response[0])).toEqual([
+        'MDN/send',
+        'Email/set',
+      ]);
+      // What the server filled in that the client did not say.
+      expect((responses[0]?.[1] as Json).sent.r).toEqual({
+        subject: 'Read: Did you see this?',
+        textBody: null,
+        finalRecipient: 'rfc822; me@example.com',
+        originalMessageId: '<asked@example.org>',
+        originalRecipient: null,
+        mdnGateway: null,
+        error: null,
+      });
+      expect((responses[1]?.[1] as Json).updated).toEqual({ [emailId]: null });
+      expect(
+        (
+          await h.call('Email/get', {
+            ids: [emailId],
+            properties: ['keywords'],
+          })
+        ).list[0].keywords,
+      ).toEqual({ $mdnsent: true });
+
+      expect(h.sent).toHaveLength(1);
+      expect(h.sent[0]?.envelope).toEqual({
+        mailFrom: 'me@example.com',
+        rcptTo: ['bob@example.org'],
+        tags: { account: AUTH.accountId },
+      });
+      const wire = h.sent[0]?.message ?? '';
+      expect(wire).toContain('From: "Me Myself" <me@example.com>');
+      expect(wire).toContain('To: bob@example.org');
+      expect(wire).toContain('Subject: Read: Did you see this?');
+      expect(wire).toContain('In-Reply-To: <asked@example.org>');
+      expect(wire).toMatch(
+        /Content-Type: multipart\/report; report-type=disposition-notification;\s+boundary=/,
+      );
+      expect(wire).toContain(
+        'Content-Type: message/disposition-notification\r\nContent-Transfer-Encoding: 7bit',
+      );
+      expect(wire).toContain('Reporting-UA: mailless-test; 1.0');
+      expect(wire).toContain('Final-Recipient: rfc822; me@example.com');
+      expect(wire).toContain('Original-Message-ID: <asked@example.org>');
+      expect(wire).toContain(
+        'Disposition: manual-action/mdn-sent-manually; displayed',
+      );
+      expect(wire).toContain('X-Note: hello');
+      // The headers of the original, not what it said.
+      expect(wire).toContain('Content-Type: text/rfc822-headers');
+      expect(wire).toContain('Subject: Did you see this?');
+      expect(wire).not.toContain('Hello there, this is the body.');
+
+      // What was sent reads back as the same receipt, and points at the message it answers.
+      const receipt = await h.upload(wire);
+      const { parsed } = await h.call('MDN/parse', { blobIds: [receipt] });
+      expect(parsed[receipt]).toEqual({
+        forEmailId: emailId,
+        subject: 'Read: Did you see this?',
+        textBody: expect.stringContaining('It was displayed.'),
+        includeOriginalMessage: true,
+        reportingUA: 'mailless-test; 1.0',
+        disposition: {
+          actionMode: 'manual-action',
+          sendingMode: 'mdn-sent-manually',
+          type: 'displayed',
+        },
+        mdnGateway: null,
+        originalRecipient: null,
+        finalRecipient: 'rfc822; me@example.com',
+        originalMessageId: '<asked@example.org>',
+        error: null,
+        extensionFields: { 'x-note': 'hello' },
+      });
+    });
+
+    it('sends one receipt per message, and only where one was asked for', async () => {
+      const emailId = await deliver(asking());
+      const notSent = async (responses: Json) => responses[0][1].notSent?.r;
+
+      // Without marking the message, nothing is sent: it could be answered again and again.
+      expect(await notSent(await send(emailId, {}, null))).toMatchObject({
+        type: 'invalidProperties',
+      });
+      expect(
+        await notSent(await send(emailId, {}, { 'keywords/$seen': true })),
+      ).toMatchObject({
+        type: 'invalidProperties',
+      });
+      expect(h.sent).toHaveLength(0);
+
+      await send(emailId);
+      expect(h.sent).toHaveLength(1);
+      expect((await notSent(await send(emailId))).type).toBe('mdnAlreadySent');
+
+      // A message that did not ask gets none, and neither does one that does not exist.
+      const quiet = await deliver(
+        buildMessage({ subject: 'No receipt wanted' }),
+      );
+      expect((await notSent(await send(quiet))).type).toBe('notFound');
+      expect((await notSent(await send('missing'))).type).toBe('notFound');
+
+      const other = await deliver(
+        asking(['X-Second: 1']).replace('asked@', 'asked2@'),
+      );
+      for (const [mdn, type] of [
+        [
+          { finalRecipient: 'rfc822; someone-else@example.org' },
+          'forbiddenFrom',
+        ],
+        [
+          {
+            disposition: {
+              actionMode: 'manual-action',
+              sendingMode: 'x',
+              type: 'displayed',
+            },
+          },
+          'invalidProperties',
+        ],
+        [{ subject: 'Two\r\nLines' }, 'invalidProperties'],
+        [{ originalMessageId: '<forged@example.org>' }, 'invalidProperties'],
+        [{ extensionFields: { 'Bad Name': 'x' } }, 'invalidProperties'],
+        [{ nonsense: true }, 'invalidProperties'],
+      ] as Array<[Json, string]>) {
+        expect(
+          (await notSent(await send(other, mdn))).type,
+          JSON.stringify(mdn),
+        ).toBe(type);
+      }
+      expect(h.sent).toHaveLength(1);
+      expect(
+        (
+          (
+            await h.request([['MDN/send', { identityId: 'nobody', send: {} }]])
+          )[0]?.[1] as Json
+        ).type,
+      ).toBe('invalidArguments');
+    });
+
+    it('reads receipts from other software, and says what is not one', async () => {
+      const foreign = await h.upload(
+        [
+          'From: tester@example.com',
+          'To: sender@example.com',
+          'Subject: Read: Test Message',
+          'MIME-Version: 1.0',
+          'Content-Type: multipart/report; report-type=disposition-notification;',
+          '  boundary="=_mdn"',
+          '',
+          '--=_mdn',
+          'Content-Type: text/plain; charset=utf-8',
+          '',
+          'Your message was read.',
+          '--=_mdn',
+          'Content-Type: message/disposition-notification',
+          '',
+          'Reporting-UA: Test Client',
+          'Original-Recipient: rfc822;alias@example.com',
+          'Final-Recipient: rfc822;tester@example.com',
+          'Original-Message-ID: <unknown-here@example.com>',
+          'Disposition: Manual-Action/MDN-Sent-Manually; Displayed/Error',
+          'Error: something',
+          ' went wrong',
+          '',
+          '--=_mdn--',
+          '',
+        ].join('\r\n'),
+      );
+      const plain = await h.upload(buildMessage({ subject: 'Not a receipt' }));
+      const noReport = await h.upload(
+        'From: a@example.com\r\nContent-Type: multipart/report; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n--b--\r\n',
+      );
+      const result = await h.call('MDN/parse', {
+        blobIds: [foreign, plain, noReport, 'missing'],
+      });
+      expect(result.notFound).toEqual(['missing']);
+      expect(result.notParsable).toEqual([plain, noReport]);
+      expect(result.parsed[foreign]).toEqual({
+        // It answers a message this account does not have.
+        forEmailId: null,
+        subject: 'Read: Test Message',
+        textBody: 'Your message was read.',
+        includeOriginalMessage: false,
+        reportingUA: 'Test Client',
+        // Case is the sender's to choose; it comes back in lower case.
+        disposition: {
+          actionMode: 'manual-action',
+          sendingMode: 'mdn-sent-manually',
+          type: 'displayed',
+        },
+        mdnGateway: null,
+        originalRecipient: 'rfc822;alias@example.com',
+        finalRecipient: 'rfc822;tester@example.com',
+        originalMessageId: '<unknown-here@example.com>',
+        error: ['something went wrong'],
+        extensionFields: null,
+      });
+    });
+
+    it('is not offered by a server that cannot send', () => {
+      const server = createJmapServer({ storage: h.adapter, urls: URLS });
+      expect(Object.keys(server.getSession(AUTH).capabilities)).not.toContain(
+        CAPABILITY_MDN,
+      );
+    });
+  });
+
+  describe(`${name}: principals`, () => {
+    let h: Harness;
+    const USER = {
+      ...AUTH,
+      sharedAccounts: {
+        team: { name: 'Team mailbox' },
+        records: { isReadOnly: true },
+      },
+    };
+    beforeEach(async () => {
+      h = await createHarness(factory);
+    });
+    const as = async (who: Json, method: string, args: Json = {}) =>
+      (
+        await h.server.handleRequest(
+          {
+            using: [CAPABILITY_CORE, CAPABILITY_PRINCIPALS],
+            methodCalls: [
+              [method, { accountId: AUTH.accountId, ...args }, 'c'],
+            ],
+          },
+          who,
+        )
+      ).methodResponses[0]?.[1] as Json;
+
+    it('says in the session who owns each account', () => {
+      const session = h.server.getSession(USER);
+      expect(session.capabilities[CAPABILITY_PRINCIPALS]).toEqual({});
+      const own = session.accounts[AUTH.accountId]?.accountCapabilities as Json;
+      expect(own[CAPABILITY_PRINCIPALS]).toEqual({
+        currentUserPrincipalId: AUTH.accountId,
+      });
+      expect(own['urn:ietf:params:jmap:principals:owner']).toEqual({
+        accountIdForPrincipal: AUTH.accountId,
+        principalId: AUTH.accountId,
+      });
+      // A shared account holds no principals; it is owned by one kept in the user's account.
+      const team = session.accounts['team']?.accountCapabilities as Json;
+      expect(team).not.toHaveProperty(CAPABILITY_PRINCIPALS);
+      expect(team['urn:ietf:params:jmap:principals:owner']).toEqual({
+        accountIdForPrincipal: AUTH.accountId,
+        principalId: 'team',
+      });
+      expect(session.primaryAccounts[CAPABILITY_PRINCIPALS]).toBe(
+        AUTH.accountId,
+      );
+    });
+
+    it('lists the principals of the accounts a user may use', async () => {
+      const { list, state, notFound } = await as(USER, 'Principal/get');
+      expect(notFound).toEqual([]);
+      expect(state).toEqual(expect.stringMatching(/^p/));
+      expect(list).toEqual([
+        {
+          id: AUTH.accountId,
+          type: 'individual',
+          name: AUTH.username,
+          description: null,
+          email: AUTH.username,
+          timeZone: null,
+          capabilities: {},
+          accounts: {
+            [AUTH.accountId]: expect.objectContaining({ isPersonal: true }),
+          },
+        },
+        expect.objectContaining({
+          id: 'team',
+          type: 'group',
+          name: 'Team mailbox',
+          email: null,
+          accounts: { team: expect.objectContaining({ isReadOnly: false }) },
+        }),
+        expect.objectContaining({ id: 'records', name: 'records' }),
+      ]);
+      // Someone with nothing shared sees themself, and nobody else.
+      expect(
+        (await as(AUTH, 'Principal/get')).list.map((p: Json) => p.id),
+      ).toEqual([AUTH.accountId]);
+      expect(
+        await as(USER, 'Principal/get', {
+          ids: ['team', 'stranger'],
+          properties: ['name'],
+        }),
+      ).toMatchObject({
+        list: [{ id: 'team', name: 'Team mailbox' }],
+        notFound: ['stranger'],
+      });
+      // Principals are kept in the user's own account, not in the shared ones.
+      expect(
+        (await as(USER, 'Principal/get', { accountId: 'team' })).list,
+      ).toEqual([]);
+    });
+
+    it('queries principals, and cannot say what changed in a directory it does not keep', async () => {
+      const ids = async (args: Json) =>
+        (await as(USER, 'Principal/query', args)).ids;
+      expect(await ids({ sort: [{ property: 'name' }] })).toEqual([
+        'team',
+        'records',
+        AUTH.accountId,
+      ]);
+      // Without a sort, by id.
+      expect(await ids({ filter: { type: 'group' } })).toEqual([
+        'records',
+        'team',
+      ]);
+      expect(await ids({ filter: { name: 'TEAM' } })).toEqual(['team']);
+      expect(await ids({ filter: { text: 'example.com' } })).toEqual([
+        AUTH.accountId,
+      ]);
+      expect(await ids({ filter: { email: 'user@' } })).toEqual([
+        AUTH.accountId,
+      ]);
+      expect(
+        await ids({ filter: { accountIds: ['records', 'nope'] } }),
+      ).toEqual(['records']);
+      expect(await ids({ filter: { timeZone: 'Europe/Lisbon' } })).toEqual([]);
+      expect(
+        (await as(USER, 'Principal/query', { filter: { nope: 1 } })).type,
+      ).toBe('invalidArguments');
+
+      const query = await as(USER, 'Principal/query', {});
+      expect(query.canCalculateChanges).toBe(false);
+      const { state } = await as(USER, 'Principal/get');
+      expect(
+        await as(USER, 'Principal/changes', { sinceState: state }),
+      ).toMatchObject({
+        created: [],
+        updated: [],
+        destroyed: [],
+        newState: state,
+      });
+      expect(
+        await as(USER, 'Principal/queryChanges', {
+          sinceQueryState: query.queryState,
+        }),
+      ).toMatchObject({ removed: [], added: [] });
+      // The same directory as seen by someone else is in another state.
+      expect(
+        (await as(AUTH, 'Principal/changes', { sinceState: state })).type,
+      ).toBe('cannotCalculateChanges');
+      expect(
+        (
+          await as(AUTH, 'Principal/queryChanges', {
+            sinceQueryState: query.queryState,
+          })
+        ).type,
+      ).toBe('cannotCalculateChanges');
+    });
+
+    it('lets nobody change the directory through the API', async () => {
+      const result = await as(USER, 'Principal/set', {
+        create: { n: { name: 'New', type: 'individual' } },
+        update: { [AUTH.accountId]: { name: 'Renamed' } },
+        destroy: ['team'],
+      });
+      expect(result.notCreated.n.type).toBe('forbidden');
+      expect(result.notUpdated[AUTH.accountId].type).toBe('forbidden');
+      expect(result.notDestroyed.team.type).toBe('forbidden');
+      expect(result.newState).toBe(result.oldState);
+    });
+
+    it('keeps share notifications, which only the server makes and a user may dismiss', async () => {
+      expect(await as(USER, 'ShareNotification/get')).toMatchObject({
+        list: [],
+        notFound: [],
+      });
+      // As the server would record a change of rights.
+      await h.adapter.metadata.commit(AUTH.accountId, [
+        {
+          kind: 'create',
+          type: 'ShareNotification',
+          id: 'sn1',
+          value: {
+            created: '2026-10-01T10:00:00Z',
+            changedBy: { name: 'Admin', email: null, principalId: null },
+            objectType: 'Mailbox',
+            objectAccountId: 'team',
+            objectId: 'mb1',
+            oldRights: null,
+            newRights: { mayReadItems: true },
+            name: 'Team inbox',
+          },
+        },
+        {
+          kind: 'create',
+          type: 'ShareNotification',
+          id: 'sn2',
+          value: {
+            created: '2026-10-05T10:00:00Z',
+            changedBy: { name: 'Admin', email: null, principalId: null },
+            objectType: 'Calendar',
+            objectAccountId: 'records',
+            objectId: 'c1',
+            oldRights: { mayReadItems: true },
+            newRights: null,
+            name: 'Old calendar',
+          },
+        },
+      ]);
+      const { state } = await as(USER, 'ShareNotification/get', { ids: [] });
+      const ids = async (args: Json) =>
+        (await as(USER, 'ShareNotification/query', args)).ids;
+      expect(
+        await ids({ sort: [{ property: 'created', isAscending: false }] }),
+      ).toEqual(['sn2', 'sn1']);
+      expect(await ids({ filter: { after: '2026-10-03T00:00:00Z' } })).toEqual([
+        'sn2',
+      ]);
+      expect(await ids({ filter: { before: '2026-10-03T00:00:00Z' } })).toEqual(
+        ['sn1'],
+      );
+      expect(
+        await ids({
+          filter: { objectType: 'Mailbox', objectAccountId: 'team' },
+        }),
+      ).toEqual(['sn1']);
+      expect(
+        (
+          await as(USER, 'ShareNotification/get', {
+            ids: ['sn1'],
+            properties: ['name'],
+          })
+        ).list,
+      ).toEqual([{ id: 'sn1', name: 'Team inbox' }]);
+
+      const dismissed = await as(USER, 'ShareNotification/set', {
+        create: { n: { name: 'x' } },
+        update: { sn2: { name: 'y' } },
+        destroy: ['sn1', 'missing'],
+      });
+      expect(dismissed.destroyed).toEqual(['sn1']);
+      expect(dismissed.notDestroyed.missing.type).toBe('notFound');
+      expect(dismissed.notCreated.n.type).toBe('forbidden');
+      expect(dismissed.notUpdated.sn2.type).toBe('forbidden');
+      expect(
+        await as(USER, 'ShareNotification/changes', { sinceState: state }),
+      ).toMatchObject({ destroyed: ['sn1'], created: [], updated: [] });
+      expect(await ids({})).toEqual(['sn2']);
+    });
+  });
+
+  describe(`${name}: contacts`, () => {
+    let h: Harness;
+    let bookId: string;
+    const USER = {
+      ...AUTH,
+      sharedAccounts: {
+        team: { name: 'Team mailbox' },
+        records: { isReadOnly: true },
+      },
+    };
+    const PNG = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
+    /** One call in any account the user may use; the response, whatever it is. */
+    const inAccount = async (
+      accountId: string,
+      method: string,
+      args: Json = {},
+    ) =>
+      (
+        await h.server.handleRequest(
+          {
+            using: [CAPABILITY_CORE, CAPABILITY_CONTACTS],
+            methodCalls: [[method, { accountId, ...args }, 'c']],
+          },
+          USER,
+        )
+      ).methodResponses as Json;
+    const addBook = async (name: string, accountId = AUTH.accountId) =>
+      (
+        await inAccount(accountId, 'AddressBook/set', {
+          create: { b: { name } },
+        })
+      )[0]?.[1].created.b.id as string;
+    const addCard = async (card: Json = {}) => {
+      const { created, notCreated } = await h.call('ContactCard/set', {
+        create: { c: { addressBookIds: { [bookId]: true }, ...card } },
+      });
+      expect(notCreated).toBeNull();
+      return created.c;
+    };
+    const refused = async (card: Json) =>
+      (
+        await h.call('ContactCard/set', {
+          create: { c: { addressBookIds: { [bookId]: true }, ...card } },
+        })
+      ).notCreated.c;
+    const card = async (id: string, properties?: string[]) =>
+      (await h.call('ContactCard/get', { ids: [id], properties })).list[0];
+    const found = async (filter: Json, sort?: Json) =>
+      (await h.call('ContactCard/query', { filter, sort })).ids;
+
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      bookId = (await h.call('AddressBook/get')).list[0].id;
+    });
+
+    it('says in the session what an account allows', () => {
+      const session = h.server.getSession(USER);
+      expect(session.capabilities[CAPABILITY_CONTACTS]).toEqual({});
+      expect(session.primaryAccounts[CAPABILITY_CONTACTS]).toBe(AUTH.accountId);
+      const capability = (accountId: string) =>
+        (session.accounts[accountId]?.accountCapabilities as Json)[
+          CAPABILITY_CONTACTS
+        ];
+      expect(capability(AUTH.accountId)).toEqual({
+        maxAddressBooksPerCard: null,
+        mayCreateAddressBook: true,
+      });
+      expect(capability('records').mayCreateAddressBook).toBe(false);
+    });
+
+    it('gives a new account one address book, its default, and only once', async () => {
+      await h.server.provisionAccount(AUTH);
+      const { list, notFound, state } = await h.call('AddressBook/get');
+      expect(notFound).toEqual([]);
+      expect(state).toEqual(expect.any(String));
+      expect(list).toEqual([
+        {
+          id: bookId,
+          name: 'Contacts',
+          description: null,
+          sortOrder: 0,
+          isDefault: true,
+          isSubscribed: true,
+          shareWith: null,
+          myRights: {
+            mayRead: true,
+            mayWrite: true,
+            mayShare: false,
+            mayDelete: true,
+          },
+        },
+      ]);
+      expect(
+        await h.call('AddressBook/get', {
+          ids: [bookId, 'nope'],
+          properties: ['name'],
+        }),
+      ).toMatchObject({
+        list: [{ id: bookId, name: 'Contacts' }],
+        notFound: ['nope'],
+      });
+    });
+
+    it('creates, changes and destroys address books', async () => {
+      const { created, notCreated, oldState, newState } = await h.call(
+        'AddressBook/set',
+        {
+          create: {
+            work: { name: 'Work', sortOrder: 3 },
+            unnamed: {},
+            long: { name: 'x'.repeat(256) },
+            typed: { name: 'Typed', sortOrder: -1, description: 5 },
+            odd: { name: 'Odd', colour: 'red' },
+            shared: {
+              name: 'Shared',
+              shareWith: { someone: { mayRead: true } },
+            },
+            claimed: { name: 'Claimed', isDefault: true },
+          },
+        },
+      );
+      expect(newState).not.toBe(oldState);
+      expect(Object.keys(created)).toEqual(['work']);
+      // The client is told everything it did not say itself.
+      expect(created.work).toEqual({
+        id: expect.any(String),
+        description: null,
+        isDefault: false,
+        isSubscribed: true,
+        shareWith: null,
+        myRights: expect.objectContaining({ mayWrite: true }),
+      });
+      expect(notCreated).toMatchObject({
+        unnamed: { type: 'invalidProperties', properties: ['name'] },
+        long: { type: 'invalidProperties', properties: ['name'] },
+        typed: {
+          type: 'invalidProperties',
+          properties: ['description', 'sortOrder'],
+        },
+        odd: { type: 'invalidProperties', properties: ['colour'] },
+        shared: { type: 'forbidden' },
+        claimed: { type: 'invalidProperties', properties: ['isDefault'] },
+      });
+
+      const id = created.work.id;
+      const changed = await h.call('AddressBook/set', {
+        update: {
+          [id]: {
+            name: 'Colleagues',
+            description: 'People at work',
+            isSubscribed: false,
+            // Sent back as the server gave it, which is allowed.
+            isDefault: false,
+            shareWith: null,
+          },
+          [bookId]: { myRights: { mayRead: false } },
+          nope: { name: 'Nobody' },
+        },
+      });
+      expect(changed.updated).toEqual({ [id]: null });
+      expect(changed.notUpdated).toMatchObject({
+        [bookId]: { type: 'invalidProperties', properties: ['myRights'] },
+        nope: { type: 'notFound' },
+      });
+      expect(
+        (await h.call('AddressBook/get', { ids: [id] })).list[0],
+      ).toMatchObject({
+        name: 'Colleagues',
+        description: 'People at work',
+        sortOrder: 3,
+        isSubscribed: false,
+      });
+      expect(
+        (
+          await h.call('AddressBook/set', {
+            update: { [id]: { 'name/first': 'x' } },
+          })
+        ).notUpdated[id].type,
+      ).toBe('invalidPatch');
+
+      const {
+        created: c,
+        updated,
+        destroyed,
+      } = await h.call('AddressBook/changes', { sinceState: oldState });
+      expect([c, updated, destroyed]).toEqual([[id], [], []]);
+      expect(
+        await h.call('AddressBook/set', { destroy: [id, 'nope'] }),
+      ).toMatchObject({
+        destroyed: [id],
+        notDestroyed: { nope: { type: 'notFound' } },
+      });
+    });
+
+    it('keeps the cards of an address book unless told to remove them', async () => {
+      const second = await addBook('Second');
+      const only = await addCard({ name: { full: 'Only Here' } });
+      const both = await addCard({
+        name: { full: 'In Both' },
+        addressBookIds: { [bookId]: true, [second]: true },
+      });
+      expect(
+        (await h.call('AddressBook/set', { destroy: [bookId] })).notDestroyed[
+          bookId
+        ].type,
+      ).toBe('addressBookHasContents');
+      expect(
+        (
+          await h.call('AddressBook/set', {
+            destroy: [bookId],
+            onDestroyRemoveContents: true,
+          })
+        ).destroyed,
+      ).toEqual([bookId]);
+      // A card in no other address book goes with it; the other only leaves it.
+      expect(await card(only.id)).toBeUndefined();
+      expect((await card(both.id)).addressBookIds).toEqual({ [second]: true });
+      expect(await found({ inAddressBook: second })).toEqual([both.id]);
+      // The default is gone, and nothing has taken its place.
+      expect(
+        (await h.call('AddressBook/get')).list.map((b: Json) => b.isDefault),
+      ).toEqual([false]);
+    });
+
+    it('makes an address book the default when the rest of the call succeeded', async () => {
+      const made = await h.call('AddressBook/set', {
+        create: { n: { name: 'New default' } },
+        onSuccessSetIsDefault: '#n',
+      });
+      const id = made.created.n.id;
+      // Both address books changed, and both are reported with what changed.
+      expect(made.created.n.isDefault).toBe(true);
+      expect(made.updated).toEqual({ [bookId]: { isDefault: false } });
+      const defaults = async () =>
+        Object.fromEntries(
+          (await h.call('AddressBook/get')).list.map((b: Json) => [
+            b.id,
+            b.isDefault,
+          ]),
+        );
+      expect(await defaults()).toEqual({ [bookId]: false, [id]: true });
+      expect(
+        (await h.call('AddressBook/changes', { sinceState: made.oldState }))
+          .updated,
+      ).toEqual([bookId]);
+
+      // Not when something in the call failed, and not for an id that is not there.
+      const failed = await h.call('AddressBook/set', {
+        update: { nope: { name: 'x' } },
+        onSuccessSetIsDefault: bookId,
+      });
+      expect(failed.newState).toBe(failed.oldState);
+      const unknown = await h.call('AddressBook/set', {
+        onSuccessSetIsDefault: 'nope',
+      });
+      expect(unknown).toMatchObject({ updated: null, notUpdated: null });
+      expect(await defaults()).toEqual({ [bookId]: false, [id]: true });
+
+      const back = await h.call('AddressBook/set', {
+        onSuccessSetIsDefault: bookId,
+      });
+      expect(back.updated).toEqual({
+        [bookId]: { isDefault: true },
+        [id]: { isDefault: false },
+      });
+      expect(back.newState).not.toBe(back.oldState);
+    });
+
+    it('stores a card as given and adds what a card must have', async () => {
+      const made = await addCard({
+        name: {
+          full: 'Ada Lovelace',
+          components: [
+            { kind: 'given', value: 'Ada' },
+            { kind: 'surname', value: 'Lovelace' },
+          ],
+        },
+        emails: {
+          e1: { address: 'ada@example.com', contexts: { work: true } },
+        },
+        // Not in RFC 9553: kept as it is, since an extension may define it.
+        'example.com:shoeSize': 38,
+        futureProperty: { anything: [1, 2] },
+      });
+      expect(made).toEqual({
+        id: expect.any(String),
+        '@type': 'Card',
+        version: '1.0',
+        uid: expect.stringMatching(/^urn:uuid:[0-9a-f-]{36}$/),
+        created: expect.stringMatching(/Z$/),
+        updated: expect.stringMatching(/Z$/),
+      });
+      expect(await card(made.id)).toEqual({
+        ...made,
+        addressBookIds: { [bookId]: true },
+        name: {
+          full: 'Ada Lovelace',
+          components: [
+            { kind: 'given', value: 'Ada' },
+            { kind: 'surname', value: 'Lovelace' },
+          ],
+        },
+        emails: {
+          e1: { address: 'ada@example.com', contexts: { work: true } },
+        },
+        'example.com:shoeSize': 38,
+        futureProperty: { anything: [1, 2] },
+      });
+      expect(await card(made.id, ['uid', 'futureProperty', 'phones'])).toEqual({
+        id: made.id,
+        uid: made.uid,
+        futureProperty: { anything: [1, 2] },
+      });
+
+      // What the client gives is kept, and not reported back to it.
+      const own = await addCard({
+        '@type': 'Card',
+        version: '1.0',
+        uid: 'my own uid',
+        created: '2020-01-02T03:04:05Z',
+      });
+      expect(own).toEqual({ id: own.id, updated: expect.any(String) });
+      expect(await card(own.id)).toMatchObject({
+        uid: 'my own uid',
+        created: '2020-01-02T03:04:05Z',
+      });
+    });
+
+    it('rejects what is not a valid card', async () => {
+      const properties = async (input: Json) => {
+        const error = await refused(input);
+        expect(error.type).toBe('invalidProperties');
+        return error.properties;
+      };
+      expect(await properties({ '@type': 'Contact' })).toEqual(['@type']);
+      expect(await properties({ version: '9.9' })).toEqual(['version']);
+      expect(await properties({ kind: 'robot' })).toEqual(['kind']);
+      expect(await properties({ id: 'mine' })).toEqual(['id']);
+      // A name that differs from a defined one only in capitals, and the reserved one.
+      expect(await properties({ Name: { full: 'x' }, extra: 1 })).toEqual([
+        'Name',
+        'extra',
+      ]);
+      expect(
+        await properties({
+          name: { full: 5, components: [{ kind: 'given' }] },
+          emails: { 'not an id': { address: 'a@example.com' }, e1: {} },
+          phones: { p1: { number: '1', pref: 0, '@type': 'Telephone' } },
+          keywords: { a: false },
+          created: 'yesterday',
+        }),
+      ).toEqual([
+        'name/full',
+        'name/components/0/value',
+        'emails/not an id',
+        'emails/e1/address',
+        'phones/p1/pref',
+        'phones/p1/@type',
+        'keywords',
+        'created',
+      ]);
+      // Only a group has members; a vendor's own kind is fine.
+      expect(await properties({ members: { 'urn:uuid:1': true } })).toEqual([
+        'members',
+      ]);
+      await addCard({ kind: 'group', members: { 'urn:uuid:1': true } });
+      await addCard({ kind: 'example.com:robot' });
+
+      for (const addressBookIds of [{}, { nope: true }, { [bookId]: false }]) {
+        expect(await properties({ addressBookIds })).toEqual([
+          'addressBookIds',
+        ]);
+      }
+      await addCard({ uid: 'twice' });
+      expect(await properties({ uid: 'twice' })).toEqual(['uid']);
+      expect(
+        (await refused({ notes: { n: { note: 'x'.repeat(300 * 1024) } } }))
+          .type,
+      ).toBe('tooLarge');
+    });
+
+    it('patches a card, and removes what is set to null', async () => {
+      const made = await addCard({
+        uid: 'patched',
+        name: { full: 'Before' },
+        emails: { e1: { address: 'one@example.com' } },
+        notes: { n1: { note: 'Remember' } },
+        updated: '2020-01-01T00:00:00Z',
+      });
+      const second = await addBook('Second');
+      const { updated, notUpdated } = await h.call('ContactCard/set', {
+        update: {
+          [made.id]: {
+            'name/full': 'After',
+            'emails/e2': { address: 'two@example.com' },
+            'emails/e1': null,
+            notes: null,
+            [`addressBookIds/${second}`]: true,
+          },
+          nope: { 'name/full': 'x' },
+        },
+      });
+      expect(notUpdated).toEqual({ nope: { type: 'notFound' } });
+      // The server moved the date of the last change, which the client did not ask for.
+      expect(updated[made.id]).toEqual({ updated: expect.any(String) });
+      const now = await card(made.id);
+      expect(now).toEqual({
+        id: made.id,
+        '@type': 'Card',
+        version: '1.0',
+        uid: 'patched',
+        created: made.created,
+        updated: updated[made.id].updated,
+        name: { full: 'After' },
+        emails: { e2: { address: 'two@example.com' } },
+        addressBookIds: { [bookId]: true, [second]: true },
+      });
+      expect(now.updated).not.toBe('2020-01-01T00:00:00Z');
+      expect(await found({ inAddressBook: second })).toEqual([made.id]);
+
+      const errors = (
+        await h.call('ContactCard/set', {
+          update: {
+            [made.id]: { 'phones/p1': { number: '1' } },
+          },
+        })
+      ).notUpdated;
+      // RFC 8620 §5.3: a patch points inside something that is there.
+      expect(errors[made.id].type).toBe('invalidPatch');
+      for (const [patch, property] of [
+        [{ id: 'other' }, 'id'],
+        [{ 'emails/e2/address': 5 }, 'emails/e2/address'],
+        [{ addressBookIds: {} }, 'addressBookIds'],
+        [{ uid: null }, 'uid'],
+      ] as Array<[Json, string]>) {
+        const { notUpdated: failed } = await h.call('ContactCard/set', {
+          update: { [made.id]: patch },
+        });
+        expect(failed[made.id]).toMatchObject({
+          type: 'invalidProperties',
+          properties: [property],
+        });
+      }
+      // A patch that changes nothing leaves the card, and its state, alone.
+      const same = await h.call('ContactCard/set', {
+        update: { [made.id]: { 'name/full': 'After' } },
+      });
+      expect(same.updated).toEqual({ [made.id]: null });
+      expect(same.newState).toBe(same.oldState);
+    });
+
+    it('reports changes to cards, and to the results of a query', async () => {
+      const first = await addCard({ name: { full: 'First' } });
+      const { state } = await h.call('ContactCard/get', { ids: [] });
+      const query = await h.call('ContactCard/query', {
+        filter: { inAddressBook: bookId },
+        sort: [{ property: 'created' }],
+      });
+      expect(query).toMatchObject({
+        ids: [first.id],
+        canCalculateChanges: true,
+        queryState: state,
+      });
+      const second = await addCard({ name: { full: 'Second' } });
+      await h.call('ContactCard/set', {
+        update: { [first.id]: { 'name/full': 'First, renamed' } },
+      });
+      const gone = await addCard();
+      await h.call('ContactCard/set', { destroy: [gone.id] });
+
+      expect(
+        await h.call('ContactCard/changes', { sinceState: state }),
+      ).toMatchObject({
+        created: [second.id],
+        updated: [first.id],
+        destroyed: [],
+        hasMoreChanges: false,
+      });
+      const changes = await h.call('ContactCard/queryChanges', {
+        filter: { inAddressBook: bookId },
+        sort: [{ property: 'created' }],
+        sinceQueryState: state,
+        calculateTotal: true,
+      });
+      expect(changes.total).toBe(2);
+      expect(changes.removed).toEqual([first.id]);
+      expect(changes.added.map((item: Json) => item.id).sort()).toEqual(
+        [first.id, second.id].sort(),
+      );
+      expect(changes.newQueryState).not.toBe(state);
+      expect(
+        (
+          await h.fail('ContactCard/queryChanges', {
+            sinceQueryState: 'nonsense',
+          })
+        ).type,
+      ).toBe('cannotCalculateChanges');
+    });
+
+    it('finds cards by what they say', async () => {
+      const ada = (
+        await addCard({
+          uid: 'ada',
+          created: '2020-01-01T00:00:00Z',
+          updated: '2021-01-01T00:00:00Z',
+          name: {
+            full: 'Ada King Lovelace',
+            components: [
+              { kind: 'given', value: 'Ada' },
+              { kind: 'surname', value: 'King' },
+              { kind: 'surname2', value: 'Lovelace' },
+            ],
+          },
+          nicknames: { n: { name: 'Countess' } },
+          organizations: { o: { name: 'Analytical Engines Ltd' } },
+          emails: { e: { address: 'ada@example.com', label: 'private mail' } },
+          phones: { p: { number: '+44 20 7946 0000' } },
+          onlineServices: {
+            s: { service: 'Mastodon', user: '@ada@example.social' },
+          },
+          addresses: {
+            a: {
+              full: '12 St James Square, London',
+              components: [{ kind: 'locality', value: 'Marylebone' }],
+            },
+          },
+          notes: { n: { note: 'Wrote the first published program.' } },
+        })
+      ).id;
+      const bob = (
+        await addCard({
+          uid: 'bob',
+          created: '2022-01-01T00:00:00Z',
+          updated: '2022-06-01T00:00:00Z',
+          name: {
+            full: 'bob Babbage',
+            components: [
+              { kind: 'given', value: 'bob' },
+              { kind: 'surname', value: 'Babbage' },
+            ],
+          },
+          notes: { n: { note: 'The program first ran here.' } },
+        })
+      ).id;
+      const team = (
+        await addCard({
+          uid: 'team',
+          kind: 'group',
+          created: '2023-01-01T00:00:00Z',
+          updated: '2023-01-01T00:00:00Z',
+          name: { full: 'Engine Team' },
+          members: { ada: true },
+        })
+      ).id;
+
+      expect(await found({})).toHaveLength(3);
+      expect(await found({ uid: 'ada' })).toEqual([ada]);
+      expect(await found({ kind: 'group' })).toEqual([team]);
+      // A card that does not say what it is, is an individual.
+      expect(await found({ kind: 'individual' })).toEqual([ada, bob].sort());
+      expect(await found({ hasMember: 'ada' })).toEqual([team]);
+      expect(await found({ createdBefore: '2022-01-01T00:00:00Z' })).toEqual([
+        ada,
+      ]);
+      expect(
+        (await found({ createdAfter: '2022-01-01T00:00:00Z' })).sort(),
+      ).toEqual([bob, team].sort());
+      expect(await found({ updatedBefore: '2022-01-01T00:00:00Z' })).toEqual([
+        ada,
+      ]);
+      expect(await found({ updatedAfter: '2023-01-01T00:00:00Z' })).toEqual([
+        team,
+      ]);
+      for (const filter of [
+        { name: 'LOVELACE' },
+        { name: 'king ada' },
+        { 'name/given': 'ada' },
+        { 'name/surname': 'king' },
+        { 'name/surname2': 'lovelace' },
+        { nickname: 'countess' },
+        { organization: 'engines' },
+        { email: 'ada@example.com' },
+        { email: 'private' },
+        { phone: '7946' },
+        { onlineService: 'mastodon' },
+        { onlineService: 'example.social' },
+        { address: 'london' },
+        { address: 'marylebone' },
+        { note: 'published' },
+        { text: 'countess' },
+        { text: 'marylebone program' },
+        // Words may be anywhere; a quoted phrase is found as it is.
+        { note: '"first published"' },
+        { note: "'first published' wrote" },
+      ]) {
+        expect(await found(filter), JSON.stringify(filter)).toEqual([ada]);
+      }
+      expect(await found({ 'name/surname': 'lovelace' })).toEqual([]);
+      expect((await found({ note: 'first program' })).sort()).toEqual(
+        [ada, bob].sort(),
+      );
+      expect(await found({ note: '"program first"' })).toEqual([bob]);
+      expect(
+        await found({
+          operator: 'NOT',
+          conditions: [{ text: 'program' }],
+        }),
+      ).toEqual([team]);
+      // Several properties of one condition must all hold.
+      expect(await found({ text: 'program', kind: 'group' })).toEqual([]);
+
+      const sorted = (property: string, more: Json = {}) =>
+        found(null, [{ property, ...more }]);
+      expect(await sorted('created')).toEqual([ada, bob, team]);
+      expect(await sorted('updated', { isAscending: false })).toEqual([
+        team,
+        bob,
+        ada,
+      ]);
+      // Octet by octet a capital comes first, and a card without the name before any.
+      expect(await sorted('name/given')).toEqual([team, ada, bob]);
+      expect(await sorted('name/surname')).toEqual([team, bob, ada]);
+      expect(
+        await sorted('name/given', { collation: 'i;ascii-casemap' }),
+      ).toEqual([team, ada, bob]);
+      expect(await sorted('name/surname2')).toEqual([
+        ...[bob, team].sort(),
+        ada,
+      ]);
+
+      expect(
+        (await h.fail('ContactCard/query', { filter: { shoe: 1 } })).type,
+      ).toBe('invalidArguments');
+      expect(
+        (await h.fail('ContactCard/query', { filter: { createdBefore: 'x' } }))
+          .type,
+      ).toBe('invalidArguments');
+      expect(
+        (
+          await h.fail('ContactCard/query', {
+            sort: [{ property: 'name/full' }],
+          })
+        ).type,
+      ).toBe('unsupportedSort');
+      expect(
+        await h.call('ContactCard/query', {
+          sort: [{ property: 'created' }],
+          position: 1,
+          limit: 1,
+          calculateTotal: true,
+        }),
+      ).toMatchObject({ ids: [bob], total: 3, position: 1 });
+    });
+
+    it('takes an uploaded image as the photo of a card', async () => {
+      const upload = async (data: Uint8Array, type: string) =>
+        (await h.server.upload(AUTH, AUTH.accountId, data, type)).blobId;
+      const photo = await upload(PNG, 'image/png');
+      const text = await upload(encoder.encode('not a picture'), 'text/plain');
+      const made = await addCard({
+        media: {
+          m1: { kind: 'photo', blobId: photo },
+          m2: { kind: 'sound', blobId: text, mediaType: 'audio/ogg' },
+          m3: { kind: 'logo', uri: 'https://example.com/logo.png' },
+        },
+      });
+      // The media type was told from the file where the client did not give it.
+      expect((await card(made.id)).media).toEqual({
+        m1: { kind: 'photo', blobId: photo, mediaType: 'image/png' },
+        m2: { kind: 'sound', blobId: text, mediaType: 'audio/ogg' },
+        m3: { kind: 'logo', uri: 'https://example.com/logo.png' },
+      });
+      expect(
+        await refused({ media: { m: { kind: 'photo', blobId: text } } }),
+      ).toMatchObject({ type: 'invalidProperties', properties: ['media/m'] });
+      expect(
+        await refused({ media: { m: { kind: 'photo', blobId: 'nope' } } }),
+      ).toMatchObject({ type: 'blobNotFound', notFound: ['nope'] });
+      for (const entry of [
+        { kind: 'photo' },
+        { kind: 'photo', blobId: photo, uri: 'https://example.com/a.png' },
+      ]) {
+        expect(await refused({ media: { m: entry } })).toMatchObject({
+          type: 'invalidProperties',
+          properties: ['media/m'],
+        });
+      }
+      expect(
+        (
+          await h.call('ContactCard/set', {
+            update: { [made.id]: { 'media/m1/blobId': text } },
+          })
+        ).notUpdated[made.id].type,
+      ).toBe('invalidProperties');
+    });
+
+    it('copies and moves cards between accounts', async () => {
+      const teamBook = await addBook('Team contacts', 'team');
+      const photo = (
+        await h.server.upload(AUTH, AUTH.accountId, PNG, 'image/png')
+      ).blobId;
+      const made = await addCard({
+        uid: 'shared-card',
+        name: { full: 'Shared Person' },
+        media: { m: { kind: 'photo', blobId: photo } },
+      });
+      const copy = (create: Json, more: Json = {}) =>
+        inAccount('team', 'ContactCard/copy', {
+          fromAccountId: AUTH.accountId,
+          create,
+          ...more,
+        });
+      const [[, copied]] = (await copy({
+        // The address books of the original are not in this account.
+        nowhere: { id: made.id },
+        ok: { id: made.id, addressBookIds: { [teamBook]: true } },
+        missing: { id: 'nope', addressBookIds: { [teamBook]: true } },
+      })) as Json;
+      expect(copied.newState).not.toBe(copied.oldState);
+      expect(copied.notCreated).toMatchObject({
+        nowhere: { type: 'invalidProperties', properties: ['addressBookIds'] },
+        missing: { type: 'notFound' },
+      });
+      expect(Object.keys(copied.created)).toEqual(['ok']);
+      const copyId = copied.created.ok.id;
+      const [[, got]] = (await inAccount('team', 'ContactCard/get', {
+        ids: [copyId],
+      })) as Json;
+      expect(got.list[0]).toMatchObject({
+        uid: 'shared-card',
+        name: { full: 'Shared Person' },
+        addressBookIds: { [teamBook]: true },
+        created: made.created,
+      });
+      // The photo went with the card, into the account the card is now in.
+      const copiedPhoto = got.list[0].media.m.blobId;
+      expect(copiedPhoto).not.toBe(photo);
+      expect(await h.adapter.blobs.get('team', copiedPhoto)).toEqual(PNG);
+      expect(await card(made.id)).toBeDefined();
+
+      // The same card again is the card that is already there.
+      const [[, again]] = (await copy({
+        twice: { id: made.id, addressBookIds: { [teamBook]: true } },
+      })) as Json;
+      expect(again.notCreated.twice).toMatchObject({
+        type: 'alreadyExists',
+        existingId: copyId,
+      });
+
+      // A move: a copy with a new name, after which the original is destroyed.
+      const other = await addCard({ name: { full: 'Moving' } });
+      const moved = (await copy(
+        {
+          m: {
+            id: other.id,
+            addressBookIds: { [teamBook]: true },
+            name: { full: 'Moved' },
+          },
+        },
+        { onSuccessDestroyOriginal: true },
+      )) as Json;
+      expect(moved.map(([method]: Json) => method)).toEqual([
+        'ContactCard/copy',
+        'ContactCard/set',
+      ]);
+      expect(moved[1][1]).toMatchObject({
+        accountId: AUTH.accountId,
+        destroyed: [other.id],
+      });
+      expect(await card(other.id)).toBeUndefined();
+      expect(
+        (
+          (await inAccount('team', 'ContactCard/query', {
+            filter: { name: 'moved' },
+          })) as Json
+        )[0][1].ids,
+      ).toEqual([moved[0][1].created.m.id]);
+
+      // Nothing can be written to an account that is only to be read.
+      for (const [method, args] of [
+        ['AddressBook/set', { create: { b: { name: 'No' } } }],
+        ['ContactCard/set', { destroy: ['x'] }],
+        ['ContactCard/copy', { fromAccountId: AUTH.accountId, create: {} }],
+      ] as Array<[string, Json]>) {
+        const [[kind, error]] = (await inAccount(
+          'records',
+          method,
+          args,
+        )) as Json;
+        expect([kind, error.type]).toEqual(['error', 'accountReadOnly']);
+      }
+      const [[, readOnly]] = (await inAccount(
+        'records',
+        'AddressBook/get',
+      )) as Json;
+      expect(readOnly.list).toEqual([]);
+      expect(
+        (
+          await h.fail('ContactCard/copy', {
+            fromAccountId: 'stranger',
+            create: {},
+          })
+        ).type,
+      ).toBe('accountNotFound');
     });
   });
 }

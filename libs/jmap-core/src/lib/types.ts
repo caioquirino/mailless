@@ -35,6 +35,13 @@ export const CAPABILITY_CORE = 'urn:ietf:params:jmap:core';
 export const CAPABILITY_MAIL = 'urn:ietf:params:jmap:mail';
 export const CAPABILITY_SUBMISSION = 'urn:ietf:params:jmap:submission';
 export const CAPABILITY_VACATION = 'urn:ietf:params:jmap:vacationresponse';
+export const CAPABILITY_BLOB = 'urn:ietf:params:jmap:blob';
+export const CAPABILITY_QUOTA = 'urn:ietf:params:jmap:quota';
+export const CAPABILITY_MDN = 'urn:ietf:params:jmap:mdn';
+export const CAPABILITY_PRINCIPALS = 'urn:ietf:params:jmap:principals';
+export const CAPABILITY_PRINCIPALS_OWNER =
+  'urn:ietf:params:jmap:principals:owner';
+export const CAPABILITY_CONTACTS = 'urn:ietf:params:jmap:contacts';
 export const CAPABILITY_WEBSOCKET = 'urn:ietf:params:jmap:websocket';
 
 export interface CoreCapability {

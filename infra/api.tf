@@ -140,6 +140,7 @@ resource "aws_lambda_function" "api" {
       },
       # Without a hostname of our own the function uses the host each request arrived on.
       local.api_custom_domain ? { PUBLIC_URL = "https://${local.api_hostname}" } : {},
+      var.account_quota_bytes == null ? {} : { QUOTA_OCTETS = tostring(var.account_quota_bytes) },
     )
   }
 

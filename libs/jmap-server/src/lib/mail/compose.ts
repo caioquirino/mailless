@@ -9,6 +9,8 @@ export interface ComposePart {
   cid?: string | null;
   language?: string[] | null;
   location?: string | null;
+  /** Further parameters of a multipart's Content-Type, such as `report-type`. */
+  parameters?: Record<string, string>;
   /** Further header fields of this part, after the ones made from the properties above. */
   headers?: ComposeHeader[];
   content?: Uint8Array;
@@ -340,8 +342,14 @@ function renderPart(part: ComposePart): string {
       throw new ComposeError('Only multipart parts may have sub-parts');
     }
     const boundary = randomBoundary();
+    const extra = Object.entries(part.parameters ?? {}).map(
+      ([name, value]) => `; ${parameter(name, value)}`,
+    );
     return [
-      fold('Content-Type', `${type}; ${parameter('boundary', boundary)}`),
+      fold(
+        'Content-Type',
+        `${type}${extra.join('')}; ${parameter('boundary', boundary)}`,
+      ),
       ...describingHeaders(part),
       '',
       ...part.subParts.flatMap((child) => [`--${boundary}`, renderPart(child)]),
@@ -387,6 +395,11 @@ function renderPart(part: ComposePart): string {
   } else if (isText) {
     headers.push('Content-Transfer-Encoding: quoted-printable');
     body = quotedPrintable(content);
+  } else if (type.startsWith('message/') && isPlainSevenBit(content)) {
+    // A message inside a message is carried as it is where it can be
+    // (RFC 2046 §5.2.1), so that software reading the report can read it.
+    headers.push('Content-Transfer-Encoding: 7bit');
+    body = new TextDecoder().decode(content);
   } else {
     headers.push('Content-Transfer-Encoding: base64');
     body = wrap(base64(content));

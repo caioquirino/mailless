@@ -125,6 +125,7 @@ variables {
   allow_password_sign_in = true
   account_names          = { me = "Me Myself" }
   shared_accounts        = {}
+  account_quota_bytes    = null
 }
 
 run "defaults" {
@@ -614,6 +615,38 @@ run "sending_later" {
     )
     error_message = "The API must know where to arrange a later send."
   }
+}
+
+run "accounts_can_have_a_quota" {
+  command = plan
+
+  variables {
+    account_quota_bytes = 5368709120
+  }
+
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables["QUOTA_OCTETS"] == "5368709120"
+    error_message = "The API must be told the quota."
+  }
+}
+
+run "no_quota_by_default" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(aws_lambda_function.api.environment[0].variables), "QUOTA_OCTETS")
+    error_message = "Without a quota set, none must be enforced."
+  }
+}
+
+run "rejects_a_tiny_quota" {
+  command = plan
+
+  variables {
+    account_quota_bytes = 1000
+  }
+
+  expect_failures = [var.account_quota_bytes]
 }
 
 run "accounts_can_be_shared" {

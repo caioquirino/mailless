@@ -28,6 +28,10 @@ export const PUSHED_TYPES: readonly string[] = [
   THREAD,
   EMAIL_DELIVERY,
   SUBMISSION,
+  // RFC 9425 §6: clients are told when a quota's usage changes.
+  'Quota',
+  'AddressBook',
+  'ContactCard',
 ];
 
 export interface PushOptions {

@@ -233,6 +233,24 @@ time to take it back, or until a date. Nothing runs while a message waits.
   outcome: `sent`, `not-pending` for a message cancelled in the meantime, or
   `rejected` when SES refused it.
 
+### Quota
+
+By default a mailbox has no limit. To give each account one:
+
+```hcl
+account_quota_bytes = 5368709120 # 5 GB
+```
+
+Mail apps that support it then show how full the mailbox is. Once it is full
+you cannot add mail to it yourself (saving a draft, importing), but mail
+arriving from outside is always delivered.
+
+### Read receipts
+
+When someone asks for a read receipt, a mail app that supports it can send
+one. A receipt goes only to the address the message itself named for it, and
+each message is answered at most once.
+
 ### Vacation response
 
 A mail app that supports it can turn on an out-of-office reply for the

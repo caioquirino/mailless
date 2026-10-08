@@ -101,6 +101,9 @@ const scheduler = sendQueueUrl
     })
   : undefined;
 
+// A limit on the mail an account may hold, shown to clients as its quota. Without one there is none.
+const quotaOctets = Number(process.env['QUOTA_OCTETS'] ?? '');
+
 const appPasswords = createAppPasswordStore(storage.metadata);
 // Accounts more than one user may use, such as a shared mailbox.
 const accountShares = parseAccountShares(process.env['ACCOUNT_SHARES']);
@@ -147,6 +150,9 @@ export const handler = createLambdaHttpHandler({
         limits: { maxSizeRequest: 5_000_000, maxSizeUpload: 4_000_000 },
         transport,
         ...(scheduler ? { scheduler } : {}),
+        ...(Number.isSafeInteger(quotaOctets) && quotaOctets > 0
+          ? { quota: { maxOctets: quotaOctets } }
+          : {}),
         // Mail apps register where to be told of new mail. The push function does the telling.
         push: {},
         // An account may send from the addresses that deliver to it.

@@ -231,7 +231,7 @@ async function createMailbox(
     parentId,
     role: typeof role === 'string' ? role.toLowerCase() : role,
     sortOrder: input['sortOrder'] ?? 0,
-    isSubscribed: input['isSubscribed'] ?? true,
+    isSubscribed: input['isSubscribed'] ?? ctx.subscribeByDefault,
   } as MutableMailbox;
 
   validate(null, mailbox, await listMailboxes(ctx));
@@ -412,7 +412,7 @@ const querySpec: QuerySpec<MailboxObject> = {
       case 'sortOrder':
         return (a, b) => a.sortOrder - b.sortOrder;
       case 'name':
-        return (a, b) => compareStrings(a.name, b.name);
+        return (a, b) => compareStrings(a.name, b.name, comparator.collation);
       case 'parentId':
         return (a, b) => compareStrings(a.parentId ?? '', b.parentId ?? '');
       default:
@@ -619,6 +619,6 @@ const STANDARD_MAILBOXES: Array<{
 export async function provisionMailboxes(ctx: MethodContext): Promise<void> {
   if ((await listMailboxes(ctx)).length > 0) return;
   for (const mailbox of STANDARD_MAILBOXES) {
-    await createMailbox(ctx, { ...mailbox, isSubscribed: true });
+    await createMailbox(ctx, mailbox);
   }
 }

@@ -13,6 +13,9 @@ account_names = {
   me = "Your Name"
 }
 
+# How much mail an account may hold, in bytes. Leave out for no limit.
+# account_quota_bytes = 5368709120
+
 # Accounts other users may use besides their own, such as a shared mailbox.
 # shared_accounts = {
 #   team = { members = ["me"], readers = [] }

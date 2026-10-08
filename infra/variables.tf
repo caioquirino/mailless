@@ -46,6 +46,21 @@ variable "account_names" {
   }
 }
 
+variable "account_quota_bytes" {
+  description = <<-EOT
+    How much mail an account may hold, in bytes, or null for no limit. With a
+    limit, mail apps can show how full the mailbox is, and the user cannot add
+    mail beyond it. Mail arriving from outside is always delivered.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.account_quota_bytes == null || try(var.account_quota_bytes >= 1048576 && floor(var.account_quota_bytes) == var.account_quota_bytes, false)
+    error_message = "The quota must be a whole number of bytes, at least 1 MB, or null."
+  }
+}
+
 variable "shared_accounts" {
   description = <<-EOT
     Accounts that other users may use besides their own, such as a mailbox a

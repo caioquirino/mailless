@@ -1,4 +1,5 @@
 import { commit, retryOnConflict, type MethodContext } from '../context.js';
+import { usageOps } from '../quota.js';
 import { ConflictError, type WriteOp } from '../storage.js';
 import {
   asJson,
@@ -238,6 +239,18 @@ export async function mutateThread(
         mutations.flatMap((mutation) =>
           mutation.kind === 'destroy' ? [mutation.id] : [],
         ),
+      )),
+    );
+    // How much room the account's mail takes changes with it.
+    const octets = (emails: Iterable<{ size: number }>) => {
+      let total = 0;
+      for (const email of emails) total += email.size;
+      return total;
+    };
+    ops.push(
+      ...(await usageOps(
+        ctx,
+        octets(after.values()) - octets(current.map((record) => record.value)),
       )),
     );
     if (alongside) ops.push(...(await alongside()));

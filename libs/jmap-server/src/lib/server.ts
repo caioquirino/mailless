@@ -1,6 +1,12 @@
 import {
+  CAPABILITY_BLOB,
+  CAPABILITY_CONTACTS,
   CAPABILITY_CORE,
   CAPABILITY_MAIL,
+  CAPABILITY_MDN,
+  CAPABILITY_PRINCIPALS,
+  CAPABILITY_PRINCIPALS_OWNER,
+  CAPABILITY_QUOTA,
   CAPABILITY_SUBMISSION,
   CAPABILITY_VACATION,
   IdSchema,
@@ -47,7 +53,17 @@ import {
   type DeliveryUpdate,
   type ScheduledSendOutcome,
 } from './mail/submission.js';
+import {
+  blobMethods,
+  DIGEST_ALGORITHMS,
+  LOOKUP_TYPES,
+  MAX_DATA_SOURCES,
+} from './blob/blob.js';
+import { mdnMethods } from './mail/mdn.js';
 import { threadMethods } from './mail/thread.js';
+import { contactMethods, provisionAddressBooks } from './contacts/contacts.js';
+import { principalMethods } from './principals.js';
+import { quotaMethods } from './quota.js';
 import { vacationMethods } from './mail/vacation.js';
 import {
   pushMethods,
@@ -57,7 +73,13 @@ import {
   type PushOptions,
   type PushReport,
 } from './push/subscription.js';
-import type { BlobStore, MetadataStore, StorageAdapter } from './storage.js';
+import { COLLATIONS } from './standard/query.js';
+import {
+  StateMismatchError,
+  type BlobStore,
+  type MetadataStore,
+  type StorageAdapter,
+} from './storage.js';
 import type { MailTransport, SendScheduler } from './transport.js';
 
 export const DEFAULT_LIMITS: CoreCapability = {
@@ -68,7 +90,7 @@ export const DEFAULT_LIMITS: CoreCapability = {
   maxCallsInRequest: 16,
   maxObjectsInGet: 500,
   maxObjectsInSet: 500,
-  collationAlgorithms: [],
+  collationAlgorithms: COLLATIONS,
 };
 
 export interface JmapServerUrls {
@@ -103,6 +125,25 @@ export interface JmapServerOptions {
    * capability (Identity and EmailSubmission methods).
    */
   transport?: MailTransport;
+  /**
+   * A limit on how much mail an account may hold, in octets. With one, the
+   * account has a quota that clients can show. Mail arriving from outside is
+   * never refused for it; what the user adds themself is.
+   */
+  quota?: { maxOctets: number };
+  /**
+   * What `isSubscribed` is on a mailbox created without saying, including the
+   * standard ones. Default false, as other JMAP servers have it. Set it to
+   * true for mail apps that show only subscribed mailboxes.
+   */
+  subscribeNewMailboxes?: boolean;
+  /**
+   * By default a reply joins the thread of the message it answers, whatever
+   * its subject. With this, it must also keep the subject (ignoring "Re:" and
+   * the like), so that a reply written to start a new topic gets a thread of
+   * its own, as RFC 8621 §3 recommends.
+   */
+  threadsRequireSameSubject?: boolean;
   /**
    * Lets clients ask for a message to be sent later, and cancel it until
    * then. The scheduler must see to it that `sendScheduled` is called when
@@ -224,6 +265,48 @@ export interface JmapServer {
   registerMethod(name: string, definition: MethodDefinition): void;
 }
 
+const STATE_PREFIX = 's';
+
+/**
+ * Gives state strings a letter in front. A store may well call its first
+ * state "0" or "", which is a fine state and a poor thing to hand to clients:
+ * more than one treats such a value as "no state yet".
+ */
+function publicStates(store: MetadataStore): MetadataStore {
+  const inner = (state: string): string | null =>
+    state.startsWith(STATE_PREFIX) ? state.slice(STATE_PREFIX.length) : null;
+  return {
+    get: (accountId, type, ids) => store.get(accountId, type, ids),
+    list: (accountId, type, index) => store.list(accountId, type, index),
+    getState: async (accountId, type) =>
+      STATE_PREFIX + (await store.getState(accountId, type)),
+    async getChanges(accountId, type, sinceState) {
+      const since = inner(sinceState);
+      if (since === null) return null;
+      const entries = await store.getChanges(accountId, type, since);
+      return (
+        entries?.map((entry) => ({
+          ...entry,
+          state: STATE_PREFIX + entry.state,
+        })) ?? null
+      );
+    },
+    async commit(accountId, ops, commitOptions) {
+      const expected = commitOptions?.expectedStates;
+      if (!expected) return store.commit(accountId, ops, commitOptions);
+      const expectedStates: Record<string, string> = {};
+      for (const [type, state] of Object.entries(expected)) {
+        const since = inner(state);
+        if (since === null) {
+          throw new StateMismatchError(`${type} is not at state ${state}`);
+        }
+        expectedStates[type] = since;
+      }
+      return store.commit(accountId, ops, { ...commitOptions, expectedStates });
+    },
+  };
+}
+
 /** Wraps a store so that every successful commit is reported. */
 function reportingCommits(
   store: MetadataStore,
@@ -271,11 +354,16 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
   const capabilities: Record<string, unknown> = {
     [CAPABILITY_CORE]: limits,
     [CAPABILITY_MAIL]: {},
+    [CAPABILITY_BLOB]: {},
+    [CAPABILITY_QUOTA]: {},
+    [CAPABILITY_PRINCIPALS]: {},
+    [CAPABILITY_CONTACTS]: {},
     ...(canSend
       ? {
           [CAPABILITY_SUBMISSION]: submissionCapability,
-          // Offered with sending: a vacation response is a message sent.
+          // Offered with sending: a vacation response and a read receipt are messages sent.
           [CAPABILITY_VACATION]: {},
+          [CAPABILITY_MDN]: {},
         }
       : {}),
   };
@@ -290,20 +378,62 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
   const accountCapabilities = {
     [CAPABILITY_CORE]: {},
     [CAPABILITY_MAIL]: mailAccountCapability,
+    [CAPABILITY_BLOB]: {
+      maxSizeBlobSet: limits.maxSizeUpload,
+      maxDataSources: MAX_DATA_SOURCES,
+      supportedTypeNames: LOOKUP_TYPES,
+      supportedDigestAlgorithms: DIGEST_ALGORITHMS,
+    },
+    [CAPABILITY_QUOTA]: {},
     ...(canSend
       ? {
           [CAPABILITY_SUBMISSION]: submissionCapability,
           [CAPABILITY_VACATION]: {},
+          [CAPABILITY_MDN]: {},
         }
       : {}),
   };
+  /** An account as the session describes it to this user. */
+  const describeAccount = (
+    user: AuthContext,
+    accountId: string,
+  ): Record<string, unknown> | undefined => {
+    const access = accessTo(user, accountId);
+    if (!access) return undefined;
+    return {
+      name: access.name,
+      isPersonal: access.isPersonal,
+      isReadOnly: access.isReadOnly,
+      accountCapabilities: {
+        ...accountCapabilities,
+        [CAPABILITY_CONTACTS]: {
+          maxAddressBooksPerCard: null,
+          mayCreateAddressBook: !access.isReadOnly,
+        },
+        // The principals are kept in the user's own account.
+        ...(accountId === user.accountId
+          ? {
+              [CAPABILITY_PRINCIPALS]: {
+                currentUserPrincipalId: user.accountId,
+              },
+            }
+          : {}),
+        // Each account belongs to the principal of the same id.
+        [CAPABILITY_PRINCIPALS_OWNER]: {
+          accountIdForPrincipal: user.accountId,
+          principalId: accountId,
+        },
+      },
+    };
+  };
   const sessionState = hash(
-    JSON.stringify([capabilities, mailAccountCapability, options.urls]),
+    JSON.stringify([capabilities, accountCapabilities, options.urls]),
   );
 
+  const states = publicStates(options.storage.metadata);
   const metadata = options.onStateChange
-    ? reportingCommits(options.storage.metadata, options.onStateChange)
-    : options.storage.metadata;
+    ? reportingCommits(states, options.onStateChange)
+    : states;
 
   /** The session changes when the server's abilities do, or the accounts a user may use. */
   const sessionStateFor = (auth: AuthContext): string =>
@@ -367,6 +497,17 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
   for (const group of [mailboxMethods, emailMethods, threadMethods]) {
     for (const [name, handler] of Object.entries(group)) {
       methods.set(name, { capability: CAPABILITY_MAIL, handler });
+    }
+  }
+  for (const [capability, group] of [
+    [CAPABILITY_BLOB, blobMethods],
+    [CAPABILITY_QUOTA, quotaMethods],
+    [CAPABILITY_PRINCIPALS, principalMethods],
+    [CAPABILITY_CONTACTS, contactMethods],
+    ...(canSend ? ([[CAPABILITY_MDN, mdnMethods]] as const) : []),
+  ] as const) {
+    for (const [name, handler] of Object.entries(group)) {
+      methods.set(name, { capability, handler });
     }
   }
   if (canSend) {
@@ -447,6 +588,31 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       createdIds,
       extraResponses: [],
       isReadOnly: access?.isReadOnly === true,
+      using: [],
+      user,
+      quotaOctets: options.quota?.maxOctets ?? null,
+      principals: async () =>
+        [user.accountId, ...Object.keys(user.sharedAccounts ?? {})].flatMap(
+          (id) => {
+            const account = describeAccount(user, id);
+            if (!account) return [];
+            const isOwn = id === user.accountId;
+            return [
+              {
+                id,
+                // A shared account stands for whoever shares it: a team, usually.
+                type: isOwn ? ('individual' as const) : ('group' as const),
+                name: account['name'] as string,
+                description: null,
+                email:
+                  isOwn && user.username.includes('@') ? user.username : null,
+                timeZone: null,
+                capabilities: {},
+                accounts: { [id]: account },
+              },
+            ];
+          },
+        ),
       forAccount: (other) =>
         accessTo(user, other)
           ? makeContext(user, other, createdIds)
@@ -454,6 +620,8 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       ...(options.transport ? { transport: options.transport } : {}),
       ...(options.scheduler ? { scheduler: options.scheduler } : {}),
       maxDelayedSend,
+      subscribeByDefault: options.subscribeNewMailboxes === true,
+      threadsRequireSameSubject: options.threadsRequireSameSubject === true,
       ...(options.onAutoReply ? { onAutoReply: options.onAutoReply } : {}),
       identities: async (): Promise<ResolvedIdentity[]> => {
         const configured = (await options.identities?.(auth)) ?? [];
@@ -495,33 +663,18 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
         accounts: Object.fromEntries(
           [auth.accountId, ...Object.keys(auth.sharedAccounts ?? {})].flatMap(
             (accountId) => {
-              const access = accessTo(auth, accountId);
-              return access
-                ? [
-                    [
-                      accountId,
-                      {
-                        name: access.name,
-                        isPersonal: access.isPersonal,
-                        isReadOnly: access.isReadOnly,
-                        accountCapabilities,
-                      },
-                    ],
-                  ]
-                : [];
+              const account = describeAccount(auth, accountId);
+              return account ? [[accountId, account]] : [];
             },
           ),
+        ) as unknown as Session['accounts'],
+        // The user's own account, for everything the server offers.
+        primaryAccounts: Object.fromEntries(
+          Object.keys(capabilities).map((capability) => [
+            capability,
+            auth.accountId,
+          ]),
         ),
-        primaryAccounts: {
-          [CAPABILITY_CORE]: auth.accountId,
-          [CAPABILITY_MAIL]: auth.accountId,
-          ...(canSend
-            ? {
-                [CAPABILITY_SUBMISSION]: auth.accountId,
-                [CAPABILITY_VACATION]: auth.accountId,
-              }
-            : {}),
-        },
         username: auth.username,
         apiUrl: options.urls.api,
         downloadUrl: options.urls.download,
@@ -559,6 +712,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       }
 
       const ctx = makeContext(auth);
+      ctx.using = using;
       for (const [creationId, id] of Object.entries(createdIds ?? {})) {
         ctx.createdIds.set(creationId, id);
       }
@@ -581,11 +735,12 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
           // Refused up front, so that a call which happens to change nothing
           // is not mistaken for one that was allowed.
           if (
-            /\/(set|import|copy)$/.test(name) &&
+            /\/(set|import|copy|upload|send)$/.test(name) &&
             accessTo(auth, callCtx.auth.accountId)?.isReadOnly
           ) {
             throw new MethodError('accountReadOnly');
           }
+          callCtx.using = using;
           callCtx.extraResponses = [];
           methodResponses.push([
             name,
@@ -672,8 +827,10 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       return importMessage(makeContext(auth), raw, importOptions);
     },
 
-    provisionAccount(auth) {
-      return provisionMailboxes(makeContext(auth));
+    async provisionAccount(auth) {
+      const ctx = makeContext(auth);
+      await provisionMailboxes(ctx);
+      await provisionAddressBooks(ctx);
     },
 
     recordDelivery(auth, submissionId, updates) {
