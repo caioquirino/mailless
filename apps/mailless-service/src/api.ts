@@ -7,6 +7,7 @@ import {
 import { SchedulerClient } from '@aws-sdk/client-scheduler';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
 import { SQSClient } from '@aws-sdk/client-sqs';
+import { SSMClient } from '@aws-sdk/client-ssm';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
@@ -25,6 +26,7 @@ import { createLambdaHttpHandler } from './api/lambda-http.js';
 import { createAwsSendScheduler } from './api/send-scheduler.js';
 import { sharedAccountsFor } from './api/shares.js';
 import { directoryFromEnvironment } from './directory.js';
+import { readOrCreateVapidKeys } from './push/vapid-keys.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -90,6 +92,20 @@ const defaultQuotaOctets =
     ? configuredQuota
     : null;
 
+// The key a mail app gives its push service, so that the push service takes
+// pushes for it from this deployment only. Made the first time it is needed.
+// Without the setting, pushes go unsigned, which some push services refuse.
+const vapidParameter = process.env['VAPID_PARAMETER'];
+const vapid = vapidParameter
+  ? {
+      ...(await readOrCreateVapidKeys({
+        ssm: new SSMClient({}),
+        parameter: vapidParameter,
+      })),
+      subject: required('VAPID_SUBJECT'),
+    }
+  : undefined;
+
 const appPasswords = createAppPasswordStore(storage.metadata);
 
 const authenticate = createAuthenticator({
@@ -124,7 +140,7 @@ export const handler = createLambdaHttpHandler({
             defaultQuotaOctets,
         },
         // Mail apps register where to be told of new mail. The push function does the telling.
-        push: {},
+        push: vapid ? { vapid } : {},
         // An account may send from the addresses that deliver to it.
         identities: async (auth) =>
           identitiesFor(

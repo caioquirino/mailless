@@ -67,6 +67,13 @@ data "aws_iam_policy_document" "push" {
     resources = [aws_sqs_queue.push_dead_letters.arn]
   }
 
+  # The key pushes are signed with. Read only: the API makes it.
+  statement {
+    sid       = "PushSigningKey"
+    actions   = ["ssm:GetParameter"]
+    resources = [local.vapid_parameter_arn]
+  }
+
   dynamic "statement" {
     for_each = var.use_customer_kms_key ? [1] : []
 
@@ -99,9 +106,11 @@ resource "aws_lambda_function" "push" {
 
   environment {
     variables = {
-      TABLE_NAME  = aws_dynamodb_table.metadata.name
-      BUCKET      = aws_s3_bucket.mail.id
-      BLOB_PREFIX = local.blob_prefix
+      TABLE_NAME      = aws_dynamodb_table.metadata.name
+      BUCKET          = aws_s3_bucket.mail.id
+      BLOB_PREFIX     = local.blob_prefix
+      VAPID_PARAMETER = local.vapid_parameter
+      VAPID_SUBJECT   = local.vapid_subject
     }
   }
 
@@ -142,4 +151,38 @@ resource "aws_lambda_event_source_mapping" "push" {
   }
 
   depends_on = [aws_iam_role_policy.push]
+}
+
+# ------------------------------------------------------------ the signing key
+
+# Push services, and every browser, take pushes for a subscription only from
+# the server whose key the app named when it subscribed (VAPID). The key pair
+# is not made here, so that its private half is never in Terraform's state:
+# the API function makes it the first time it starts, and keeps it as an
+# encrypted parameter under this name. Destroying the stack leaves it behind.
+# It must not be replaced: that would end every push subscription.
+locals {
+  vapid_parameter = "/${var.name}/vapid-keys"
+  vapid_parameter_arn = join(":", [
+    "arn", local.partition, "ssm", var.region, local.account_id,
+    "parameter${local.vapid_parameter}",
+  ])
+  # Whom a push service may write to about this deployment's pushes.
+  vapid_subject = "mailto:postmaster@${var.domain}"
+}
+
+data "aws_iam_policy_document" "api_push_key" {
+  # Reading it, and writing it once. The function only ever writes when there
+  # is none, and asks the store to refuse if there is.
+  statement {
+    sid       = "PushSigningKey"
+    actions   = ["ssm:GetParameter", "ssm:PutParameter"]
+    resources = [local.vapid_parameter_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "api_push_key" {
+  name   = "push-key"
+  role   = aws_iam_role.api.id
+  policy = data.aws_iam_policy_document.api_push_key.json
 }

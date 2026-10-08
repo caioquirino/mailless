@@ -140,6 +140,9 @@ resource "aws_lambda_function" "api" {
         # Who has a mailbox, which addresses each account may send from and who shares what.
         DIRECTORY_TABLE   = aws_dynamodb_table.directory.name
         CONFIGURATION_SET = aws_sesv2_configuration_set.main.configuration_set_name
+        # Where the key that signs pushes is kept, and whom a push service may write to about them.
+        VAPID_PARAMETER = local.vapid_parameter
+        VAPID_SUBJECT   = local.vapid_subject
         # What it takes to hold a message and have it sent later.
         SEND_QUEUE_URL             = aws_sqs_queue.send.url
         SCHEDULE_GROUP             = aws_scheduler_schedule_group.send.name

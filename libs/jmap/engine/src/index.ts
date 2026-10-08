@@ -48,3 +48,8 @@ export {
   type PushOptions,
   type PushReport,
 } from './lib/push/subscription.js';
+export {
+  generateVapidKeys,
+  type VapidKeys,
+  type VapidOptions,
+} from './lib/push/vapid.js';

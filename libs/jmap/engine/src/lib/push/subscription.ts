@@ -15,6 +15,7 @@ import {
   type StoredRecord,
 } from '../storage.js';
 import { encryptPush, isUsablePushKeys, type PushKeys } from './encryption.js';
+import { createVapid, type Vapid, type VapidOptions } from './vapid.js';
 
 /** The data type push subscriptions are stored under. */
 export const PUSH_SUBSCRIPTION = 'PushSubscription';
@@ -36,13 +37,20 @@ export interface PushOptions {
   maxLifetimeSeconds?: number;
   /** How long to wait for a push service to answer, in milliseconds. Default 5000. */
   timeoutMs?: number;
+  /**
+   * The server's VAPID keys (RFC 8292, RFC 9749). With them the session
+   * offers the public key and every push is signed, which browsers and the
+   * large push services require. Make a pair once with `generateVapidKeys`.
+   */
+  vapid?: VapidOptions;
   /** The clock, for tests. */
   now?: () => Date;
 }
 
-export type ResolvedPushOptions = Required<PushOptions> & {
+export type ResolvedPushOptions = Required<Omit<PushOptions, 'vapid'>> & {
   /** The data types whose state changes are pushed: those the server's modules name. */
   pushedTypes: readonly string[];
+  vapid?: Vapid;
 };
 
 /** What one round of pushing did, in counts. */
@@ -77,14 +85,16 @@ export function resolvePushOptions(
   options: PushOptions,
   pushedTypes: readonly string[],
 ): ResolvedPushOptions {
+  const now = options.now ?? (() => new Date());
   return {
     pushedTypes,
+    ...(options.vapid ? { vapid: createVapid(options.vapid, now) } : {}),
     fetch: options.fetch ?? ((input, init) => fetch(input, init)),
     allowUrl: options.allowUrl ?? isPublicHttpsUrl,
     maxSubscriptions: options.maxSubscriptions ?? 16,
     maxLifetimeSeconds: options.maxLifetimeSeconds ?? 30 * 24 * 60 * 60,
     timeoutMs: options.timeoutMs ?? 5000,
-    now: options.now ?? (() => new Date()),
+    now,
   };
 }
 
@@ -99,6 +109,12 @@ type SubscriptionValue = {
   types: string[] | null;
   /** Set when the push service asked for fewer requests; nothing is sent before this time. */
   pausedUntil?: string;
+  /**
+   * The server's VAPID public key when the subscription was made. The push
+   * service takes pushes for it from that key only, so it is of no use once
+   * the server has another.
+   */
+  vapidKey?: string;
 };
 type SubscriptionRecord = StoredRecord<SubscriptionValue>;
 
@@ -191,6 +207,9 @@ async function post(
       TTL: String(TTL_SECONDS),
       // Lets the push service drop an undelivered push when a newer one arrives.
       ...(topic ? { Topic: topic } : {}),
+      ...(push.vapid
+        ? { Authorization: await push.vapid.authorization(value.url) }
+        : {}),
       ...(value.keys
         ? {
             'Content-Type': 'application/octet-stream',
@@ -277,7 +296,12 @@ export async function pushStateChange(
   await Promise.all(
     records.map(async (record) => {
       const { value } = record;
-      if (isExpired(value, now)) {
+      // Expired, or made for a key this server no longer has (RFC 9749 §4).
+      if (
+        isExpired(value, now) ||
+        (value.vapidKey !== undefined &&
+          value.vapidKey !== push.vapid?.publicKey)
+      ) {
         await destroyQuietly(store, accountId, record);
         report.removed += 1;
         return;
@@ -453,6 +477,7 @@ async function createSubscription(
     verificationCode: null,
     expires,
     types,
+    ...(push.vapid ? { vapidKey: push.vapid.publicKey } : {}),
   };
   await ctx.store.commit(ctx.auth.accountId, [
     { kind: 'create', type: PUSH_SUBSCRIPTION, id, value },

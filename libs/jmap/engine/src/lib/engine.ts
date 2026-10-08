@@ -1,5 +1,6 @@
 import {
   CAPABILITY_CORE,
+  CAPABILITY_WEBPUSH_VAPID,
   IdSchema,
   MethodError,
   REQUEST_ERROR,
@@ -296,6 +297,16 @@ export function createJmapEngine(options: JmapEngineOptions): JmapEngine {
   const pushedTypes = [
     ...new Set(modules.flatMap((module) => module.pushedTypes ?? [])),
   ];
+  // Made here, before the session is described: the key it offers is part of
+  // the session, so that replacing it changes the session state (RFC 9749 §4).
+  const push = options.push
+    ? resolvePushOptions(options.push, pushedTypes)
+    : undefined;
+  if (push?.vapid) {
+    capabilities[CAPABILITY_WEBPUSH_VAPID] = {
+      applicationServerKey: push.vapid.publicKey,
+    };
+  }
 
   /**
    * What a user may do with an account: everything with their own, and what
@@ -494,9 +505,6 @@ export function createJmapEngine(options: JmapEngineOptions): JmapEngine {
       };
     },
   });
-  const push = options.push
-    ? resolvePushOptions(options.push, pushedTypes)
-    : undefined;
   for (const [name, handler] of Object.entries(
     push ? pushMethods(push) : pushMethodsWhenDisabled,
   )) {

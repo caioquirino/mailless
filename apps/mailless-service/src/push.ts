@@ -1,5 +1,6 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { S3Client } from '@aws-sdk/client-s3';
+import { SSMClient } from '@aws-sdk/client-ssm';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { createJmapServer } from '@mailless/jmap-server';
 import { jmapUrls } from '@mailless/jmap-server/http';
@@ -7,12 +8,22 @@ import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import { S3BlobStore } from '@mailless/storage-s3';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
 import { pushChanges } from './push/state-stream.js';
+import { readVapidKeys } from './push/vapid-keys.js';
 
 function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing environment variable ${name}`);
   return value;
 }
+
+// The key pushes are signed with. The API makes it when the first session is
+// read, which is before any app can have subscribed, so there being none yet
+// means there is nothing to sign. Not being able to read it is a failure:
+// carrying on without it would remove every subscription made for it.
+const vapidParameter = process.env['VAPID_PARAMETER'];
+const vapidKeys = vapidParameter
+  ? await readVapidKeys({ ssm: new SSMClient({}), parameter: vapidParameter })
+  : undefined;
 
 const jmap = createJmapServer({
   storage: {
@@ -28,7 +39,9 @@ const jmap = createJmapServer({
     }),
   },
   urls: jmapUrls(process.env['PUBLIC_URL'] ?? 'https://jmap.invalid'),
-  push: {},
+  push: vapidKeys
+    ? { vapid: { ...vapidKeys, subject: required('VAPID_SUBJECT') } }
+    : {},
 });
 
 /**

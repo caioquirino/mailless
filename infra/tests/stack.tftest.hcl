@@ -607,6 +607,23 @@ run "push_notifications" {
     error_message = "The push role must have no wildcards, no access to mail content and no way to send mail."
   }
 
+  # Both functions sign pushes with one key, which only the API may make, and which is no resource of this stack.
+  assert {
+    condition = (
+      aws_lambda_function.api.environment[0].variables["VAPID_PARAMETER"] == "/mailless/vapid-keys" &&
+      aws_lambda_function.push.environment[0].variables["VAPID_PARAMETER"] == "/mailless/vapid-keys" &&
+      aws_lambda_function.push.environment[0].variables["VAPID_SUBJECT"] == "mailto:postmaster@example.com" &&
+      one(data.aws_iam_policy_document.api_push_key.statement).actions == toset(["ssm:GetParameter", "ssm:PutParameter"]) &&
+      one(data.aws_iam_policy_document.api_push_key.statement).resources == toset(["arn:aws:ssm:eu-west-1:123456789012:parameter/mailless/vapid-keys"]) &&
+      alltrue([
+        for statement in data.aws_iam_policy_document.push.statement :
+        statement.actions == toset(["ssm:GetParameter"]) && statement.resources == toset(["arn:aws:ssm:eu-west-1:123456789012:parameter/mailless/vapid-keys"])
+        if statement.sid == "PushSigningKey"
+      ])
+    )
+    error_message = "The API may make and read the push signing key, the push function may only read it, and neither may touch any other parameter."
+  }
+
   assert {
     condition     = length(aws_lambda_function.push.vpc_config) == 0
     error_message = "The push function must stay outside any VPC: it calls push services named by clients and must not be able to reach private addresses."

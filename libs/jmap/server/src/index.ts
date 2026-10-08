@@ -26,8 +26,11 @@ export {
   type RequestSummary,
   type StorageAdapter,
   type StoredRecord,
+  type VapidKeys,
+  type VapidOptions,
   type WriteOp,
 } from '@mailless/jmap-engine';
+export { generateVapidKeys } from '@mailless/jmap-engine';
 export {
   MailRejectedError,
   storedUsage,

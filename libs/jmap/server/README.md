@@ -196,6 +196,12 @@ What it does and guards against:
   restrict its outgoing connections.
 - **Encryption.** A subscription with `keys` gets every push encrypted to them
   (RFC 8291, `aes128gcm`), so the push service cannot read it.
+- **Signing.** With `push.vapid` (a key pair from `generateVapidKeys()` and a
+  `subject` to contact), every push carries a VAPID token (RFC 8292) and the
+  session offers the public key under `urn:ietf:params:jmap:webpush-vapid`
+  (RFC 9749). Browsers and the large push services accept nothing else. Make
+  the pair once and keep it: a subscription made for one key is removed when
+  the server has another.
 - **Privacy.** `url` and `keys` are never returned by `PushSubscription/get`.
   A push carries state strings only: which kinds of data changed, nothing
   about the mail.

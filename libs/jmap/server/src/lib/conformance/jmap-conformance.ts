@@ -3807,6 +3807,128 @@ export function describeJmapConformance(
       return created.s.id;
     };
 
+    describe('with VAPID keys', () => {
+      // A pair made for these tests: a public key as the session shows it, and its private key.
+      const keys = {
+        publicKey:
+          'BNXona2jDNmcTUWY4VVDEZT5KTwro1psHNNzFqVdrz8P21VrXwnwYrSFQ5NkkU8CYAQ8Sq6UFUiSPM_Iz0OK7YQ',
+        privateKey: 'f3M2Eo3Dp_BPwyLJh6QJSD0XhqoXuPB4XXPvWYtWdyw',
+      };
+      const otherKeys = {
+        publicKey:
+          'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4',
+        privateKey: 'q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94',
+      };
+      const withKeys = (vapid?: typeof keys) =>
+        createJmapServer({
+          storage: h.adapter,
+          urls: URLS,
+          push: {
+            now: () => now,
+            ...(vapid
+              ? { vapid: { ...vapid, subject: 'mailto:ops@example.com' } }
+              : {}),
+            fetch: async (input, init) => {
+              pushed.push({
+                url: String(input),
+                headers: init?.headers as Record<string, string>,
+                body: init?.body as Uint8Array,
+              });
+              return new Response(null, answer);
+            },
+          },
+        });
+      const WEBPUSH_VAPID = 'urn:ietf:params:jmap:webpush-vapid';
+
+      it('offers the public key in the session, and no such thing without keys', () => {
+        expect(server.getSession(AUTH).capabilities).not.toHaveProperty(
+          WEBPUSH_VAPID,
+        );
+        const signing = withKeys(keys);
+        expect(signing.getSession(AUTH).capabilities[WEBPUSH_VAPID]).toEqual({
+          applicationServerKey: keys.publicKey,
+        });
+        // Another key is another session, so that clients notice and subscribe again.
+        expect(withKeys(otherKeys).getSession(AUTH).state).not.toBe(
+          signing.getSession(AUTH).state,
+        );
+      });
+
+      it('signs every push, the verification included, for the push service it goes to', async () => {
+        server = withKeys(keys);
+        const id = await subscribe({
+          url: 'https://push.example.net/v1/abc',
+        });
+        const { created } = await set({
+          create: {
+            t: {
+              deviceClientId: 'device-2',
+              url: 'https://other.example.org/x',
+            },
+          },
+        });
+        expect(created.t.id).toEqual(expect.any(String));
+        const verification = pushed.at(-1);
+        expect(verification?.headers['Authorization']).toMatch(
+          new RegExp(
+            `^vapid t=[\\w-]+\\.[\\w-]+\\.[\\w-]+, k=${keys.publicKey}$`,
+          ),
+        );
+
+        const inbox = await h.mailbox('inbox');
+        await h.deliver(inbox);
+        pushed.length = 0;
+        expect(await server.pushStateChange(AUTH.accountId)).toMatchObject({
+          sent: 1,
+        });
+        const header = pushed[0]?.headers['Authorization'] as string;
+        const claims = JSON.parse(
+          Buffer.from(
+            (header.split(' ')[1] as string).slice(2).split('.')[1] as string,
+            'base64url',
+          ).toString(),
+        );
+        expect(claims).toMatchObject({
+          aud: 'https://push.example.net',
+          sub: 'mailto:ops@example.com',
+        });
+        expect(id).toEqual(expect.any(String));
+      });
+
+      it('removes a subscription made for a key the server no longer has', async () => {
+        server = withKeys(keys);
+        await subscribe();
+        const inbox = await h.mailbox('inbox');
+        await h.deliver(inbox);
+
+        // The same key, after a restart: nothing changes.
+        pushed.length = 0;
+        expect(await withKeys(keys).pushStateChange(AUTH.accountId)).toEqual({
+          sent: 1,
+          failed: 0,
+          removed: 0,
+        });
+        // Another key: the push service would refuse it, so the subscription goes.
+        pushed.length = 0;
+        expect(
+          await withKeys(otherKeys).pushStateChange(AUTH.accountId),
+        ).toEqual({ sent: 0, failed: 0, removed: 1 });
+        expect(pushed).toEqual([]);
+        expect((await call('PushSubscription/get', {}))[1].list).toEqual([]);
+      });
+
+      it('keeps a subscription from before there were keys, and signs for it', async () => {
+        await subscribe();
+        const inbox = await h.mailbox('inbox');
+        await h.deliver(inbox);
+        pushed.length = 0;
+        expect(
+          await withKeys(keys).pushStateChange(AUTH.accountId),
+        ).toMatchObject({ sent: 1, removed: 0 });
+        expect(pushed[0]?.headers['Authorization']).toMatch(/^vapid t=/);
+      });
+    });
+
     it('verifies a new subscription before pushing anything to it', async () => {
       const { created } = await set({
         create: {

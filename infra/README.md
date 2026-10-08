@@ -296,6 +296,13 @@ fetches what changed.
   and only after the app has proved it receives what is sent there.
 - Subscriptions last at most 30 days unless the app renews them, and an
   account can hold 16.
+- Every push is signed (VAPID, RFC 8292), and the session offers the public
+  key (RFC 9749), which browsers and the large push services require. The key
+  pair is made by the API function the first time it starts and kept as the
+  encrypted parameter `/<name>/vapid-keys`. It is in neither the
+  configuration nor Terraform's state, and `terraform destroy` leaves it.
+  Do not delete or replace it: every push subscription made with it would
+  end, and each app would have to subscribe again.
 - The function logs the kinds of data and counts only:
   `{"event":"push","types":["Email","EmailDelivery","Thread"],"sent":1,"failed":0,"removed":0}`
   in `/aws/lambda/<name>-push`. `sent` staying at 0 means no app has a verified
