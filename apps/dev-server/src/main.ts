@@ -65,6 +65,21 @@ async function accountFor(username: string): Promise<AuthContext> {
 const jmap: JmapServer = createJmapServer({
   storage: new InMemoryStorageAdapter(),
   urls: jmapUrls(baseUrl),
+  // A held message is sent by a timer. It is lost if the server stops first, like everything else here.
+  scheduler: {
+    schedule: async ({ accountId, submissionId, sendAt }) => {
+      setTimeout(
+        () => {
+          void accountFor(accountId)
+            .then((account) => jmap.sendScheduled(account, submissionId))
+            .catch((error: unknown) =>
+              console.error('sending a held message failed:', error),
+            );
+        },
+        Math.max(0, sendAt.getTime() - Date.now()),
+      ).unref();
+    },
+  },
   // Push subscriptions may point anywhere here, including plain http on this machine.
   push: { allowUrl: () => true },
   onStateChange: (accountId, types) =>

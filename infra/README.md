@@ -27,6 +27,7 @@ through SES.
 | MAIL FROM subdomain                                      | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                                            |
 | SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message. |
 | Table stream and push Lambda                             | Tells mail apps that registered for it when something changed, so new mail shows up without refreshing.                                  |
+| Send queue, schedule group and send Lambda               | Holds messages to send later, and wakes up to send them. Used by "undo send".                                                            |
 | CloudWatch alarms                                        | Bounce rate, complaint rate, and anything left in a dead-letter queue.                                                                   |
 | Route53 records (optional)                               | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.                           |
 
@@ -215,6 +216,22 @@ own in a mail app that supports several accounts. `members` may read, file,
 delete and send as the team's addresses; `readers` may only read. Mail can be
 copied or moved between a user's own account and a shared one. New mail in a
 shared account does not trigger push notifications for its members.
+
+### Sending later and "undo send"
+
+A mail app that supports it can hold a message: for a few seconds, giving you
+time to take it back, or until a date. Nothing runs while a message waits.
+
+- A delay of up to 15 minutes is a delayed queue message, and goes out to the
+  second.
+- A longer one, up to 30 days, is a one-time schedule, and goes out within a
+  minute of its time.
+- A message that could not be sent when due is retried, and ends up in the
+  queue named by the `send_dead_letter_queue` output if it keeps failing. An
+  alarm watches that queue. It should stay empty.
+- The log `/aws/lambda/<name>-send` records each wake-up by submission id and
+  outcome: `sent`, `not-pending` for a message cancelled in the meantime, or
+  `rejected` when SES refused it.
 
 ### Vacation response
 

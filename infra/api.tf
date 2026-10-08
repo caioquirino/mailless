@@ -131,6 +131,12 @@ resource "aws_lambda_function" "api" {
         CONFIGURATION_SET = aws_sesv2_configuration_set.main.configuration_set_name
         # "false" makes mail clients use app passwords; the account password then only works for tokens.
         ALLOW_PASSWORD_SIGN_IN = tostring(var.allow_password_sign_in)
+        # What it takes to hold a message and have it sent later.
+        SEND_QUEUE_URL             = aws_sqs_queue.send.url
+        SCHEDULE_GROUP             = aws_scheduler_schedule_group.send.name
+        SEND_FUNCTION_ARN          = aws_lambda_function.send.arn
+        SCHEDULER_ROLE_ARN         = aws_iam_role.scheduler.arn
+        SEND_DEAD_LETTER_QUEUE_ARN = aws_sqs_queue.send_dead_letters.arn
       },
       # Without a hostname of our own the function uses the host each request arrived on.
       local.api_custom_domain ? { PUBLIC_URL = "https://${local.api_hostname}" } : {},

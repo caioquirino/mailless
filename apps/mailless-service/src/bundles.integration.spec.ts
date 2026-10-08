@@ -187,6 +187,38 @@ describe.skipIf(!reachable)('delivery events Lambda bundle', () => {
   });
 });
 
+describe.skipIf(!reachable)('scheduled send Lambda bundle', () => {
+  it('loads, and finds nothing to send for a message it does not know', async () => {
+    Object.assign(process.env, {
+      AWS_REGION: 'us-east-1',
+      AWS_ACCESS_KEY_ID: credentials.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: credentials.secretAccessKey,
+      AWS_ENDPOINT_URL_DYNAMODB: dynamoEndpoint,
+      AWS_ENDPOINT_URL_S3: s3Endpoint,
+      S3_FORCE_PATH_STYLE: 'true',
+      TABLE_NAME: tableName,
+      BUCKET: bucket,
+    });
+    const bundle = new URL('../dist/send.mjs', import.meta.url).href;
+    const { handler } = (await import(
+      /* @vite-ignore */ bundle
+    )) as typeof import('./send.js');
+
+    // As a schedule delivers it, and as the queue does.
+    await expect(
+      handler({ accountId: 'acc-1', submissionId: 'es-unknown' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      handler({
+        Records: [
+          { body: '{"accountId":"acc-1","submissionId":"es-unknown"}' },
+          { body: 'not json' },
+        ],
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe.skipIf(!reachable)('push Lambda bundle', () => {
   it('tells a verified subscription what changed, from a stream record', async () => {
     Object.assign(process.env, {

@@ -35,6 +35,11 @@ output "push_dead_letter_queue" {
   value       = aws_sqs_queue.push_dead_letters.url
 }
 
+output "send_dead_letter_queue" {
+  description = "Held messages that could not be sent when their time came. It should stay empty."
+  value       = aws_sqs_queue.send_dead_letters.url
+}
+
 output "receiving_active" {
   description = "Whether SES is routing inbound mail through this stack."
   value       = var.activate_receipt_rule_set

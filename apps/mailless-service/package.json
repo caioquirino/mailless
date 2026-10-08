@@ -38,6 +38,7 @@
             "apps/mailless-service/src/api.ts",
             "apps/mailless-service/src/events.ts",
             "apps/mailless-service/src/push.ts",
+            "apps/mailless-service/src/send.ts",
             "apps/mailless-service/src/admin.ts"
           ]
         },
@@ -67,7 +68,9 @@
     "@aws-sdk/client-cognito-identity-provider": "^3.1146.0",
     "@aws-sdk/client-dynamodb": "^3.1146.0",
     "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/client-scheduler": "^3.1147.0",
     "@aws-sdk/client-sesv2": "^3.1146.0",
+    "@aws-sdk/client-sqs": "^3.1147.0",
     "@aws-sdk/lib-dynamodb": "^3.1146.0",
     "@aws-sdk/s3-request-presigner": "^3.1146.0",
     "@mailless/jmap-core": "workspace:*",

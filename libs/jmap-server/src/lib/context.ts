@@ -11,7 +11,7 @@ import {
   type MetadataStore,
   type WriteOp,
 } from './storage.js';
-import type { MailTransport } from './transport.js';
+import type { MailTransport, SendScheduler } from './transport.js';
 
 /** Who is making the request. Authentication happens in the host, before the server is called. */
 export interface AuthContext {
@@ -59,6 +59,10 @@ export interface MethodContext {
   extraResponses: Array<[name: string, args: Record<string, unknown>]>;
   /** Present when the server can send mail. */
   transport?: MailTransport;
+  /** Present when messages can be held and sent later. */
+  scheduler?: SendScheduler;
+  /** The longest a message may be held, in seconds; 0 when it cannot be. */
+  maxDelayedSend: number;
   /** The addresses the caller may send from. */
   identities(): Promise<ResolvedIdentity[]>;
   /** Told what became of the vacation response for a delivered message. */

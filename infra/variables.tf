@@ -209,6 +209,12 @@ variable "push_bundle" {
   default     = "../apps/mailless-service/dist/push.mjs"
 }
 
+variable "send_bundle" {
+  description = "Path to the built scheduled-send Lambda bundle. Build it with `pnpm nx build mailless-service`."
+  type        = string
+  default     = "../apps/mailless-service/dist/send.mjs"
+}
+
 variable "events_bundle" {
   description = "Path to the built delivery events Lambda bundle. Build it with `pnpm nx build mailless-service`."
   type        = string

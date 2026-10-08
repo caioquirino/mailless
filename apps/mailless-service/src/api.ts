@@ -8,7 +8,9 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { SchedulerClient } from '@aws-sdk/client-scheduler';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
+import { SQSClient } from '@aws-sdk/client-sqs';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createJmapServer } from '@mailless/jmap-server';
@@ -24,6 +26,7 @@ import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { createAuthenticator } from './api/authenticator.js';
 import { identitiesFor } from './api/identities.js';
 import { createLambdaHttpHandler } from './api/lambda-http.js';
+import { createAwsSendScheduler } from './api/send-scheduler.js';
 import { parseAccountShares, sharedAccountsFor } from './api/shares.js';
 import { parseMailboxMap, resolveAccount } from './ingest/recipients.js';
 
@@ -83,6 +86,21 @@ const REFUSALS = new Set([
   'InvalidParameterException',
 ]);
 
+// Holding a message to send it later needs something to wake up for it. Without
+// these settings, messages simply go at once.
+const sendQueueUrl = process.env['SEND_QUEUE_URL'];
+const scheduler = sendQueueUrl
+  ? createAwsSendScheduler({
+      sqs: new SQSClient({}),
+      scheduler: new SchedulerClient({}),
+      queueUrl: sendQueueUrl,
+      scheduleGroup: required('SCHEDULE_GROUP'),
+      functionArn: required('SEND_FUNCTION_ARN'),
+      schedulerRoleArn: required('SCHEDULER_ROLE_ARN'),
+      deadLetterQueueArn: required('SEND_DEAD_LETTER_QUEUE_ARN'),
+    })
+  : undefined;
+
 const appPasswords = createAppPasswordStore(storage.metadata);
 // Accounts more than one user may use, such as a shared mailbox.
 const accountShares = parseAccountShares(process.env['ACCOUNT_SHARES']);
@@ -128,6 +146,7 @@ export const handler = createLambdaHttpHandler({
         // A Lambda invocation carries at most 6 MB, and binary uploads arrive base64-encoded.
         limits: { maxSizeRequest: 5_000_000, maxSizeUpload: 4_000_000 },
         transport,
+        ...(scheduler ? { scheduler } : {}),
         // Mail apps register where to be told of new mail. The push function does the telling.
         push: {},
         // An account may send from the addresses that deliver to it.

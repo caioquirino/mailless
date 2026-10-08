@@ -247,6 +247,49 @@ every method that changes something answers `accountReadOnly`, as does an
 upload. Push subscriptions are told about changes to the user's own account
 only.
 
+### Sending later, and undoing a send
+
+With a `scheduler`, a client may ask for a message to be held: a few seconds,
+so that "undo send" has something to undo, or until a date. It does so with
+the `HOLDFOR` or `HOLDUNTIL` parameter of the envelope sender, as in SMTP's
+FUTURERELEASE extension, up to `maxDelayedSend` seconds (default 30 days).
+
+```ts
+const jmap = createJmapServer({
+  storage,
+  urls,
+  transport,
+  // In one long-running process a timer will do:
+  scheduler: {
+    schedule: async ({ accountId, submissionId, sendAt }) => {
+      setTimeout(
+        () =>
+          void jmap.sendScheduled(
+            { accountId, username: accountId },
+            submissionId,
+          ),
+        sendAt.getTime() - Date.now(),
+      );
+    },
+  },
+});
+```
+
+A held submission is `pending`. Setting its `undoStatus` to `canceled` stops
+it, until the moment sending starts; after that the answer is `cannotUnsend`.
+A cancellation and a send can never both succeed, and several wake-ups for the
+same message send it once.
+
+What is sent is the message as it was when submitted. It is kept apart from
+the email, which may be edited, moved or destroyed meanwhile without changing
+what goes out. Who may send it was checked at submission. A held submission
+cannot be destroyed, only cancelled.
+
+If the transport refuses the message when its time comes, each recipient's
+`deliveryStatus` says so. If sending fails for another reason, `sendScheduled`
+throws and should be called again; a crash at the wrong instant can, rarely,
+send a message twice, never lose it.
+
 ### Vacation response
 
 With a `transport`, the server offers the vacation response capability: one
@@ -266,8 +309,6 @@ mail from being delivered; `onAutoReply` is told what happened.
 
 ### Not implemented yet
 
-- Delayed sending and cancelling: messages are handed over at once, so
-  `undoStatus` is always `final`.
 - Push over EventSource or WebSocket; push subscriptions are supported.
 
 ### Known simplifications

@@ -41,3 +41,28 @@ export class MailRejectedError extends Error {
     this.name = 'MailRejectedError';
   }
 }
+
+/** A message held for later, to be sent by calling `sendScheduled` at `sendAt`. */
+export interface ScheduledSend {
+  accountId: string;
+  submissionId: string;
+  sendAt: Date;
+}
+
+/**
+ * Wakes the server up when a held message is due: a timer in a long-running
+ * process, a scheduling service where there is none. With one configured,
+ * clients may ask for a message to be sent later, and cancel it until then.
+ */
+export interface SendScheduler {
+  /**
+   * Arranges for `sendScheduled(auth, submissionId)` to be called at
+   * `sendAt`. A call that comes more than once, or late, is harmless.
+   */
+  schedule(job: ScheduledSend): Promise<void>;
+  /**
+   * Told when a held message was cancelled, so that the wake-up can be
+   * dropped. Optional: waking up for a cancelled message does nothing.
+   */
+  cancel?(job: Omit<ScheduledSend, 'sendAt'>): Promise<void>;
+}

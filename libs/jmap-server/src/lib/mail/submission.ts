@@ -58,14 +58,22 @@ type SubmissionValue = {
   emailId: string;
   threadId: string;
   envelope: {
-    mailFrom: { email: string; parameters: null };
+    mailFrom: {
+      email: string;
+      parameters: Record<string, string | null> | null;
+    };
     rcptTo: Array<{ email: string; parameters: null }>;
   };
   sendAt: string;
-  undoStatus: 'final';
+  undoStatus: 'pending' | 'final' | 'canceled';
   deliveryStatus: Record<string, DeliveryStatus>;
   dsnBlobIds: string[];
   mdnBlobIds: string[];
+  /**
+   * Present while the message has not gone out: where it is kept, and since
+   * when someone has been sending it. Not shown to clients.
+   */
+  held?: { blobId: string; claimedAt?: string };
 };
 type SubmissionRecord = StoredRecord<SubmissionValue>;
 type SubmissionItem = SubmissionValue & { id: string };
@@ -215,7 +223,10 @@ function invalid(properties: string[], description: string): SetFailure {
 }
 
 const EnvelopeSchema = z.strictObject({
-  mailFrom: z.looseObject({ email: z.string() }),
+  mailFrom: z.looseObject({
+    email: z.string(),
+    parameters: z.record(z.string(), z.string().nullable()).nullish(),
+  }),
   rcptTo: z.array(z.looseObject({ email: z.string() })),
 });
 
@@ -284,10 +295,12 @@ async function createSubmission(
 
   let mailFrom: string;
   let recipients: string[];
+  let mailFromParameters: Record<string, string | null> | null = null;
   if (input['envelope'] !== undefined && input['envelope'] !== null) {
     const envelope = EnvelopeSchema.safeParse(input['envelope']);
     if (!envelope.success) throw invalid(['envelope'], 'Malformed envelope');
     mailFrom = envelope.data.mailFrom.email;
+    mailFromParameters = envelope.data.mailFrom.parameters ?? null;
     recipients = envelope.data.rcptTo.map((recipient) => recipient.email);
     if (!identityAllows(identity, mailFrom)) {
       throw new SetFailure(
@@ -318,82 +331,90 @@ async function createSubmission(
     });
   }
 
+  const holdUntil = holdTime(mailFromParameters, ctx, new Date());
+
   const raw = await ctx.blobs.get(ctx.auth.accountId, email.value.blobId);
   if (!raw) throw invalid(['emailId'], 'The content of the email is missing');
+  // Bcc recipients are in the envelope; the header must not travel with the message.
+  const message = removeHeader(raw, 'Bcc');
 
   const id = generateId('es');
-  let receipt;
-  try {
-    // Bcc recipients are in the envelope; the header must not travel with the message.
-    receipt = await transport.send(removeHeader(raw, 'Bcc'), {
-      mailFrom,
-      rcptTo,
-      // Lets delivery events find their way back to this submission.
-      tags: { account: ctx.auth.accountId, submission: id },
-    });
-  } catch (error) {
-    if (error instanceof MailRejectedError) {
-      throw new SetFailure('forbiddenToSend', error.message);
-    }
-    throw error;
-  }
-
-  const transportMessageIds = receipt?.messageIds ?? [];
-  if (transportMessageIds.length > 0) {
-    try {
-      await mutateThread(ctx, email.value.threadId, (emails) => {
-        const current = emails.find((candidate) => candidate.id === email.id);
-        if (!current) return [];
-        return [
-          {
-            kind: 'update',
-            id: email.id,
-            value: {
-              ...current.value,
-              transportMessageIds: [
-                ...new Set([
-                  ...(current.value.transportMessageIds ?? []),
-                  ...transportMessageIds,
-                ]),
-              ],
-            },
-            changedProperties: [],
-          },
-        ];
-      });
-    } catch {
-      // The message has gone out. Failing now would invite the client to send it again,
-      // which is far worse than a reply landing in a thread of its own.
-    }
-  }
-
-  const value: SubmissionValue = {
+  const base = {
     identityId: identity.id,
     emailId: email.id,
     threadId: email.value.threadId,
     envelope: {
-      mailFrom: { email: mailFrom, parameters: null },
+      mailFrom: { email: mailFrom, parameters: mailFromParameters },
       rcptTo: rcptTo.map((address) => ({ email: address, parameters: null })),
     },
-    sendAt: toUtcDate(new Date()),
-    undoStatus: 'final',
-    // Accepted by the transport; what happens next arrives through recordDelivery.
-    deliveryStatus: Object.fromEntries(
-      rcptTo.map((address) => [
-        address,
-        {
-          smtpReply: '250 Accepted',
-          delivered: 'queued',
-          displayed: 'unknown',
-        },
-      ]),
-    ),
     dsnBlobIds: [],
     mdnBlobIds: [],
   };
-  await commit(ctx, [
-    { kind: 'create', type: SUBMISSION, id, value: asJson(value) },
-  ]);
+  const statusFor = (smtpReply: string) =>
+    Object.fromEntries(
+      rcptTo.map((address): [string, DeliveryStatus] => [
+        address,
+        { smtpReply, delivered: 'queued', displayed: 'unknown' },
+      ]),
+    );
+
+  let value: SubmissionValue;
+  if (holdUntil && ctx.scheduler) {
+    // Kept apart from the email, which may be changed or destroyed before the
+    // time comes without that changing what is sent (RFC 8621 §7.5).
+    const blobId = generateId('bh');
+    await ctx.blobs.put(ctx.auth.accountId, blobId, message);
+    value = {
+      ...base,
+      sendAt: toUtcDate(holdUntil),
+      undoStatus: 'pending',
+      deliveryStatus: statusFor('250 2.0.0 Held for later delivery'),
+      held: { blobId },
+    };
+    await commit(ctx, [
+      { kind: 'create', type: SUBMISSION, id, value: asJson(value) },
+    ]);
+    try {
+      await ctx.scheduler.schedule({
+        accountId: ctx.auth.accountId,
+        submissionId: id,
+        sendAt: holdUntil,
+      });
+    } catch (error) {
+      // Nothing will wake up to send it, so it must not look as if it were held.
+      await ctx.store
+        .commit(ctx.auth.accountId, [{ kind: 'destroy', type: SUBMISSION, id }])
+        .catch(() => undefined);
+      await ctx.blobs.delete(ctx.auth.accountId, blobId).catch(() => undefined);
+      throw error;
+    }
+  } else {
+    let receipt;
+    try {
+      receipt = await transport.send(message, {
+        mailFrom,
+        rcptTo,
+        // Lets delivery events find their way back to this submission.
+        tags: { account: ctx.auth.accountId, submission: id },
+      });
+    } catch (error) {
+      if (error instanceof MailRejectedError) {
+        throw new SetFailure('forbiddenToSend', error.message);
+      }
+      throw error;
+    }
+    await rememberTransportIds(ctx, base, receipt?.messageIds ?? []);
+    value = {
+      ...base,
+      sendAt: toUtcDate(new Date()),
+      undoStatus: 'final',
+      // Accepted by the transport; what happens next arrives through recordDelivery.
+      deliveryStatus: statusFor('250 Accepted'),
+    };
+    await commit(ctx, [
+      { kind: 'create', type: SUBMISSION, id, value: asJson(value) },
+    ]);
+  }
 
   // Everything the client did not send itself.
   return {
@@ -408,18 +429,317 @@ async function createSubmission(
   };
 }
 
+/**
+ * Notes the ids the transport gave a message on the email it was sent from,
+ * so that replies find their thread. The email may be gone by now.
+ */
+async function rememberTransportIds(
+  ctx: MethodContext,
+  submission: { emailId: string; threadId: string },
+  transportMessageIds: string[],
+): Promise<void> {
+  if (transportMessageIds.length === 0) return;
+  try {
+    await mutateThread(ctx, submission.threadId, (emails) => {
+      const current = emails.find(
+        (candidate) => candidate.id === submission.emailId,
+      );
+      if (!current) return [];
+      return [
+        {
+          kind: 'update',
+          id: current.id,
+          value: {
+            ...current.value,
+            transportMessageIds: [
+              ...new Set([
+                ...(current.value.transportMessageIds ?? []),
+                ...transportMessageIds,
+              ]),
+            ],
+          },
+          changedProperties: [],
+        },
+      ];
+    });
+  } catch {
+    // The message has gone out. Failing now would invite the client to send it again,
+    // which is far worse than a reply landing in a thread of its own.
+  }
+}
+
+/** How long one attempt to send a held message is given before another may take over. */
+const CLAIM_MS = 2 * 60 * 1000;
+/** A message asked to be held for less than this is simply sent. */
+const MIN_HOLD_MS = 2000;
+
+/**
+ * When to send, from the FUTURERELEASE parameters of the envelope sender
+ * (RFC 4865): `HOLDFOR` in seconds, or `HOLDUNTIL` as a date. Undefined when
+ * the message is to go now.
+ */
+function holdTime(
+  parameters: Record<string, string | null> | null,
+  ctx: MethodContext,
+  now: Date,
+): Date | undefined {
+  const given = Object.entries(parameters ?? {}).filter(([name]) =>
+    ['holdfor', 'holduntil'].includes(name.toLowerCase()),
+  );
+  if (given.length === 0) return undefined;
+  const refuse = (description: string): never => {
+    throw invalid(['envelope'], description);
+  };
+  if (given.length > 1) refuse('Give HOLDFOR or HOLDUNTIL, not both');
+  const [name, text] = given[0] as [string, string | null];
+
+  let until: number;
+  if (name.toLowerCase() === 'holdfor') {
+    if (text === null || !/^\d{1,9}$/.test(text)) {
+      refuse('HOLDFOR must be a number of seconds');
+    }
+    until = now.getTime() + Number(text) * 1000;
+  } else {
+    until = text === null ? NaN : Date.parse(text);
+    if (
+      text === null ||
+      !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/i.test(
+        text,
+      ) ||
+      Number.isNaN(until)
+    ) {
+      refuse('HOLDUNTIL must be a date and time');
+    }
+  }
+  if (until - now.getTime() < MIN_HOLD_MS) return undefined;
+  if (!ctx.scheduler || ctx.maxDelayedSend === 0) {
+    refuse('This server cannot hold a message to send it later');
+  }
+  if (until - now.getTime() > ctx.maxDelayedSend * 1000) {
+    refuse(`A message can be held for at most ${ctx.maxDelayedSend} seconds`);
+  }
+  return new Date(until);
+}
+
+/** What became of a held message when its time came. */
+export type ScheduledSendOutcome =
+  'sent' | 'rejected' | 'not-pending' | 'not-found' | 'in-progress';
+
+/**
+ * Sends a message that was being held, when its time has come. Safe to call
+ * more than once and from several places at the same time: one caller sends,
+ * the others are told there is nothing for them to do. Throws when sending
+ * failed in a way worth trying again.
+ */
+export async function sendScheduled(
+  ctx: MethodContext,
+  submissionId: string,
+  now: Date = new Date(),
+): Promise<ScheduledSendOutcome> {
+  const { transport } = ctx;
+  if (!transport) throw new Error('Sending is not configured');
+  const accountId = ctx.auth.accountId;
+  const load = async () =>
+    (
+      await ctx.store.get(accountId, SUBMISSION, [submissionId])
+    )[0] as unknown as SubmissionRecord | undefined;
+
+  // From here on it can no longer be cancelled: that is decided before anything
+  // is sent, so a cancellation and a send can never both succeed.
+  const claimed = await retryOnConflict(async () => {
+    const record = await load();
+    if (!record) return 'not-found' as const;
+    const { held, undoStatus } = record.value;
+    if (!held || undoStatus === 'canceled') return 'not-pending' as const;
+    if (
+      held.claimedAt !== undefined &&
+      now.getTime() - Date.parse(held.claimedAt) < CLAIM_MS
+    ) {
+      return 'in-progress' as const;
+    }
+    const value: SubmissionValue = {
+      ...record.value,
+      undoStatus: 'final',
+      held: { ...held, claimedAt: toUtcDate(now) },
+    };
+    await commit(ctx, [
+      {
+        kind: 'update',
+        type: SUBMISSION,
+        id: submissionId,
+        value: asJson(value),
+        expectedVersion: record.version,
+        changedProperties: ['undoStatus'],
+      },
+    ]);
+    return value;
+  });
+  if (typeof claimed === 'string') return claimed;
+  const held = claimed.held as NonNullable<SubmissionValue['held']>;
+
+  /** Records how it ended, and lets go of the kept message. */
+  const finish = async (
+    status: (current: DeliveryStatus) => DeliveryStatus,
+  ): Promise<void> => {
+    await retryOnConflict(async () => {
+      const record = await load();
+      if (!record) return;
+      const { held: _held, ...rest } = record.value;
+      await commit(ctx, [
+        {
+          kind: 'update',
+          type: SUBMISSION,
+          id: submissionId,
+          value: asJson({
+            ...rest,
+            deliveryStatus: Object.fromEntries(
+              Object.entries(rest.deliveryStatus).map(([address, current]) => [
+                address,
+                status(current),
+              ]),
+            ),
+          }),
+          expectedVersion: record.version,
+          changedProperties: ['deliveryStatus'],
+        },
+      ]);
+    });
+    await ctx.blobs.delete(accountId, held.blobId).catch(() => undefined);
+  };
+
+  const message = await ctx.blobs.get(accountId, held.blobId);
+  if (!message) {
+    await finish((current) => ({
+      ...current,
+      delivered: 'no',
+      smtpReply: '554 5.3.0 The message to send was lost',
+    }));
+    return 'rejected';
+  }
+
+  let receipt;
+  try {
+    receipt = await transport.send(message, {
+      mailFrom: claimed.envelope.mailFrom.email,
+      rcptTo: claimed.envelope.rcptTo.map((recipient) => recipient.email),
+      tags: { account: accountId, submission: submissionId },
+    });
+  } catch (error) {
+    if (error instanceof MailRejectedError) {
+      const reason = error.message.replace(/[\r\n]+/g, ' ');
+      await finish((current) => ({
+        ...current,
+        delivered: 'no',
+        smtpReply: `550 5.0.0 ${reason}`,
+      }));
+      return 'rejected';
+    }
+    // Worth another try: step back, so that whoever calls next may send.
+    await retryOnConflict(async () => {
+      const record = await load();
+      if (!record?.value.held) return;
+      await commit(ctx, [
+        {
+          kind: 'update',
+          type: SUBMISSION,
+          id: submissionId,
+          value: asJson({
+            ...record.value,
+            held: { blobId: record.value.held.blobId },
+          }),
+          expectedVersion: record.version,
+          changedProperties: [],
+        },
+      ]);
+    });
+    throw error;
+  }
+
+  await finish((current) => ({ ...current, smtpReply: '250 Accepted' }));
+  await rememberTransportIds(ctx, claimed, receipt?.messageIds ?? []);
+  return 'sent';
+}
+
+/** Cancels a held message, if it has not started going out. */
+async function updateSubmission(
+  ctx: MethodContext,
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<null> {
+  const refused = Object.keys(patch).filter(
+    (property) => property !== 'undoStatus',
+  );
+  if (refused.length > 0) {
+    throw invalid(refused, 'Only undoStatus can be changed');
+  }
+  const cancelled = await retryOnConflict(async () => {
+    const [record] = (await ctx.store.get(ctx.auth.accountId, SUBMISSION, [
+      id,
+    ])) as unknown as SubmissionRecord[];
+    if (!record) throw new SetFailure('notFound');
+    const { held, undoStatus } = record.value;
+    // Setting it to what it is already changes nothing, and is not an error.
+    if (!('undoStatus' in patch) || patch['undoStatus'] === undoStatus) {
+      return undefined;
+    }
+    if (patch['undoStatus'] !== 'canceled') {
+      throw invalid(['undoStatus'], 'undoStatus can only be set to "canceled"');
+    }
+    if (undoStatus !== 'pending' || !held || held.claimedAt !== undefined) {
+      throw new SetFailure('cannotUnsend', 'The message has already been sent');
+    }
+    const { held: _held, ...rest } = record.value;
+    await commit(ctx, [
+      {
+        kind: 'update',
+        type: SUBMISSION,
+        id,
+        value: asJson({
+          ...rest,
+          undoStatus: 'canceled',
+          deliveryStatus: Object.fromEntries(
+            Object.entries(rest.deliveryStatus).map(([address, current]) => [
+              address,
+              {
+                ...current,
+                delivered: 'no',
+                smtpReply: '554 5.0.0 Canceled before it was sent',
+              },
+            ]),
+          ),
+        }),
+        expectedVersion: record.version,
+        changedProperties: ['undoStatus', 'deliveryStatus'],
+      },
+    ]);
+    return held;
+  });
+  if (cancelled) {
+    await ctx.blobs
+      .delete(ctx.auth.accountId, cancelled.blobId)
+      .catch(() => undefined);
+    await ctx.scheduler
+      ?.cancel?.({ accountId: ctx.auth.accountId, submissionId: id })
+      .catch(() => undefined);
+  }
+  return null;
+}
+
 const submissionSetSpec: SetSpec = {
   type: SUBMISSION,
   create: createSubmission,
-  update: async (ctx, id) => {
-    const [record] = await ctx.store.get(ctx.auth.accountId, SUBMISSION, [id]);
-    if (!record) throw new SetFailure('notFound');
-    // Messages are handed over immediately, so there is never anything left to cancel.
-    throw new SetFailure('cannotUnsend', 'The message has already been sent');
-  },
+  update: updateSubmission,
   destroy: async (ctx, id) => {
     const [record] = await ctx.store.get(ctx.auth.accountId, SUBMISSION, [id]);
     if (!record) throw new SetFailure('notFound');
+    // The record is what the held message is sent from. Forgetting it would
+    // either lose the message or send it with nothing left to cancel.
+    if ((record.value as SubmissionValue).held) {
+      throw new SetFailure(
+        'forbidden',
+        'This message is still waiting to be sent; cancel it first',
+      );
+    }
     await commit(ctx, [
       {
         kind: 'destroy',
@@ -693,6 +1013,23 @@ export const submissionMethods: Record<string, MethodHandler> = {
   'EmailSubmission/set': async (rawArgs, ctx) => {
     const args = parseArguments(SubmissionSetArgumentsSchema, rawArgs);
     const { onSuccessUpdateEmail, onSuccessDestroyEmail, ...setArgs } = args;
+
+    // Which email each submission is for, read before any of them is destroyed.
+    const emailOf = new Map<string, string>();
+    const existing = [
+      ...Object.keys(setArgs.update ?? {}),
+      ...(setArgs.destroy ?? []),
+    ];
+    if (existing.length > 0) {
+      for (const record of (await ctx.store.get(
+        ctx.auth.accountId,
+        SUBMISSION,
+        existing,
+      )) as unknown as SubmissionRecord[]) {
+        emailOf.set(record.id, record.value.emailId);
+      }
+    }
+
     const result = await standardSet(ctx, submissionSetSpec, setArgs);
 
     // "#creationId" and plain ids of submissions that succeeded in this call, mapped to their email.
@@ -707,6 +1044,13 @@ export const submissionMethods: Record<string, MethodHandler> = {
         sent.set(`#${creationId}`, record.value.emailId);
         sent.set(record.id, record.value.emailId);
       }
+    }
+    for (const id of [
+      ...Object.keys(result.updated ?? {}),
+      ...(result.destroyed ?? []),
+    ]) {
+      const emailId = emailOf.get(id);
+      if (emailId) sent.set(id, emailId);
     }
 
     const update: Record<string, Record<string, unknown>> = {};

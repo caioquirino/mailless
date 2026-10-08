@@ -223,6 +223,7 @@ locals {
     ingest          = aws_sqs_queue.ingest_dead_letters.name
     delivery-events = aws_sqs_queue.events_dead_letters.name
     push            = aws_sqs_queue.push_dead_letters.name
+    scheduled-send  = aws_sqs_queue.send_dead_letters.name
   }
 }
 

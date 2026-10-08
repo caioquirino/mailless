@@ -34,8 +34,8 @@ Also in this repository:
 
 - [`apps/mailless-service`](apps/mailless-service): the Lambda functions: the
   SES ingest function, which imports inbound mail; the JMAP API; the function
-  that records delivery, bounce and complaint reports; and the function that
-  sends push notifications.
+  that records delivery, bounce and complaint reports; the function that
+  sends push notifications; and the function that sends held messages.
 - [`apps/dev-server`](apps/dev-server): a small local JMAP server over
   in-memory storage for trying things out.
 - [`infra/`](infra): Terraform for SES receiving, S3, DynamoDB and the ingest

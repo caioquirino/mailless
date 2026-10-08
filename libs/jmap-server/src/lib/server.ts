@@ -42,8 +42,10 @@ import {
 import {
   IDENTITY_SETTINGS,
   recordDelivery,
+  sendScheduled,
   submissionMethods,
   type DeliveryUpdate,
+  type ScheduledSendOutcome,
 } from './mail/submission.js';
 import { threadMethods } from './mail/thread.js';
 import { vacationMethods } from './mail/vacation.js';
@@ -56,7 +58,7 @@ import {
   type PushReport,
 } from './push/subscription.js';
 import type { BlobStore, MetadataStore, StorageAdapter } from './storage.js';
-import type { MailTransport } from './transport.js';
+import type { MailTransport, SendScheduler } from './transport.js';
 
 export const DEFAULT_LIMITS: CoreCapability = {
   maxSizeUpload: 50_000_000,
@@ -101,6 +103,14 @@ export interface JmapServerOptions {
    * capability (Identity and EmailSubmission methods).
    */
   transport?: MailTransport;
+  /**
+   * Lets clients ask for a message to be sent later, and cancel it until
+   * then. The scheduler must see to it that `sendScheduled` is called when
+   * the time comes.
+   */
+  scheduler?: SendScheduler;
+  /** The longest a message may be held, in seconds. Default 30 days. */
+  maxDelayedSend?: number;
   /**
    * The addresses an account may send from. An email of `*@example.com`
    * allows any address at that domain.
@@ -192,6 +202,16 @@ export interface JmapServer {
     updates: Record<string, DeliveryUpdate>,
   ): Promise<boolean>;
   /**
+   * Sends a message that was being held, now that its time has come. Called
+   * by whatever the `scheduler` option arranged. Calling it twice, or for a
+   * message that was cancelled, does nothing. Throws when sending failed in a
+   * way worth trying again.
+   */
+  sendScheduled(
+    auth: AuthContext,
+    submissionId: string,
+  ): Promise<ScheduledSendOutcome>;
+  /**
    * Tells the account's push subscriptions that data changed. `types` names
    * the data types that changed; without it, all are reported. Does nothing
    * when push is not configured. Failures to reach a push service are counted
@@ -238,7 +258,15 @@ function hash(text: string): string {
 
 export function createJmapServer(options: JmapServerOptions): JmapServer {
   const limits: CoreCapability = { ...DEFAULT_LIMITS, ...options.limits };
-  const submissionCapability = { maxDelayedSend: 0, submissionExtensions: {} };
+  // A message can be held only where something will wake up to send it.
+  const maxDelayedSend = options.scheduler
+    ? (options.maxDelayedSend ?? 30 * 24 * 60 * 60)
+    : 0;
+  const submissionCapability = {
+    maxDelayedSend,
+    submissionExtensions:
+      maxDelayedSend > 0 ? { FUTURERELEASE: [String(maxDelayedSend)] } : {},
+  };
   const canSend = options.transport !== undefined;
   const capabilities: Record<string, unknown> = {
     [CAPABILITY_CORE]: limits,
@@ -424,6 +452,8 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
           ? makeContext(user, other, createdIds)
           : undefined,
       ...(options.transport ? { transport: options.transport } : {}),
+      ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+      maxDelayedSend,
       ...(options.onAutoReply ? { onAutoReply: options.onAutoReply } : {}),
       identities: async (): Promise<ResolvedIdentity[]> => {
         const configured = (await options.identities?.(auth)) ?? [];
@@ -648,6 +678,10 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
 
     recordDelivery(auth, submissionId, updates) {
       return recordDelivery(makeContext(auth), submissionId, updates);
+    },
+
+    sendScheduled(auth, submissionId) {
+      return sendScheduled(makeContext(auth), submissionId);
     },
 
     async pushStateChange(accountId, types) {

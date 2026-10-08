@@ -5781,4 +5781,489 @@ export function describeJmapConformance(
       expect(h.sent).toHaveLength(0);
     });
   });
+
+  describe(`${name}: sending later`, () => {
+    let h: Harness;
+    let server: JmapServer;
+    let drafts: string;
+    let sentBox: string;
+    /** What the scheduler was asked to do, in order. */
+    let scheduled: Array<{ submissionId: string; sendAt: Date }>;
+    let cancelled: string[];
+    /** Makes the transport fail the next send with this error. */
+    let failNext: Error | undefined;
+    let sent: Array<{ message: string; envelope: MailEnvelope }>;
+
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      drafts = await h.mailbox('drafts');
+      sentBox = await h.mailbox('sent');
+      scheduled = [];
+      cancelled = [];
+      failNext = undefined;
+      sent = [];
+      server = createJmapServer({
+        storage: h.adapter,
+        urls: URLS,
+        maxDelayedSend: 3600,
+        transport: {
+          async send(message, envelope) {
+            if (failNext) {
+              const error = failNext;
+              failNext = undefined;
+              throw error;
+            }
+            sent.push({ message: decoder.decode(message), envelope });
+            return { messageIds: [`relay-${sent.length}@relay.example`] };
+          },
+        },
+        scheduler: {
+          async schedule(job) {
+            scheduled.push({
+              submissionId: job.submissionId,
+              sendAt: job.sendAt,
+            });
+          },
+          async cancel(job) {
+            cancelled.push(job.submissionId);
+          },
+        },
+        identities: () => [{ id: 'me', email: 'me@example.com', name: 'Me' }],
+      });
+    });
+
+    const call = async (method: string, args: Json = {}): Promise<Json> => {
+      const response = await server.handleRequest(
+        {
+          using: USING,
+          methodCalls: [[method, { accountId: AUTH.accountId, ...args }, 'c']],
+        },
+        AUTH,
+      );
+      return response.methodResponses;
+    };
+    const one = async (method: string, args: Json = {}) =>
+      (await call(method, args))[0][1];
+    const draft = async (subject = 'Later') =>
+      (
+        await one('Email/set', {
+          create: {
+            d: {
+              mailboxIds: { [drafts]: true },
+              keywords: { $draft: true },
+              from: [{ email: 'me@example.com' }],
+              to: [{ email: 'bob@example.org' }],
+              bcc: [{ email: 'hidden@example.org' }],
+              subject,
+              bodyValues: { b: { value: 'As planned.' } },
+              textBody: [{ partId: 'b' }],
+            },
+          },
+        })
+      ).created.d.id;
+    const hold = async (
+      parameters: Json,
+      emailId?: string,
+      extra: Json = {},
+    ) => {
+      const id = emailId ?? (await draft());
+      const result = await one('EmailSubmission/set', {
+        create: {
+          s: {
+            identityId: 'me',
+            emailId: id,
+            envelope: {
+              mailFrom: { email: 'me@example.com', parameters },
+              rcptTo: [
+                { email: 'bob@example.org' },
+                { email: 'hidden@example.org' },
+              ],
+            },
+          },
+        },
+        ...extra,
+      });
+      return { emailId: id, result, submission: result.created?.s };
+    };
+    const read = async (id: string) =>
+      (await one('EmailSubmission/get', { ids: [id] })).list[0];
+
+    it('says in the session how long a message may be held', () => {
+      const capability = server.getSession(AUTH).capabilities[
+        CAPABILITY_SUBMISSION
+      ] as Json;
+      expect(capability).toEqual({
+        maxDelayedSend: 3600,
+        submissionExtensions: { FUTURERELEASE: ['3600'] },
+      });
+      // A server with nothing to wake it up offers no delay.
+      expect(
+        h.server.getSession(AUTH).capabilities[CAPABILITY_SUBMISSION],
+      ).toEqual({ maxDelayedSend: 0, submissionExtensions: {} });
+    });
+
+    it('holds a message, then sends it when its time comes', async () => {
+      const before = Date.now();
+      const { emailId, submission } = await hold({ HOLDFOR: '600' });
+      expect(submission).toMatchObject({
+        undoStatus: 'pending',
+        deliveryStatus: {
+          'bob@example.org': { delivered: 'queued', displayed: 'unknown' },
+        },
+      });
+      const sendAt = Date.parse(submission.sendAt);
+      expect(sendAt).toBeGreaterThanOrEqual(before + 599_000);
+      expect(sendAt).toBeLessThanOrEqual(Date.now() + 600_000);
+      // Nothing has gone out, and something will wake up at the right time.
+      expect(sent).toHaveLength(0);
+      expect(scheduled).toEqual([
+        { submissionId: submission.id, sendAt: new Date(submission.sendAt) },
+      ]);
+      const stored = await read(submission.id);
+      expect(stored).toMatchObject({
+        undoStatus: 'pending',
+        sendAt: submission.sendAt,
+        envelope: {
+          mailFrom: { email: 'me@example.com', parameters: { HOLDFOR: '600' } },
+        },
+      });
+      // How the message is kept meanwhile is the server's business.
+      expect(stored).not.toHaveProperty('held');
+      expect(
+        (
+          await one('EmailSubmission/query', {
+            filter: { undoStatus: 'pending' },
+          })
+        ).ids,
+      ).toEqual([submission.id]);
+
+      // The draft is changed and then destroyed; what was submitted still goes out.
+      await one('Email/set', { destroy: [emailId] });
+      expect(await server.sendScheduled(AUTH, submission.id)).toBe('sent');
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.envelope).toEqual({
+        mailFrom: 'me@example.com',
+        rcptTo: ['bob@example.org', 'hidden@example.org'],
+        tags: { account: AUTH.accountId, submission: submission.id },
+      });
+      expect(sent[0]?.message).toContain('Subject: Later');
+      expect(sent[0]?.message).toContain('As planned.');
+      expect(sent[0]?.message).not.toMatch(/^bcc:/im);
+
+      const after = await read(submission.id);
+      expect(after.undoStatus).toBe('final');
+      expect(after.deliveryStatus['bob@example.org']).toMatchObject({
+        delivered: 'queued',
+        smtpReply: '250 Accepted',
+      });
+      // A second wake-up, as schedulers that promise "at least once" produce, sends nothing more.
+      expect(await server.sendScheduled(AUTH, submission.id)).toBe(
+        'not-pending',
+      );
+      expect(sent).toHaveLength(1);
+      // Delivery reports find it like any other.
+      expect(
+        await server.recordDelivery(AUTH, submission.id, {
+          'bob@example.org': { delivered: 'yes', smtpReply: '250 OK' },
+        }),
+      ).toBe(true);
+      expect(
+        (await read(submission.id)).deliveryStatus['bob@example.org'].delivered,
+      ).toBe('yes');
+      // Nothing is left behind once it has gone.
+      expect(
+        await h.server.download(AUTH, AUTH.accountId, 'missing'),
+      ).toBeNull();
+    });
+
+    it('can be cancelled until it is sent, and not after', async () => {
+      const { emailId, submission } = await hold({
+        holduntil: new Date(Date.now() + 900_000).toISOString(),
+      });
+      expect(submission.undoStatus).toBe('pending');
+
+      // Cancelling moves the message back to drafts in the same call.
+      await one('Email/set', {
+        update: {
+          [emailId]: {
+            mailboxIds: { [sentBox]: true },
+            'keywords/$draft': null,
+          },
+        },
+      });
+      const responses = await call('EmailSubmission/set', {
+        update: { [submission.id]: { undoStatus: 'canceled' } },
+        onSuccessUpdateEmail: {
+          [submission.id]: {
+            mailboxIds: { [drafts]: true },
+            'keywords/$draft': true,
+          },
+        },
+      });
+      expect(responses.map((response: Json) => response[0])).toEqual([
+        'EmailSubmission/set',
+        'Email/set',
+      ]);
+      expect(responses[0][1].updated).toEqual({ [submission.id]: null });
+      expect(responses[1][1].updated).toEqual({ [emailId]: null });
+      expect(
+        (
+          await one('Email/get', {
+            ids: [emailId],
+            properties: ['mailboxIds', 'keywords'],
+          })
+        ).list[0],
+      ).toMatchObject({
+        mailboxIds: { [drafts]: true },
+        keywords: { $draft: true },
+      });
+
+      expect(cancelled).toEqual([submission.id]);
+      const stored = await read(submission.id);
+      expect(stored.undoStatus).toBe('canceled');
+      expect(stored.deliveryStatus['bob@example.org'].delivered).toBe('no');
+      // The wake-up may still come; it finds nothing to send.
+      expect(await server.sendScheduled(AUTH, submission.id)).toBe(
+        'not-pending',
+      );
+      expect(sent).toHaveLength(0);
+      // Cancelling again changes nothing and is not an error.
+      expect(
+        (
+          await one('EmailSubmission/set', {
+            update: { [submission.id]: { undoStatus: 'canceled' } },
+          })
+        ).updated,
+      ).toEqual({ [submission.id]: null });
+      // A cancelled submission is only a record now, and can be removed.
+      expect(
+        (await one('EmailSubmission/set', { destroy: [submission.id] }))
+          .destroyed,
+      ).toEqual([submission.id]);
+
+      const second = await hold({ HOLDFOR: '60' });
+      await server.sendScheduled(AUTH, second.submission.id);
+      const late = await one('EmailSubmission/set', {
+        update: {
+          [second.submission.id]: { undoStatus: 'canceled' },
+          missing: { undoStatus: 'canceled' },
+        },
+      });
+      expect(late.notUpdated[second.submission.id].type).toBe('cannotUnsend');
+      expect(late.notUpdated.missing.type).toBe('notFound');
+      for (const [patch, properties] of [
+        [{ undoStatus: 'pending' }, ['undoStatus']],
+        [{ sendAt: '2030-01-01T00:00:00Z' }, ['sendAt']],
+        [{ undoStatus: 'canceled', identityId: 'x' }, ['identityId']],
+      ] as Array<[Json, string[]]>) {
+        expect(
+          (
+            await one('EmailSubmission/set', {
+              update: { [second.submission.id]: patch },
+            })
+          ).notUpdated[second.submission.id],
+        ).toMatchObject({ type: 'invalidProperties', properties });
+      }
+    });
+
+    it('lets exactly one of a cancellation and a send win', async () => {
+      for (let round = 0; round < 5; round++) {
+        const { submission } = await hold({ HOLDFOR: '60' });
+        const [cancel, outcome] = await Promise.all([
+          one('EmailSubmission/set', {
+            update: { [submission.id]: { undoStatus: 'canceled' } },
+          }),
+          server.sendScheduled(AUTH, submission.id),
+        ]);
+        const wasCancelled = cancel.updated !== null;
+        const wasSent = outcome === 'sent';
+        expect(wasCancelled, `round ${round}: ${outcome}`).not.toBe(wasSent);
+        expect((await read(submission.id)).undoStatus).toBe(
+          wasSent ? 'final' : 'canceled',
+        );
+      }
+      // Several wake-ups at once send one message.
+      const { submission } = await hold({ HOLDFOR: '60' });
+      sent.length = 0;
+      const outcomes = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          server.sendScheduled(AUTH, submission.id),
+        ),
+      );
+      expect(outcomes.filter((outcome) => outcome === 'sent')).toHaveLength(1);
+      expect(sent).toHaveLength(1);
+    });
+
+    it('keeps a waiting message from being forgotten', async () => {
+      const { submission } = await hold({ HOLDFOR: '60' });
+      const refused = await one('EmailSubmission/set', {
+        destroy: [submission.id],
+      });
+      expect(refused.notDestroyed[submission.id].type).toBe('forbidden');
+      expect(await server.sendScheduled(AUTH, submission.id)).toBe('sent');
+      expect(
+        (await one('EmailSubmission/set', { destroy: [submission.id] }))
+          .destroyed,
+      ).toEqual([submission.id]);
+      expect(await server.sendScheduled(AUTH, 'es-missing')).toBe('not-found');
+    });
+
+    it('records a refusal, and tries again after a failure on the way', async () => {
+      const refusedOne = await hold({ HOLDFOR: '60' });
+      failNext = new MailRejectedError('Recipient is on the suppression list');
+      expect(await server.sendScheduled(AUTH, refusedOne.submission.id)).toBe(
+        'rejected',
+      );
+      const status = (await read(refusedOne.submission.id)).deliveryStatus[
+        'bob@example.org'
+      ];
+      expect(status).toEqual({
+        delivered: 'no',
+        displayed: 'unknown',
+        smtpReply: '550 5.0.0 Recipient is on the suppression list',
+      });
+      // It is over: another wake-up does not try again.
+      expect(await server.sendScheduled(AUTH, refusedOne.submission.id)).toBe(
+        'not-pending',
+      );
+
+      const retried = await hold({ HOLDFOR: '60' });
+      failNext = new Error('connection reset');
+      await expect(
+        server.sendScheduled(AUTH, retried.submission.id),
+      ).rejects.toThrow('connection reset');
+      // It can no longer be cancelled, since nobody knows how far the attempt got...
+      expect(
+        (
+          await one('EmailSubmission/set', {
+            update: { [retried.submission.id]: { undoStatus: 'canceled' } },
+          })
+        ).notUpdated[retried.submission.id].type,
+      ).toBe('cannotUnsend');
+      // ...and the next wake-up sends it.
+      sent.length = 0;
+      expect(await server.sendScheduled(AUTH, retried.submission.id)).toBe(
+        'sent',
+      );
+      expect(sent).toHaveLength(1);
+    });
+
+    it('checks the delay asked for, and who is sending, before holding anything', async () => {
+      for (const parameters of [
+        { HOLDFOR: '3601' },
+        { HOLDFOR: 'soon' },
+        { HOLDFOR: null },
+        { HOLDUNTIL: 'tomorrow' },
+        { HOLDUNTIL: new Date(Date.now() + 7_200_000).toISOString() },
+        {
+          HOLDFOR: '60',
+          HOLDUNTIL: new Date(Date.now() + 60_000).toISOString(),
+        },
+      ]) {
+        const { result } = await hold(parameters);
+        expect(result.notCreated?.s, JSON.stringify(parameters)).toMatchObject({
+          type: 'invalidProperties',
+          properties: ['envelope'],
+        });
+      }
+      expect(scheduled).toHaveLength(0);
+      expect(sent).toHaveLength(0);
+
+      // No delay worth holding for: it simply goes.
+      for (const parameters of [
+        { HOLDFOR: '0' },
+        { HOLDUNTIL: '2020-01-01T00:00:00Z' },
+        { OTHER: 'x' },
+      ]) {
+        const { submission } = await hold(parameters);
+        expect(submission.undoStatus, JSON.stringify(parameters)).toBe('final');
+      }
+      expect(sent).toHaveLength(3);
+      expect(scheduled).toHaveLength(0);
+
+      // The sender is checked when the message is submitted, not when it leaves.
+      const other = await one('Email/set', {
+        create: {
+          d: {
+            mailboxIds: { [drafts]: true },
+            from: [{ email: 'boss@example.com' }],
+            to: [{ email: 'bob@example.org' }],
+            subject: 'Not mine',
+            bodyValues: { b: { value: 'x' } },
+            textBody: [{ partId: 'b' }],
+          },
+        },
+      });
+      const { result } = await hold({ HOLDFOR: '60' }, other.created.d.id);
+      expect(result.notCreated.s.type).toBe('forbiddenFrom');
+
+      // A server that cannot hold says so instead of sending at once.
+      const refused = await h.call('EmailSubmission/set', {
+        create: {
+          s: {
+            identityId: 'me',
+            emailId: await draft(),
+            envelope: {
+              mailFrom: {
+                email: 'me@example.com',
+                parameters: { HOLDFOR: '60' },
+              },
+              rcptTo: [{ email: 'bob@example.org' }],
+            },
+          },
+        },
+      });
+      expect(refused.notCreated.s).toMatchObject({
+        type: 'invalidProperties',
+        properties: ['envelope'],
+      });
+      expect(h.sent).toHaveLength(0);
+    });
+
+    it('does not hold a message it could not arrange to send', async () => {
+      const failing = createJmapServer({
+        storage: h.adapter,
+        urls: URLS,
+        transport: { send: async () => undefined },
+        scheduler: {
+          schedule: async () => {
+            throw new Error('scheduler unavailable');
+          },
+        },
+        identities: () => [{ id: 'me', email: 'me@example.com' }],
+      });
+      const emailId = await draft();
+      const response = await failing.handleRequest(
+        {
+          using: USING,
+          methodCalls: [
+            [
+              'EmailSubmission/set',
+              {
+                accountId: AUTH.accountId,
+                create: {
+                  s: {
+                    identityId: 'me',
+                    emailId,
+                    envelope: {
+                      mailFrom: {
+                        email: 'me@example.com',
+                        parameters: { HOLDFOR: '60' },
+                      },
+                      rcptTo: [{ email: 'bob@example.org' }],
+                    },
+                  },
+                },
+              },
+              'c',
+            ],
+          ],
+        },
+        AUTH,
+      );
+      expect(response.methodResponses[0]?.[1]).toEqual({ type: 'serverFail' });
+      // Nothing is left looking as if it were waiting.
+      expect((await one('EmailSubmission/query', {})).ids).toEqual([]);
+    });
+  });
 }

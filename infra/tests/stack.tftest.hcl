@@ -75,6 +75,18 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_iam_role" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:role/mock-role"
+    }
+  }
+
+  mock_resource "aws_lambda_function" {
+    defaults = {
+      arn = "arn:aws:lambda:eu-west-1:123456789012:function:mock-function"
+    }
+  }
+
   mock_resource "aws_kms_key" {
     defaults = {
       arn = "arn:aws:kms:eu-west-1:123456789012:key/mock-key"
@@ -98,6 +110,7 @@ variables {
   api_bundle                = "tests/fixture-bundle.mjs"
   events_bundle             = "tests/fixture-bundle.mjs"
   push_bundle               = "tests/fixture-bundle.mjs"
+  send_bundle               = "tests/fixture-bundle.mjs"
 
   # Every other variable is pinned too: Terraform loads a local terraform.tfvars
   # into tests, and these must not depend on whoever runs them.
@@ -487,7 +500,7 @@ run "delivery_reporting" {
       toset(keys(aws_cloudwatch_metric_alarm.reputation)) == toset(["bounce-rate", "complaint-rate"]) &&
       aws_cloudwatch_metric_alarm.reputation["bounce-rate"].threshold < 0.05 &&
       aws_cloudwatch_metric_alarm.reputation["complaint-rate"].threshold < 0.001 &&
-      toset(keys(aws_cloudwatch_metric_alarm.dead_letters)) == toset(["ingest", "delivery-events", "push"])
+      toset(keys(aws_cloudwatch_metric_alarm.dead_letters)) == toset(["ingest", "delivery-events", "push", "scheduled-send"])
     )
     error_message = "Alarms must fire before SES's own review thresholds, and on any unprocessed message."
   }
@@ -542,6 +555,64 @@ run "push_notifications" {
   assert {
     condition     = length(aws_lambda_function.push.vpc_config) == 0
     error_message = "The push function must stay outside any VPC: it calls push services named by clients and must not be able to reach private addresses."
+  }
+}
+
+run "sending_later" {
+  command = plan
+
+  # The function that sends held mail may send only as the domain, and read the queue: nothing else new.
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.send.statement :
+      !contains(statement.resources, "*") && alltrue([for action in statement.actions : !endswith(action, ":*") && action != "*"])
+    ])
+    error_message = "The send role must not use wildcard actions or resources."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.send.statement :
+      one(statement.condition).variable == "ses:FromAddress" && one(statement.condition).values == tolist(["*@example.com"])
+      if statement.sid == "SendMail"
+    ])
+    error_message = "Held mail may only be sent as an address of the domain."
+  }
+
+  # The API may make schedules in its own group only, and hand them the scheduler role only.
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.api_scheduling.statement :
+      !contains(statement.resources, "*") &&
+      (statement.sid != "ScheduleLongDelays" || alltrue([for resource in statement.resources : endswith(resource, ":schedule/mailless/*")])) &&
+      (statement.sid != "HandOverTheSchedulerRole" || one(statement.condition).values == tolist(["scheduler.amazonaws.com"]))
+    ])
+    error_message = "The API's scheduling permissions must be limited to this stack's group and role."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.scheduler.statement :
+      !contains(statement.resources, "*") && contains(["lambda:InvokeFunction", "sqs:SendMessage"], one(statement.actions))
+    ])
+    error_message = "A schedule may only wake the send function or leave a dead letter."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_event_source_mapping.send.batch_size == 1 &&
+      aws_sqs_queue.send.visibility_timeout_seconds > aws_lambda_function.send.timeout &&
+      jsondecode(aws_sqs_queue.send.redrive_policy).maxReceiveCount == 5
+    )
+    error_message = "A held message must be retried on its own, and set aside when it keeps failing."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.api.environment[0].variables["SCHEDULE_GROUP"] == "mailless" &&
+      contains(keys(aws_lambda_function.api.environment[0].variables), "SEND_QUEUE_URL")
+    )
+    error_message = "The API must know where to arrange a later send."
   }
 }
 
