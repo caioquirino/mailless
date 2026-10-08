@@ -114,6 +114,11 @@ export class Batch {
     private readonly options: BatchOptions,
   ) {}
 
+  /** How many calls have been collected. */
+  get size(): number {
+    return this.calls.length;
+  }
+
   call<Name extends keyof MethodMap>(
     name: Name,
     args: ArgumentsOf<Name>,

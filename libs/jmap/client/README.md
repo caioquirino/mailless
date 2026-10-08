@@ -48,6 +48,51 @@ for (const email of result.get(emails).list) {
 - **Sign-in.** `authorization` is the header to send. Give a function and it
   is asked before every request, which is where an expiring token is renewed.
 
+## Keeping a copy in step
+
+A mail app does not ask for everything each time: it keeps what it has
+looked at, and asks the server what changed since (RFC 8620 §5.2 and §5.6).
+
+```ts
+import { ObjectCache, QueryView, sync } from '@mailless/jmap-client';
+
+// Every mailbox; and of messages, the ones asked for.
+const mailboxes = new ObjectCache<Mailbox>(client, {
+  type: 'Mailbox',
+  everything: true,
+});
+const emails = new ObjectCache<Email>(client, {
+  type: 'Email',
+  properties: ['threadId', 'mailboxIds', 'keywords', 'from', 'subject'],
+  changing: ['mailboxIds', 'keywords'], // all that changes once a message exists
+});
+// The inbox, newest first, a page at a time.
+const inbox = new QueryView(client, {
+  type: 'Email',
+  filter: { inMailbox: inboxId },
+  sort: [{ property: 'receivedAt', isAscending: false }],
+});
+
+await Promise.all([mailboxes.load(), inbox.load()]);
+await emails.load(inbox.ids);
+
+// Later: one request brings all three up to date.
+await sync(client, [mailboxes, emails, inbox]);
+```
+
+- `sync` asks each part what changed and applies it. When the server no
+  longer knows (`cannotCalculateChanges`), that part is asked for again
+  whole, without the caller having to care.
+- `subscribe(listener)` and `version` say when something held changed, which
+  is what a view draws from (React's `useSyncExternalStore` takes them as
+  they are).
+- `loadIn(batch, ids)` asks as part of a batch, where the ids may be what an
+  earlier call finds: a list, its messages and their conversations in one
+  request.
+- `patch`, `remove` and `drop` change what is held before the server has
+  been told, so that what is shown follows at once; the next `sync` puts
+  whatever the server says in its place.
+
 ## Errors
 
 - `JmapRequestError`: the server refused the whole request (a wrong sign-in,
@@ -88,9 +133,8 @@ declare module '@mailless/jmap-client' {
 
 ## Not there yet
 
-Push (EventSource, WebSocket and push subscriptions) and helpers for keeping
-a local copy in step with `/changes`. Both can be done today with plain
-calls.
+Push (EventSource, WebSocket and push subscriptions): for now, `sync` is
+called when there is reason to think something changed, or on a timer.
 
 ## Tests
 

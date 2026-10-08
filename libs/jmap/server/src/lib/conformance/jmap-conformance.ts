@@ -57,14 +57,19 @@ const decoder = new TextDecoder();
 
 // The receiving side of a push subscription with keys (the example keys of RFC 8291).
 const RECEIVER_PRIVATE = 'q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94';
-const RECEIVER_KEYS = {
+/**
+ * The keys of a receiver of pushes, for tests: what a client gives the server
+ * in a push subscription. They are the example keys of RFC 8291, and
+ * `decryptPush` reads what the server then sends.
+ */
+export const PUSH_RECEIVER_KEYS = {
   p256dh:
     'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4',
   auth: 'BTBZMqHH6r4Tts7J_aSIgg',
 };
 
-/** Decrypts a Web Push body (RFC 8291) as the client holding the keys would. */
-function decryptPush(body: Uint8Array): Json {
+/** Decrypts a Web Push body (RFC 8291) as the client holding `PUSH_RECEIVER_KEYS` would. */
+export function decryptPush(body: Uint8Array): Json {
   const salt = body.subarray(0, 16);
   const keyLength = body[20] as number;
   const senderPublic = body.subarray(21, 21 + keyLength);
@@ -78,7 +83,7 @@ function decryptPush(body: Uint8Array): Json {
   ) => Buffer.from(hkdfSync('sha256', key, keySalt, info, length));
   const keyMaterial = derive(
     receiver.computeSecret(senderPublic),
-    Buffer.from(RECEIVER_KEYS.auth, 'base64url'),
+    Buffer.from(PUSH_RECEIVER_KEYS.auth, 'base64url'),
     Buffer.concat([
       encoder.encode('WebPush: info\0'),
       receiver.getPublicKey(),
@@ -4110,7 +4115,7 @@ export function describeJmapConformance(
     });
 
     it('encrypts pushes for a subscription that has keys', async () => {
-      const id = await subscribe({ keys: RECEIVER_KEYS });
+      const id = await subscribe({ keys: PUSH_RECEIVER_KEYS });
       await server.pushStateChange(AUTH.accountId, ['Email']);
 
       expect(pushed).toHaveLength(1);
@@ -4128,7 +4133,7 @@ export function describeJmapConformance(
     });
 
     it('never returns the URL or the keys', async () => {
-      const id = await subscribe({ keys: RECEIVER_KEYS });
+      const id = await subscribe({ keys: PUSH_RECEIVER_KEYS });
       const [, all] = await call('PushSubscription/get', {});
       expect(Object.keys(all.list[0]).sort()).toEqual([
         'deviceClientId',
@@ -4219,8 +4224,8 @@ export function describeJmapConformance(
         ['expires', 'tomorrow'],
         ['types', 'Email'],
         ['types', [1]],
-        ['keys', { p256dh: RECEIVER_KEYS.p256dh }],
-        ['keys', { p256dh: 'AAAA', auth: RECEIVER_KEYS.auth }],
+        ['keys', { p256dh: PUSH_RECEIVER_KEYS.p256dh }],
+        ['keys', { p256dh: 'AAAA', auth: PUSH_RECEIVER_KEYS.auth }],
         ['keys', 'secret'],
         ['id', 'chosen-by-client'],
       ] as Array<[string, Json]>) {
