@@ -26,7 +26,7 @@ import {
   type CompareFn,
   type QuerySpec,
 } from './standard/query.js';
-import type { WriteOp } from './storage.js';
+import { ConflictError, type MetadataStore, type WriteOp } from './storage.js';
 
 export { CAPABILITY_QUOTA };
 
@@ -75,13 +75,50 @@ async function countMail(ctx: MethodContext): Promise<number> {
   return emails.reduce((total, email) => total + email.value.size, 0);
 }
 
+/**
+ * Makes sure an account's mail has been counted, and returns the count. The
+ * first time, every message already there is added up and the sum is kept,
+ * so that nothing has to add them up again: from then on the count moves
+ * with each change. Where nothing can be written (an account the user may
+ * only read), the sum is returned without being kept.
+ */
+export async function countedUsage(ctx: MethodContext): Promise<number> {
+  const accountId = ctx.auth.accountId;
+  const [record] = await ctx.store.get(accountId, QUOTA, [MAIL_QUOTA_ID]);
+  if (record) return (record.value as QuotaValue).used;
+
+  const used = await countMail(ctx);
+  if (ctx.isReadOnly) return used;
+  try {
+    await ctx.store.commit(accountId, [
+      { kind: 'create', type: QUOTA, id: MAIL_QUOTA_ID, value: { used } },
+    ]);
+    return used;
+  } catch (error) {
+    if (!(error instanceof ConflictError)) throw error;
+    // Someone else counted it in the meantime, and may have counted mail that
+    // came since: theirs is the one that was kept.
+    const [kept] = await ctx.store.get(accountId, QUOTA, [MAIL_QUOTA_ID]);
+    return kept ? (kept.value as QuotaValue).used : used;
+  }
+}
+
 /** How many octets the account's mail takes up. */
-export async function usedOctets(ctx: MethodContext): Promise<number> {
-  const [record] = await ctx.store.get(ctx.auth.accountId, QUOTA, [
-    MAIL_QUOTA_ID,
-  ]);
-  // An account from before usage was counted: count it now, without writing.
-  return record ? (record.value as QuotaValue).used : countMail(ctx);
+export const usedOctets = countedUsage;
+
+/**
+ * How many octets an account's mail takes up, as last counted, read straight
+ * from the store: for something that reports on accounts without being able
+ * to read their mail. Null for an account whose mail has not been counted
+ * yet, which it is the first time the account is used after this was added.
+ */
+export async function storedUsage(
+  metadata: MetadataStore,
+  accountId: string,
+): Promise<number | null> {
+  const [record] = await metadata.get(accountId, QUOTA, [MAIL_QUOTA_ID]);
+  const used = (record?.value as QuotaValue | undefined)?.used;
+  return typeof used === 'number' ? Math.max(0, used) : null;
 }
 
 /**

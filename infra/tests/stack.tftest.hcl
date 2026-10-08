@@ -29,6 +29,29 @@ mock_provider "aws" {
     }
   }
 
+  # Ids of the gateway and its integrations, so that a test can say which route goes where.
+  override_resource {
+    target = aws_apigatewayv2_api.jmap
+    values = {
+      execution_arn = "arn:aws:execute-api:eu-west-1:123456789012:mockapi"
+      api_endpoint  = "https://mockapi.execute-api.eu-west-1.amazonaws.com"
+    }
+  }
+
+  override_resource {
+    target = aws_apigatewayv2_integration.api
+    values = {
+      id = "jmap-integration"
+    }
+  }
+
+  override_resource {
+    target = aws_apigatewayv2_integration.admin
+    values = {
+      id = "admin-integration"
+    }
+  }
+
   # The DNS records a certificate asks for are only known to AWS; give the plan something to iterate.
   override_resource {
     target = aws_acm_certificate.api
@@ -486,8 +509,11 @@ run "api_on_its_own_hostname" {
   }
 
   assert {
-    condition     = output.admin_api_url == "https://mail.example.com/admin/api"
-    error_message = "The admin API must be reached on the API's own hostname."
+    condition = (
+      output.admin_api_url == "https://mail.example.com/admin/api" &&
+      output.admin_url == "https://mail.example.com/admin/"
+    )
+    error_message = "The admin interface and its API must be reached on the API's own hostname."
   }
 }
 
@@ -681,7 +707,7 @@ run "admin_api" {
   assert {
     condition = toset([
       for statement in data.aws_iam_policy_document.admin.statement : statement.sid
-    ]) == toset(["Logs", "Directory", "AppPasswords", "ManageUsers", "Encryption"])
+    ]) == toset(["Logs", "Directory", "AppPasswords", "MailUsage", "ManageUsers", "Encryption"])
     error_message = "Unexpected statements in the admin role policy."
   }
 
@@ -714,6 +740,23 @@ run "admin_api" {
       if statement.sid == "AppPasswords"
     ])
     error_message = "The admin role must reach only app-password partitions of the metadata table, and never scan it."
+  }
+
+  # How full a mailbox is can be read, and that is all: the counter, not the mail.
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.admin.statement :
+      toset(statement.actions) == toset(["dynamodb:GetItem", "dynamodb:BatchGetItem"]) &&
+      one(statement.condition).variable == "dynamodb:LeadingKeys" &&
+      toset(one(statement.condition).values) == toset(["R#*#Quota"])
+      if statement.sid == "MailUsage"
+    ])
+    error_message = "The admin role may read the usage counter of an account and nothing else of its mail."
+  }
+
+  assert {
+    condition     = aws_lambda_function.admin.environment[0].variables["QUOTA_OCTETS"] == "0"
+    error_message = "Without a quota the admin function must be told there is none."
   }
 
   assert {
@@ -762,8 +805,11 @@ run "admin_api" {
 
   assert {
     condition = (
-      aws_apigatewayv2_route.admin.route_key == "ANY /admin/api/{proxy+}" &&
-      aws_apigatewayv2_route.admin.authorization_type == "JWT" &&
+      toset(keys(aws_apigatewayv2_route.admin)) == toset(["GET", "POST", "PUT", "PATCH", "DELETE"]) &&
+      alltrue([
+        for method, route in aws_apigatewayv2_route.admin :
+        route.route_key == "${method} /admin/api/{proxy+}" && route.authorization_type == "JWT"
+      ]) &&
       aws_apigatewayv2_authorizer.admin.authorizer_type == "JWT" &&
       aws_apigatewayv2_authorizer.admin.identity_sources == toset(["$request.header.Authorization"]) &&
       aws_apigatewayv2_authorizer.admin.jwt_configuration[0].issuer == module.identity.oidc.issuer &&
@@ -771,6 +817,50 @@ run "admin_api" {
       aws_apigatewayv2_integration.admin.payload_format_version == "2.0"
     )
     error_message = "The admin API must be behind a JWT authorizer for the admin client."
+  }
+
+  # The pages are public, as the files of any web application are; what they do goes through the API.
+  assert {
+    condition = (
+      toset(keys(aws_apigatewayv2_route.admin_pages)) == toset(["GET /admin", "GET /admin/{proxy+}"]) &&
+      alltrue([
+        for key, route in aws_apigatewayv2_route.admin_pages :
+        route.route_key == key && route.authorization_type == "NONE" && route.authorizer_id == null
+      ])
+    )
+    error_message = "The pages of the admin interface must be readable without a token, and only readable."
+  }
+
+  # Every admin route goes to the admin function, and none of them to the one that reads mail.
+  assert {
+    condition = (
+      alltrue([for route in aws_apigatewayv2_route.admin : route.target == "integrations/admin-integration"]) &&
+      alltrue([for route in aws_apigatewayv2_route.admin_pages : route.target == "integrations/admin-integration"]) &&
+      alltrue([for route in aws_apigatewayv2_route.jmap : route.target == "integrations/jmap-integration"])
+    )
+    error_message = "The admin routes must all go to the admin integration, and the JMAP routes to their own."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_permission.api_gateway_invoke_admin.source_arn == "arn:aws:execute-api:eu-west-1:123456789012:mockapi/*/*/admin/*" &&
+      aws_lambda_permission.api_gateway_invoke_admin_root.source_arn == "arn:aws:execute-api:eu-west-1:123456789012:mockapi/*/GET/admin"
+    )
+    error_message = "The gateway may call the admin function for /admin and what is under it, and for nothing else."
+  }
+
+  # What the pages are told, so that they can send someone to sign in.
+  assert {
+    condition = (
+      aws_lambda_function.admin.environment[0].variables["ADMIN_CLIENT_ID"] == module.identity.admin_client_id &&
+      toset(jsondecode(aws_lambda_function.admin.environment[0].variables["AUTH_SCOPES"])) == toset(["openid", "aws.cognito.signin.user.admin"]) &&
+      aws_lambda_function.admin.environment[0].variables["AUTH_AUTHORIZE_URL"] == module.identity.hosted.authorize_url &&
+      aws_lambda_function.admin.environment[0].variables["AUTH_TOKEN_URL"] == module.identity.hosted.token_url &&
+      aws_lambda_function.admin.environment[0].variables["AUTH_LOGOUT_URL"] == module.identity.hosted.logout_url &&
+      aws_lambda_function.admin.environment[0].variables["AUTH_ORIGIN"] == module.identity.hosted.base_url &&
+      startswith(module.identity.hosted.authorize_url, "${module.identity.hosted.base_url}/")
+    )
+    error_message = "The pages must be told the admin client, its scopes and the sign-in pages' addresses."
   }
 
   # The mail endpoints stay as they were: named one by one, with no catch-all and no authorizer of the gateway's.
@@ -798,6 +888,11 @@ run "accounts_can_have_a_quota" {
   assert {
     condition     = aws_lambda_function.api.environment[0].variables["QUOTA_OCTETS"] == "5368709120"
     error_message = "The API must be told the quota."
+  }
+
+  assert {
+    condition     = aws_lambda_function.admin.environment[0].variables["QUOTA_OCTETS"] == "5368709120"
+    error_message = "The admin function must be told the same quota, to show usage against it."
   }
 }
 

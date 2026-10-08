@@ -4,6 +4,10 @@
 # its state.
 
 locals {
+  # What the admin interface may ask for. The second lets a user change their
+  # own password and remove their own passkeys.
+  admin_scopes = ["openid", "aws.cognito.signin.user.admin"]
+
   # A hostname of our own needs a certificate, which is validated through DNS
   # records, so it is only set up when the domain's zone is in Route53.
   custom_domain = var.route53_zone_id != null
@@ -125,9 +129,8 @@ resource "aws_cognito_user_pool_client" "admin" {
 
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
-  # The second scope lets a user change their own password and remove their own passkeys.
-  allowed_oauth_scopes         = ["openid", "aws.cognito.signin.user.admin"]
-  supported_identity_providers = ["COGNITO"]
+  allowed_oauth_scopes                 = local.admin_scopes
+  supported_identity_providers         = ["COGNITO"]
 
   callback_urls = concat(["${var.admin_base_url}/admin/callback"], var.admin_extra_callback_urls)
   logout_urls   = ["${var.admin_base_url}/admin/"]

@@ -42,6 +42,9 @@ Also in this repository:
   SES ingest function, which imports inbound mail; the JMAP API; the function
   that records delivery, bounce and complaint reports; the function that
   sends push notifications; and the function that sends held messages.
+- [`apps/admin-web`](apps/admin-web): the admin interface, a React app the
+  admin function serves under `/admin/`. Users change their password and
+  manage their passkeys and app passwords; administrators manage accounts.
 - [`apps/dev-server`](apps/dev-server): a small local JMAP server over
   in-memory storage for trying things out.
 - [`infra/`](infra): Terraform for SES receiving, S3, DynamoDB and the ingest

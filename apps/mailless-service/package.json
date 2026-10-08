@@ -46,12 +46,17 @@
         "configurations": {
           "development": {},
           "production": {}
-        }
+        },
+        "dependsOn": [
+          "^build",
+          "embed-admin-web"
+        ]
       },
       "test": {
         "dependsOn": [
           "^build",
           "build",
+          "embed-admin-web",
           {
             "target": "local-services",
             "projects": [
@@ -59,10 +64,49 @@
             ]
           }
         ]
+      },
+      "embed-admin-web": {
+        "command": "node tools/embed-admin-web.mjs apps/admin-web/dist apps/mailless-service/src/admin/web-assets.gen.ts",
+        "options": {
+          "cwd": "{workspaceRoot}"
+        },
+        "dependsOn": [
+          {
+            "target": "build",
+            "projects": [
+              "admin-web"
+            ]
+          }
+        ],
+        "inputs": [
+          "{workspaceRoot}/tools/embed-admin-web.mjs",
+          {
+            "dependentTasksOutputFiles": "**/*",
+            "transitive": false
+          }
+        ],
+        "outputs": [
+          "{projectRoot}/src/admin/web-assets.gen.ts"
+        ],
+        "cache": true
+      },
+      "typecheck": {
+        "dependsOn": [
+          "^typecheck",
+          "embed-admin-web"
+        ]
+      },
+      "lint": {
+        "dependsOn": [
+          "embed-admin-web"
+        ]
       }
     },
     "tags": [
       "type:app"
+    ],
+    "implicitDependencies": [
+      "admin-web"
     ]
   },
   "dependencies": {

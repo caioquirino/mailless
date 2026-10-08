@@ -18,8 +18,9 @@ import {
   createHash,
   hkdfSync,
 } from 'node:crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createJmapServer, type JmapServer } from '../server.js';
+import { storedUsage } from '../quota.js';
 import type { StorageAdapter } from '../storage.js';
 import { MailRejectedError, type MailEnvelope } from '../transport.js';
 import type { StorageAdapterFactory } from './storage-contract.js';
@@ -6907,6 +6908,59 @@ export function describeJmapConformance(
       expect(
         (await call('Quota/query', { sort: [{ property: 'nope' }] })).type,
       ).toBe('unsupportedSort');
+    });
+
+    it('counts a mailbox from before there was a count once, on its first use, and keeps the result', async () => {
+      const [first, second] = [message('one'), message('two', 700)];
+      for (const raw of [first, second]) {
+        await server.importMessage(AUTH, raw, { mailboxRole: 'inbox' });
+      }
+      // As an account was before usage was counted: mail, and no count of it.
+      await h.adapter.metadata.commit(AUTH.accountId, [
+        { kind: 'destroy', type: 'Quota', id: 'mail' },
+      ]);
+      expect(await storedUsage(h.adapter.metadata, AUTH.accountId)).toBeNull();
+
+      // A server that has no limit to enforce, as most have. Anything the account does counts it.
+      const lists = vi.spyOn(h.adapter.metadata, 'list');
+      const plain = createJmapServer({ storage: h.adapter, urls: URLS });
+      const echo = () =>
+        plain.handleRequest(
+          {
+            using: [CAPABILITY_CORE],
+            methodCalls: [['Core/echo', { hello: true }, 'c']],
+          },
+          AUTH,
+        );
+      await echo();
+      expect(await storedUsage(h.adapter.metadata, AUTH.accountId)).toBe(
+        first.length + second.length,
+      );
+      const counting = lists.mock.calls.length;
+      expect(counting).toBeGreaterThan(0);
+
+      // Nothing is added up again: not by this server, and not by one that starts later.
+      await echo();
+      await createJmapServer({ storage: h.adapter, urls: URLS }).handleRequest(
+        {
+          using: [CAPABILITY_CORE],
+          methodCalls: [['Core/echo', {}, 'c']],
+        },
+        AUTH,
+      );
+      expect(lists.mock.calls.length).toBe(counting);
+      lists.mockRestore();
+
+      // And from here the count moves with the mail.
+      const third = message('three', 100);
+      await server.importMessage(AUTH, third, { mailboxRole: 'inbox' });
+      expect(await storedUsage(h.adapter.metadata, AUTH.accountId)).toBe(
+        first.length + second.length + third.length,
+      );
+    });
+
+    it('counts a new account from the start, as holding nothing', async () => {
+      expect(await storedUsage(h.adapter.metadata, AUTH.accountId)).toBe(0);
     });
 
     it('shows no quota without a limit, or to a client that did not ask about mail', async () => {

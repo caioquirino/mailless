@@ -66,3 +66,8 @@ tools/compliance/results.json
 
 # Made from libs/admin-api/openapi.json by `nx run admin-client:generate`
 libs/admin-client/src/generated
+
+vite.config.*.timestamp*
+
+# The built admin interface, packed for the admin function by `nx run mailless-service:embed-admin-web`
+apps/mailless-service/src/admin/web-assets.gen.ts

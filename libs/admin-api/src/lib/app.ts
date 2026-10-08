@@ -15,7 +15,7 @@ import { HTTPException } from 'hono/http-exception';
 import {
   AccountDetailSchema,
   AccountIdSchema,
-  AccountSchema,
+  AccountSummarySchema,
   AddressSchema,
   AppPasswordSchema,
   ChangePasswordSchema,
@@ -55,6 +55,15 @@ export interface AdminApiOptions {
   verifyToken: TokenVerifier;
   /** The role that lets a user manage accounts. */
   adminRole: string;
+  /**
+   * How full mailboxes are, when the host can tell: what an account's mail
+   * takes up (null when it has not been counted yet) and how much any
+   * account may hold (null for no limit). Without it, usage is unknown.
+   */
+  usage?: {
+    usedOctets(accountId: string): Promise<number | null>;
+    limitOctets: number | null;
+  };
   /** The identity provider's page for adding a passkey, when it has one. */
   passkeyEnrolmentUrl?: string;
   /**
@@ -234,6 +243,11 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
     }
   };
 
+  const usageOf = async (accountId: string) => ({
+    usedOctets: (await options.usage?.usedOctets(accountId)) ?? null,
+    limitOctets: options.usage?.limitOctets ?? null,
+  });
+
   const detail = async (account: Account) => {
     const user = await identity.getUser(account.id);
     return {
@@ -243,6 +257,7 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
       sharedWith: await directory.sharedWith(account.id),
       canSignIn: user?.enabled ?? false,
       isAdmin: user?.roles.includes(adminRole) ?? false,
+      usage: await usageOf(account.id),
     };
   };
 
@@ -267,6 +282,7 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
           isAdmin: caller.isAdmin,
           account,
           addresses: account ? await directory.addressesOf(account.id) : [],
+          usage: account ? await usageOf(account.id) : null,
           capabilities: identity.capabilities,
           passkeyEnrolmentUrl: options.passkeyEnrolmentUrl ?? null,
         },
@@ -483,14 +499,23 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
       path: '/accounts',
       operationId: 'listAccounts',
       tags: ['accounts'],
-      summary: 'Every account',
+      summary: 'Every account, with how full its mailbox is',
       security,
       responses: {
-        200: json(z.array(AccountSchema), 'The accounts, by id.'),
+        200: json(z.array(AccountSummarySchema), 'The accounts, by id.'),
         ...REFUSALS,
       },
     }),
-    async (c) => c.json(await directory.listAccounts(), 200),
+    async (c) =>
+      c.json(
+        await Promise.all(
+          (await directory.listAccounts()).map(async (account) => ({
+            ...account,
+            usage: await usageOf(account.id),
+          })),
+        ),
+        200,
+      ),
   );
 
   app.openapi(

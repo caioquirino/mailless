@@ -33,6 +33,24 @@ export const AccountSchema = z
   })
   .openapi('Account');
 
+export const MailUsageSchema = z
+  .object({
+    usedOctets: z.number().int().nonnegative().nullable().openapi({
+      description:
+        'How much the mailbox holds, in bytes. Null when it has not been counted yet, which it is the first time the account is used.',
+    }),
+    limitOctets: z.number().int().positive().nullable().openapi({
+      description:
+        'How much it may hold, in bytes. Null when there is no limit.',
+    }),
+  })
+  .openapi('MailUsage');
+
+/** An account as a list shows it. */
+export const AccountSummarySchema = AccountSchema.extend({
+  usage: MailUsageSchema,
+}).openapi('AccountSummary');
+
 export const AccountDetailSchema = AccountSchema.extend({
   addresses: z.array(AddressSchema),
   shares: z.record(z.string(), AccessSchema).openapi({
@@ -45,6 +63,7 @@ export const AccountDetailSchema = AccountSchema.extend({
     description: 'Whether the identity provider has an enabled user for it.',
   }),
   isAdmin: z.boolean(),
+  usage: MailUsageSchema,
 }).openapi('AccountDetail');
 
 export const CapabilitiesSchema = z
@@ -64,6 +83,9 @@ export const MeSchema = z
       description: 'Null for a user who has no mailbox.',
     }),
     addresses: z.array(AddressSchema),
+    usage: z.union([MailUsageSchema, z.null()]).openapi({
+      description: 'Null for a user who has no mailbox.',
+    }),
     capabilities: CapabilitiesSchema,
     passkeyEnrolmentUrl: z.string().nullable().openapi({
       description:

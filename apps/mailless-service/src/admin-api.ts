@@ -8,10 +8,18 @@ import {
   tokenVerifierOptionsFromEnvironment,
 } from '@mailless/identity';
 import { CognitoIdentityProvider } from '@mailless/identity-cognito';
-import { createAppPasswordStore } from '@mailless/jmap-server/auth';
+import {
+  createAppPasswordStore,
+  storedUsage,
+} from '@mailless/jmap-server/auth';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import { Hono } from 'hono';
 import { handle } from 'hono/aws-lambda';
+import { assets } from './admin/web-assets.gen.js';
+import {
+  createAdminWeb,
+  webConfigurationFromEnvironment,
+} from './admin/web.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -25,6 +33,12 @@ if (!oidc) throw new Error('Missing environment variable OIDC_ISSUER');
 // The SDK reads AWS_ENDPOINT_URL_DYNAMODB itself, which is how tests point it at a local stand-in.
 const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const passkeyEnrolmentUrl = process.env['PASSKEY_ENROLMENT_URL'];
+const metadata = new DynamoDbMetadataStore({
+  client: dynamodb,
+  tableName: required('TABLE_NAME'),
+});
+// The same limit the JMAP API is given. Without one there is none.
+const quotaOctets = Number(process.env['QUOTA_OCTETS'] ?? '');
 
 const api = createAdminApi({
   directory: new DynamoDbDirectory({
@@ -36,12 +50,13 @@ const api = createAdminApi({
     userPoolId: required('USER_POOL_ID'),
   }),
   // App passwords live with the mail they open, so in the metadata table.
-  appPasswords: createAppPasswordStore(
-    new DynamoDbMetadataStore({
-      client: dynamodb,
-      tableName: required('TABLE_NAME'),
-    }),
-  ),
+  appPasswords: createAppPasswordStore(metadata),
+  // How full each mailbox is: the count the JMAP API keeps, and the limit it applies.
+  usage: {
+    usedOctets: (accountId) => storedUsage(metadata, accountId),
+    limitOctets:
+      Number.isSafeInteger(quotaOctets) && quotaOctets > 0 ? quotaOctets : null,
+  },
   verifyToken: createTokenVerifier(oidc),
   adminRole: required('ADMIN_ROLE'),
   ...(passkeyEnrolmentUrl ? { passkeyEnrolmentUrl } : {}),
@@ -56,10 +71,21 @@ const api = createAdminApi({
     ),
 });
 
-/** The admin API, served under /admin/api next to the JMAP API. */
+// The pages of the admin interface are part of this function's own bundle.
+const web = createAdminWeb({
+  assets,
+  configuration: webConfigurationFromEnvironment(process.env),
+  mountedAt: '/admin',
+});
+
+/**
+ * The admin interface under /admin and its API under /admin/api, next to the
+ * JMAP API. The pages are public; everything they do goes through the API.
+ */
 export const handler = handle(
   new Hono()
     .route('/admin/api', api)
+    .route('/admin', web)
     .notFound((c) =>
       c.json({ error: 'notFound', message: 'There is nothing here' }, 404),
     ),

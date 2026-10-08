@@ -19,12 +19,18 @@ async function setup() {
   const appPasswords = createAppPasswordStore(new InMemoryMetadataStore());
   const audit: AuditEntry[] = [];
   const errors: unknown[] = [];
+  /** What each mailbox holds, for those that have been counted. */
+  const used = new Map<string, number>();
   const api = createAdminApi({
     directory,
     identity,
     appPasswords,
     adminRole: ROLE,
     passkeyEnrolmentUrl: 'https://auth.example.com/passkeys/add',
+    usage: {
+      usedOctets: async (accountId) => used.get(accountId) ?? null,
+      limitOctets: 1_000_000,
+    },
     // A token is whatever the in-memory provider handed out at sign-in.
     verifyToken: async (token) => {
       const user = identity.whoIs(token);
@@ -78,6 +84,7 @@ async function setup() {
     appPasswords,
     audit,
     errors,
+    used,
     person,
     signIn,
     call,
@@ -166,6 +173,7 @@ describe('admin API', () => {
           createdAt: expect.any(String),
         },
         addresses: ['ann@example.com'],
+        usage: { usedOctets: null, limitOctets: 1_000_000 },
         capabilities: {
           changeOwnPassword: true,
           manageOwnPasskeys: true,
@@ -261,6 +269,7 @@ describe('admin API', () => {
       expect((await t.call(guest, 'GET', '/me')).body).toMatchObject({
         username: 'guest',
         account: null,
+        usage: null,
         addresses: [],
       });
       const refused = await t.call(guest, 'POST', '/me/app-passwords', {
@@ -290,6 +299,7 @@ describe('admin API', () => {
         sharedWith: {},
         canSignIn: true,
         isAdmin: false,
+        usage: { usedOctets: null, limitOctets: 1_000_000 },
       });
       expect(t.identity.signIn('bob', PASSWORD)).toBeUndefined();
 
@@ -337,6 +347,28 @@ describe('admin API', () => {
       expect(t.errors).toHaveLength(1);
       // No account is left without a user to go with it.
       expect(await t.directory.account('new')).toBeUndefined();
+    });
+
+    it('says how full each mailbox is, against what it may hold', async () => {
+      t.used.set('ann', 250_000);
+      const listed = (await t.call(admin, 'GET', '/accounts')).body;
+      expect(
+        listed.map((account: Json) => [account.id, account.usage]),
+      ).toEqual([
+        ['ann', { usedOctets: 250_000, limitOctets: 1_000_000 }],
+        // Not counted yet: unknown, which is not the same as empty.
+        ['root', { usedOctets: null, limitOctets: 1_000_000 }],
+      ]);
+      expect((await t.call(admin, 'GET', '/accounts/ann')).body.usage).toEqual({
+        usedOctets: 250_000,
+        limitOctets: 1_000_000,
+      });
+      // A user sees their own, and nobody else's.
+      expect((await t.call(ann, 'GET', '/me')).body.usage).toEqual({
+        usedOctets: 250_000,
+        limitOctets: 1_000_000,
+      });
+      expect((await t.call(ann, 'GET', '/accounts/root')).status).toBe(403);
     });
 
     it('renames an account and switches it off and on', async () => {

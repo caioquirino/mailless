@@ -63,7 +63,7 @@ import { mdnMethods } from './mail/mdn.js';
 import { threadMethods } from './mail/thread.js';
 import { contactMethods, provisionAddressBooks } from './contacts/contacts.js';
 import { principalMethods } from './principals.js';
-import { quotaMethods } from './quota.js';
+import { countedUsage, quotaMethods } from './quota.js';
 import { vacationMethods } from './mail/vacation.js';
 import {
   pushMethods,
@@ -654,6 +654,25 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     };
   };
 
+  /**
+   * The accounts this server has seen counted. An account's mail is counted
+   * once, the first time it is used after the count was introduced; this
+   * keeps the check for that to one read per account for as long as the
+   * server runs.
+   */
+  const counted = new Set<string>();
+  const ensureCounted = async (ctx: MethodContext): Promise<void> => {
+    const accountId = ctx.auth.accountId;
+    if (counted.has(accountId)) return;
+    try {
+      await countedUsage(ctx);
+      counted.add(accountId);
+    } catch (error) {
+      // Knowing how full a mailbox is must never be why a request fails.
+      options.onError?.(error, 'usage');
+    }
+  };
+
   return {
     limits,
 
@@ -713,6 +732,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
 
       const ctx = makeContext(auth);
       ctx.using = using;
+      await ensureCounted(ctx);
       for (const [creationId, id] of Object.entries(createdIds ?? {})) {
         ctx.createdIds.set(creationId, id);
       }
@@ -831,6 +851,8 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       const ctx = makeContext(auth);
       await provisionMailboxes(ctx);
       await provisionAddressBooks(ctx);
+      // A new account is counted from the start: it holds nothing.
+      await ensureCounted(ctx);
     },
 
     recordDelivery(auth, submissionId, updates) {

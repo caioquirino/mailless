@@ -46,6 +46,9 @@ Rules worth knowing:
   part of this API yet.
 - An administrator can see and revoke a user's app passwords but not make
   one: a secret is only ever shown to the user it belongs to.
+- With the `usage` option, accounts are shown with how much their mailbox
+  holds and how much it may hold. A mailbox that has not been counted yet is
+  reported as unknown (`usedOctets: null`), which is not the same as empty.
 - `audit` is told of every change (who, what, which account). It is never
   given a password, a secret or an address.
 

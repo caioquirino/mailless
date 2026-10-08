@@ -247,6 +247,12 @@ describe.skipIf(!reachable)('admin API Lambda bundle', () => {
       OIDC_ROLES_CLAIM: 'cognito:groups',
       OIDC_REQUIRED_CLAIMS: JSON.stringify({ token_use: 'access' }),
       OIDC_JWKS: JSON.stringify(providerKeys.jwks),
+      // What the pages are told, so that they can sign someone in.
+      ADMIN_CLIENT_ID: 'admin-client',
+      AUTH_AUTHORIZE_URL: 'https://auth.example.com/oauth2/authorize',
+      AUTH_TOKEN_URL: 'https://auth.example.com/oauth2/token',
+      AUTH_LOGOUT_URL: 'https://auth.example.com/logout',
+      AUTH_SCOPES: JSON.stringify(['openid', 'aws.cognito.signin.user.admin']),
     });
     const bundle = new URL('../dist/admin-api.mjs', import.meta.url).href;
     const { handler } = (await import(
@@ -354,6 +360,53 @@ describe.skipIf(!reachable)('admin API Lambda bundle', () => {
       'Laptop',
     );
     expect((await call('GET', '/elsewhere', admin)).status).toBe(404);
+
+    // The pages themselves need no token: the built interface is in the bundle.
+    const raw = async (path: string) =>
+      (await handler(
+        {
+          version: '2.0',
+          rawPath: path,
+          rawQueryString: '',
+          headers: { host: 'mail.example.com' },
+          isBase64Encoded: false,
+          requestContext: {
+            domainName: 'mail.example.com',
+            http: { method: 'GET', path },
+          },
+        } as unknown as Parameters<typeof handler>[0],
+        {} as Parameters<typeof handler>[1],
+      )) as {
+        statusCode: number;
+        body: string;
+        headers: Record<string, string>;
+      };
+    for (const path of ['/admin', '/admin/', '/admin/accounts/adm-1']) {
+      const page = await raw(path);
+      expect(page.statusCode, path).toBe(200);
+      expect(page.headers['content-type']).toContain('text/html');
+      expect(page.headers['content-security-policy']).toContain(
+        "script-src 'self'",
+      );
+      expect(page.body).toContain('<div id="root">');
+      // Every script and style the page asks for is one this function serves.
+      for (const [, file] of page.body.matchAll(
+        /(?:src|href)="\/admin\/([^"]+)"/g,
+      )) {
+        expect((await raw(`/admin/${file}`)).statusCode, file).toBe(200);
+      }
+    }
+    const settings = await raw('/admin/config.json');
+    expect(JSON.parse(settings.body)).toEqual({
+      apiBaseUrl: '/admin/api',
+      clientId: 'admin-client',
+      authorizeUrl: 'https://auth.example.com/oauth2/authorize',
+      tokenUrl: 'https://auth.example.com/oauth2/token',
+      logoutUrl: 'https://auth.example.com/logout',
+      scopes: ['openid', 'aws.cognito.signin.user.admin'],
+      passkeyEnrolmentUrl: 'https://auth.example.com/passkeys/add',
+    });
+    expect((await raw('/admin/assets/nothing-here.js')).statusCode).toBe(404);
   });
 });
 

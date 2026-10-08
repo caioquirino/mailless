@@ -12,26 +12,26 @@ through SES.
 
 ## What it creates
 
-| Resource                                                 | Purpose                                                                                                                                                 |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SES domain identity with DKIM                            | Proves ownership of the domain.                                                                                                                         |
-| SES receipt rule set and rule                            | Accepts mail for the domain over TLS, scans it, stores it in S3, then invokes the ingest function.                                                      |
-| S3 bucket                                                | `inbound/` holds raw messages until imported; `blobs/` holds the mailbox content. Encrypted, private, TLS only.                                         |
-| DynamoDB table                                           | Mailbox metadata and change log. On-demand billing, point-in-time recovery, deletion protection.                                                        |
-| Ingest Lambda (`nodejs24.x`, arm64)                      | Imports each message into the recipients' accounts.                                                                                                     |
-| SQS dead-letter queue                                    | Catches deliveries that still fail after two retries.                                                                                                   |
-| KMS key (optional, on by default)                        | Customer-managed encryption for the bucket and table.                                                                                                   |
-| Cognito user pool                                        | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed. A password or, once enrolled, a passkey.                                    |
-| Sign-in pages, admin client and `MAILLESS_ADMIN` group   | Cognito's own pages for signing in and enrolling a passkey, on `auth.<domain>` with Route53, for the admin interface and those who may manage accounts. |
-| API Lambda and HTTP API                                  | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                                                                    |
-| Admin Lambda and its route                               | The admin API under `/admin/api`: accounts, addresses and shares, and each user's own credentials. It can change accounts and cannot read mail.         |
-| Certificate and `mail.<domain>` (with Route53)           | The API's own hostname, plus an SRV record so clients can find it from an address.                                                                      |
-| MAIL FROM subdomain                                      | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                                                           |
-| SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message.                |
-| Table stream and push Lambda                             | Tells mail apps that registered for it when something changed, so new mail shows up without refreshing.                                                 |
-| Send queue, schedule group and send Lambda               | Holds messages to send later, and wakes up to send them. Used by "undo send".                                                                           |
-| CloudWatch alarms                                        | Bounce rate, complaint rate, and anything left in a dead-letter queue.                                                                                  |
-| Route53 records (optional)                               | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.                                          |
+| Resource                                                 | Purpose                                                                                                                                                                           |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SES domain identity with DKIM                            | Proves ownership of the domain.                                                                                                                                                   |
+| SES receipt rule set and rule                            | Accepts mail for the domain over TLS, scans it, stores it in S3, then invokes the ingest function.                                                                                |
+| S3 bucket                                                | `inbound/` holds raw messages until imported; `blobs/` holds the mailbox content. Encrypted, private, TLS only.                                                                   |
+| DynamoDB table                                           | Mailbox metadata and change log. On-demand billing, point-in-time recovery, deletion protection.                                                                                  |
+| Ingest Lambda (`nodejs24.x`, arm64)                      | Imports each message into the recipients' accounts.                                                                                                                               |
+| SQS dead-letter queue                                    | Catches deliveries that still fail after two retries.                                                                                                                             |
+| KMS key (optional, on by default)                        | Customer-managed encryption for the bucket and table.                                                                                                                             |
+| Cognito user pool                                        | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed. A password or, once enrolled, a passkey.                                                              |
+| Sign-in pages, admin client and `MAILLESS_ADMIN` group   | Cognito's own pages for signing in and enrolling a passkey, on `auth.<domain>` with Route53, for the admin interface and those who may manage accounts.                           |
+| API Lambda and HTTP API                                  | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                                                                                              |
+| Admin Lambda and its routes                              | The admin interface under `/admin/` and its API under `/admin/api`: accounts, addresses and shares, and each user's own credentials. It can change accounts and cannot read mail. |
+| Certificate and `mail.<domain>` (with Route53)           | The API's own hostname, plus an SRV record so clients can find it from an address.                                                                                                |
+| MAIL FROM subdomain                                      | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                                                                                     |
+| SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message.                                          |
+| Table stream and push Lambda                             | Tells mail apps that registered for it when something changed, so new mail shows up without refreshing.                                                                           |
+| Send queue, schedule group and send Lambda               | Holds messages to send later, and wakes up to send them. Used by "undo send".                                                                                                     |
+| CloudWatch alarms                                        | Bounce rate, complaint rate, and anything left in a dead-letter queue.                                                                                                            |
+| Route53 records (optional)                               | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.                                                                    |
 
 Everything is pay-per-use except the KMS key, which costs about 1 USD a month.
 Set `use_customer_kms_key = false` to use the free AWS-managed encryption.
@@ -208,24 +208,25 @@ pnpm infra admin list
 pnpm infra admin revoke <account>   # also ends that user's sessions
 ```
 
-To run that interface on your own machine against this stack, allow
-it to be signed in to from there:
-
-```hcl
-admin_extra_callback_urls = ["http://localhost:5173/admin/callback"]
-```
+The interface itself is described [below](#the-admin-interface-and-its-api).
 
 All of this is in `modules/identity-cognito`. The rest of the stack reads only
 that module's outputs, so signing in with another provider is another module
 with the same outputs.
 
-### The admin API
+### The admin interface and its API
 
 Accounts, addresses and shares for administrators, and each user's own
-password, passkeys and app passwords, are managed through an API of its own
-at `terraform output admin_api_url` (`<API address>/admin/api`). What it
-offers is described in
-[`libs/admin-api/openapi.json`](../libs/admin-api/openapi.json).
+password, passkeys and app passwords, are managed in a web interface at
+`terraform output admin_url` (`<API address>/admin/`). Anyone with an account
+can sign in to it for their own credentials. Managing accounts needs the
+`MAILLESS_ADMIN` role, and the first administrator is made with
+`pnpm infra admin grant <account>`.
+
+The pages themselves are public, as the files of any web application are.
+Everything they do goes through an API at `terraform output admin_api_url`
+(`<API address>/admin/api`), and that needs a sign-in. What the API offers is
+described in [`libs/admin-api/openapi.json`](../libs/admin-api/openapi.json).
 
 - Every call needs an access token from the sign-in pages, issued for the
   admin client. The gateway checks it before anything runs, and the function
@@ -235,6 +236,20 @@ offers is described in
   the users of the pool and app passwords. It has no access to the bucket and
   cannot send mail, and in the table that holds mail it can reach only the
   app-password entries and the counters that record that something changed.
+
+To work on the interface on your own machine against this stack, let it be
+signed in to from there, apply, and then start it with the stack as its
+backend:
+
+```hcl
+admin_extra_callback_urls = ["http://localhost:5173/admin/callback"]
+```
+
+```sh
+ADMIN_BACKEND=https://<API hostname> pnpm nx dev admin-web
+```
+
+The pages then come from your machine and everything else from the stack.
 
 ### The accounts directory
 
@@ -321,6 +336,14 @@ account_quota_bytes = 5368709120 # 5 GB
 Mail apps that support it then show how full the mailbox is. Once it is full
 you cannot add mail to it yourself (saving a draft, importing), but mail
 arriving from outside is always delivered.
+
+The admin interface shows how full each mailbox is, against the limit when
+there is one: to each user for their own, and to administrators for every
+account. The admin function reads the counter only, never the mail. A mailbox
+from before this was deployed is counted once, the first time a mail app
+connects to it or mail arrives; until then it is shown as "Not counted yet".
+After that the count moves with each message, so showing it costs one small
+read.
 
 ### Read receipts
 

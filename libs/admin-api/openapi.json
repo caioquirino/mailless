@@ -59,6 +59,17 @@
               "example": "ann@example.com"
             }
           },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MailUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a user who has no mailbox."
+          },
           "capabilities": {
             "$ref": "#/components/schemas/Capabilities"
           },
@@ -72,6 +83,7 @@
           "isAdmin",
           "account",
           "addresses",
+          "usage",
           "capabilities",
           "passkeyEnrolmentUrl"
         ]
@@ -100,6 +112,22 @@
       "AccountStatus": {
         "type": "string",
         "enum": ["active", "disabled", "deleting"]
+      },
+      "MailUsage": {
+        "type": "object",
+        "properties": {
+          "usedOctets": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "How much the mailbox holds, in bytes. Null when it has not been counted yet, which it is the first time the account is used."
+          },
+          "limitOctets": {
+            "type": ["integer", "null"],
+            "exclusiveMinimum": 0,
+            "description": "How much it may hold, in bytes. Null when there is no limit."
+          }
+        },
+        "required": ["usedOctets", "limitOctets"]
       },
       "Capabilities": {
         "type": "object",
@@ -210,6 +238,22 @@
         },
         "required": ["label"]
       },
+      "AccountSummary": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Account"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "usage": {
+                "$ref": "#/components/schemas/MailUsage"
+              }
+            },
+            "required": ["usage"]
+          }
+        ]
+      },
       "AccountDetail": {
         "allOf": [
           {
@@ -248,6 +292,9 @@
               },
               "isAdmin": {
                 "type": "boolean"
+              },
+              "usage": {
+                "$ref": "#/components/schemas/MailUsage"
               }
             },
             "required": [
@@ -255,7 +302,8 @@
               "shares",
               "sharedWith",
               "canSignIn",
-              "isAdmin"
+              "isAdmin",
+              "usage"
             ]
           }
         ]
@@ -801,7 +849,7 @@
       "get": {
         "operationId": "listAccounts",
         "tags": ["accounts"],
-        "summary": "Every account",
+        "summary": "Every account, with how full its mailbox is",
         "security": [
           {
             "bearer": []
@@ -815,7 +863,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Account"
+                    "$ref": "#/components/schemas/AccountSummary"
                   }
                 }
               }

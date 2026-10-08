@@ -74,6 +74,20 @@ data "aws_iam_policy_document" "admin" {
     }
   }
 
+  # How full each mailbox is: the one counter the JMAP API keeps per account
+  # (R#<account>#Quota). A number, and nothing of the mail it counts. Read only.
+  statement {
+    sid       = "MailUsage"
+    actions   = ["dynamodb:GetItem", "dynamodb:BatchGetItem"]
+    resources = [aws_dynamodb_table.metadata.arn]
+
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["R#*#Quota"]
+    }
+  }
+
   # Users of this stack's pool and no other. Passkeys and a user's own password
   # are changed with that user's token, which needs no permission here.
   statement {
@@ -133,6 +147,17 @@ resource "aws_lambda_function" "admin" {
       USER_POOL_ID          = module.identity.provider.user_pool_id
       ADMIN_ROLE            = module.identity.admin_role
       PASSKEY_ENROLMENT_URL = module.identity.hosted.passkey_enrolment_url
+      # The limit the JMAP API applies, so that usage can be shown against it. 0 means none.
+      QUOTA_OCTETS = var.account_quota_bytes == null ? "0" : tostring(var.account_quota_bytes)
+      # What the pages in the browser need to send someone to sign in, handed
+      # to them as config.json. None of it is secret: the client has no secret.
+      ADMIN_CLIENT_ID    = module.identity.admin_client_id
+      AUTH_AUTHORIZE_URL = module.identity.hosted.authorize_url
+      AUTH_TOKEN_URL     = module.identity.hosted.token_url
+      AUTH_LOGOUT_URL    = module.identity.hosted.logout_url
+      AUTH_SCOPES        = jsonencode(module.identity.admin_scopes)
+      # The only other origin the pages talk to, named in their Content-Security-Policy.
+      AUTH_ORIGIN = module.identity.hosted.base_url
       # As for the JMAP API, except whom a token must have been issued for:
       # the admin interface, not a mail client.
       OIDC_ISSUER          = module.identity.oidc.issuer
@@ -177,21 +202,67 @@ resource "aws_apigatewayv2_integration" "admin" {
   payload_format_version = "2.0"
 }
 
-# The JMAP routes are each named, and there is no catch-all, so nothing else
-# answers under /admin/api.
+locals {
+  # The methods the admin API answers to.
+  admin_api_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+}
+
+# The API, behind the gateway's check of the token. The JMAP routes are each
+# named, and there is no catch-all, so nothing else answers under /admin/api.
+#
+# Both this and the pages' route below end in a greedy path, and a request for
+# /admin/api/... fits both. The gateway takes the most specific match, which is
+# the longer path. Each method is named here rather than ANY, so that the two
+# routes differ in nothing but how much of the path they name: an ANY route is
+# for "methods that you haven't defined", and whether a GET route with a
+# shorter path would be preferred to it is not something the documentation
+# settles. Should the pages' route ever win, the function still checks the
+# token itself.
 resource "aws_apigatewayv2_route" "admin" {
+  for_each = toset(local.admin_api_methods)
+
   api_id    = aws_apigatewayv2_api.jmap.id
-  route_key = "ANY /admin/api/{proxy+}"
+  route_key = "${each.key} /admin/api/{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.admin.id}"
 
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.admin.id
 }
 
+# This was one route for every method. It is the same route, now for GET.
+moved {
+  from = aws_apigatewayv2_route.admin
+  to   = aws_apigatewayv2_route.admin["GET"]
+}
+
+# The pages of the admin interface and their config.json. They are public, as
+# the files of any web application are: there is nothing in them but the
+# program, and everything it does goes through the API above with a token.
+# Reading only, so GET and nothing else.
+resource "aws_apigatewayv2_route" "admin_pages" {
+  for_each = toset(["GET /admin", "GET /admin/{proxy+}"])
+
+  api_id    = aws_apigatewayv2_api.jmap.id
+  route_key = each.key
+  target    = "integrations/${aws_apigatewayv2_integration.admin.id}"
+
+  authorization_type = "NONE"
+}
+
+# The gateway may call the function for what is under /admin, and for /admin
+# itself, and for nothing else of this API.
 resource "aws_lambda_permission" "api_gateway_invoke_admin" {
   statement_id  = "AllowHttpApi"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.admin.function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.jmap.execution_arn}/*/*/admin/api/*"
+  source_arn    = "${aws_apigatewayv2_api.jmap.execution_arn}/*/*/admin/*"
+}
+
+resource "aws_lambda_permission" "api_gateway_invoke_admin_root" {
+  statement_id  = "AllowHttpApiRoot"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.admin.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.jmap.execution_arn}/*/GET/admin"
 }

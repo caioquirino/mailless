@@ -100,6 +100,7 @@ describe('the generated client, against the API it was generated from', () => {
       sharedWith: {},
       canSignIn: true,
       isAdmin: false,
+      usage: { usedOctets: null, limitOctets: null },
     });
     expect(await directory.resolveAddress('bob+news@example.com')).toBe('bob');
     expect(
