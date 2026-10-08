@@ -1,0 +1,74 @@
+{
+  "name": "@mailless/jmap-engine",
+  "version": "0.0.1",
+  "description": "The JMAP engine (RFC 8620): requests, sessions, accounts, blobs, push and the standard methods, with the storage contract. Knows no kind of data; those come as modules",
+  "license": "Apache-2.0",
+  "keywords": [
+    "jmap",
+    "email",
+    "mail",
+    "server"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@mailless/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./memory": {
+      "@mailless/source": "./src/memory.ts",
+      "types": "./dist/memory.d.ts",
+      "import": "./dist/memory.js",
+      "default": "./dist/memory.js"
+    },
+    "./http": {
+      "@mailless/source": "./src/http.ts",
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js",
+      "default": "./dist/http.js"
+    },
+    "./testing": {
+      "@mailless/source": "./src/testing.ts",
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "default": "./dist/testing.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "name": "jmap-engine",
+    "tags": [
+      "scope:jmap-engine",
+      "type:lib"
+    ]
+  },
+  "dependencies": {
+    "@mailless/jmap-core": "workspace:*",
+    "tslib": "^2.3.0",
+    "zod": "^4.6.5"
+  },
+  "peerDependencies": {
+    "vitest": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  }
+}

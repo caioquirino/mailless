@@ -1,6 +1,6 @@
 # @mailless/storage-fs
 
-A filesystem `BlobStore` for [`@mailless/jmap-server`](../../../jmap/server), for
+A filesystem `BlobStore` for [`@mailless/jmap-server`](../../jmap/server), for
 self-hosting and local development.
 
 ```ts

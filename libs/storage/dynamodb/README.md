@@ -1,7 +1,7 @@
 # @mailless/storage-dynamodb
 
 A DynamoDB `MetadataStore` for
-[`@mailless/jmap-server`](../../../jmap/server). It works against DynamoDB and
+[`@mailless/jmap-server`](../../jmap/server). It works against DynamoDB and
 against DynamoDB-compatible servers such as DynamoDB Local.
 
 ```ts

@@ -98,7 +98,7 @@
     "@mailless/app-passwords": "workspace:*",
     "@mailless/directory": "workspace:*",
     "@mailless/identity": "workspace:*",
-    "@mailless/jmap-server": "workspace:*",
+    "@mailless/jmap-engine": "workspace:*",
     "hono": "^4.13.13"
   }
 }

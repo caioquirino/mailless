@@ -20,10 +20,13 @@ import {
 } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createJmapServer, type JmapServer } from '../server.js';
-import { storedUsage } from '../quota.js';
-import type { StorageAdapter } from '../storage.js';
-import { MailRejectedError, type MailEnvelope } from '../transport.js';
-import type { StorageAdapterFactory } from './storage-contract.js';
+import type { StorageAdapter } from '@mailless/jmap-engine';
+import type { StorageAdapterFactory } from '@mailless/jmap-engine/testing';
+import {
+  MailRejectedError,
+  storedUsage,
+  type MailEnvelope,
+} from '@mailless/jmap-mail';
 
 // Responses are untyped JSON; the tests assert on their shape.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

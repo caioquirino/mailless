@@ -50,6 +50,18 @@
     },
     {
       "path": "./libs/identity/app-passwords"
+    },
+    {
+      "path": "./libs/jmap/contacts"
+    },
+    {
+      "path": "./libs/jmap/sharing"
+    },
+    {
+      "path": "./libs/jmap/engine"
+    },
+    {
+      "path": "./libs/jmap/mail"
     }
   ],
   "compilerOptions": {}

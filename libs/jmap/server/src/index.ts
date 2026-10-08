@@ -1,50 +1,44 @@
 export {
   createJmapServer,
-  DEFAULT_LIMITS,
-  type IdentityInput,
   type JmapServer,
   type JmapServerOptions,
-  type JmapServerUrls,
-  type RequestSummary,
 } from './lib/server.js';
-export {
-  type AuthContext,
-  type MethodContext,
-  type MethodDefinition,
-  type MethodHandler,
-} from './lib/context.js';
+// The parts, for those who use the server as it comes and need their types.
 export {
   ConflictError,
+  DEFAULT_LIMITS,
+  isPublicHttpsUrl,
   StateMismatchError,
+  type AuthContext,
   type BlobStore,
   type ChangeLogEntry,
   type CommitOptions,
   type IndexKeys,
   type IndexQuery,
+  type JmapServerUrls,
   type JsonObject,
   type MetadataStore,
+  type MethodContext,
+  type MethodDefinition,
+  type MethodHandler,
+  type PushOptions,
+  type PushReport,
+  type RequestSummary,
   type StorageAdapter,
   type StoredRecord,
   type WriteOp,
-} from './lib/storage.js';
-export { type ImportedEmail, type ImportOptions } from './lib/mail/email.js';
-export {
-  type DeliveryUpdate,
-  type ScheduledSendOutcome,
-} from './lib/mail/submission.js';
-export {
-  isPublicHttpsUrl,
-  PUSHED_TYPES,
-  type PushOptions,
-  type PushReport,
-} from './lib/push/subscription.js';
+} from '@mailless/jmap-engine';
 export {
   MailRejectedError,
+  storedUsage,
+  type DeliveryUpdate,
+  type IdentityInput,
+  type ImportedEmail,
+  type ImportOptions,
   type MailEnvelope,
   type MailReceipt,
   type MailTransport,
   type ScheduledSend,
+  type ScheduledSendOutcome,
   type SendScheduler,
-} from './lib/transport.js';
-// How full a mailbox is, for something that reports on accounts without reading their mail.
-export { storedUsage } from './lib/quota.js';
+} from '@mailless/jmap-mail';

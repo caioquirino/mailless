@@ -20,7 +20,7 @@
       "path": "../../identity/app-passwords/tsconfig.lib.json"
     },
     {
-      "path": "../../jmap/server/tsconfig.lib.json"
+      "path": "../../jmap/engine/tsconfig.lib.json"
     }
   ],
   "exclude": [

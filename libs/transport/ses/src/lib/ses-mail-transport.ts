@@ -4,7 +4,7 @@ import {
   type MailEnvelope,
   type MailReceipt,
   type MailTransport,
-} from '@mailless/jmap-server';
+} from '@mailless/jmap-mail';
 
 export interface SesMailTransportOptions {
   client: SESv2Client;

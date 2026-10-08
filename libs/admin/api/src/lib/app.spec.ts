@@ -5,7 +5,7 @@ import {
   TokenRefusedError,
 } from '@mailless/identity';
 import { createAppPasswordStore } from '@mailless/app-passwords';
-import { InMemoryMetadataStore } from '@mailless/jmap-server/memory';
+import { InMemoryMetadataStore } from '@mailless/jmap-engine/memory';
 import { adminApiDocument, createAdminApi, type AuditEntry } from './app.js';
 
 const ROLE = 'MAILLESS_ADMIN';

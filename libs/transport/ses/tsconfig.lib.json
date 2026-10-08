@@ -11,6 +11,9 @@
   "include": ["src/**/*.ts"],
   "references": [
     {
+      "path": "../../jmap/mail/tsconfig.lib.json"
+    },
+    {
       "path": "../../jmap/server/tsconfig.lib.json"
     }
   ],

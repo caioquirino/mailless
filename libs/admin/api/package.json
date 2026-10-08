@@ -70,6 +70,6 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@mailless/jmap-server": "workspace:*"
+    "@mailless/jmap-engine": "workspace:*"
   }
 }

@@ -1,6 +1,6 @@
 # @mailless/storage-s3
 
-An S3 `BlobStore` for [`@mailless/jmap-server`](../../../jmap/server). It works with
+An S3 `BlobStore` for [`@mailless/jmap-server`](../../jmap/server). It works with
 S3 and S3-compatible servers.
 
 ```ts

@@ -4,7 +4,7 @@ import {
   PutObjectCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
-import type { BlobStore } from '@mailless/jmap-server';
+import type { BlobStore } from '@mailless/jmap-engine';
 
 export interface S3BlobStoreOptions {
   client: S3Client;

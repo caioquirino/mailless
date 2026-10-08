@@ -1,9 +1,24 @@
 # @mailless/jmap-server
 
-A [JMAP](https://jmap.io) server framework for TypeScript (RFC 8620 core,
-RFC 8621 mail). It knows nothing about HTTP frameworks or databases: you give
-it a storage adapter and call `handleRequest` from whatever hosts it, such as a
-Lambda function, a Node HTTP server or a worker.
+A [JMAP](https://jmap.io) server for TypeScript with everything this project
+offers: mail (RFC 8621), contacts (RFC 9610) and sharing (RFC 9670) on one
+engine (RFC 8620). It knows nothing about HTTP frameworks or databases: you
+give it a storage adapter and call `handleRequest` from whatever hosts it, such
+as a Lambda function, a Node HTTP server or a worker.
+
+It is put together from parts, and a server that wants less, or something of
+its own, is put together from the same ones:
+
+| Package                                  | What it is                                                                                                       |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| [`@mailless/jmap-engine`](../engine)     | Requests, sessions, accounts, blobs, push, the standard methods and the storage contract. Knows no kind of data. |
+| [`@mailless/jmap-mail`](../mail)         | Mailboxes, emails, threads, sending, vacation response, read receipts, blob management and quota.                |
+| [`@mailless/jmap-contacts`](../contacts) | Address books and cards.                                                                                         |
+| [`@mailless/jmap-sharing`](../sharing)   | Principals and share notifications.                                                                              |
+
+`createJmapServer(options)` is `createJmapEngine` with those three modules,
+and takes the options of the engine and of mail together. This README
+describes the whole.
 
 ## Usage
 

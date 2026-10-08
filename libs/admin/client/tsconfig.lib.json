@@ -12,7 +12,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     {
-      "path": "../../jmap/server/tsconfig.lib.json"
+      "path": "../../jmap/engine/tsconfig.lib.json"
     },
     {
       "path": "../../identity/core/tsconfig.lib.json"

@@ -2,8 +2,8 @@
 
 The mailless administration API. A signed-in user manages their own
 credentials; an administrator manages accounts. It brings together the
-[directory](../../../directory/core) (who has a mailbox), the
-[identity provider](../../../identity/core) (who may sign in) and the app passwords mail
+[directory](../../directory/core) (who has a mailbox), the
+[identity provider](../../identity/core) (who may sign in) and the app passwords mail
 clients use, and knows nothing of where any of them is kept or of what serves
 it: it is a [Hono](https://hono.dev) application, so it runs on Lambda, on a
 plain Node server, or in a test.

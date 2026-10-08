@@ -1,7 +1,11 @@
 import { CAPABILITY_CORE, CAPABILITY_MAIL } from '@mailless/jmap-core';
 import { buildMessage } from './conformance/jmap-conformance.js';
-import { createFetchHandler, jmapUrls, type RequestRefusal } from './http.js';
-import { InMemoryStorageAdapter } from './memory-adapter.js';
+import {
+  createFetchHandler,
+  jmapUrls,
+  type RequestRefusal,
+} from '@mailless/jmap-engine/http';
+import { InMemoryStorageAdapter } from '@mailless/jmap-engine/memory';
 import { createJmapServer } from './server.js';
 
 const BASE = 'https://mail.example.com';

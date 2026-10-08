@@ -1,7 +1,7 @@
 {
   "name": "@mailless/storage-dynamodb",
   "version": "0.0.1",
-  "description": "DynamoDB metadata store for @mailless/jmap-server",
+  "description": "DynamoDB metadata store for a mailless JMAP server",
   "license": "Apache-2.0",
   "keywords": [
     "jmap",
@@ -57,7 +57,10 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1146.0",
     "@aws-sdk/lib-dynamodb": "^3.1146.0",
-    "@mailless/jmap-server": "workspace:*",
+    "@mailless/jmap-engine": "workspace:*",
     "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@mailless/jmap-server": "workspace:*"
   }
 }

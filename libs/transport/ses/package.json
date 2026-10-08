@@ -1,7 +1,7 @@
 {
   "name": "@mailless/transport-ses",
   "version": "0.0.1",
-  "description": "Amazon SES mail transport for @mailless/jmap-server",
+  "description": "Amazon SES mail transport for a mailless JMAP server",
   "license": "Apache-2.0",
   "keywords": [
     "jmap",
@@ -43,7 +43,10 @@
   },
   "dependencies": {
     "@aws-sdk/client-sesv2": "^3.1146.0",
-    "@mailless/jmap-server": "workspace:*",
+    "@mailless/jmap-mail": "workspace:*",
     "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@mailless/jmap-server": "workspace:*"
   }
 }

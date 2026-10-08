@@ -1,5 +1,1 @@
-export {
-  InMemoryBlobStore,
-  InMemoryMetadataStore,
-  InMemoryStorageAdapter,
-} from './lib/memory-adapter.js';
+export * from '@mailless/jmap-engine/memory';

@@ -473,9 +473,9 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
-      '@mailless/jmap-server':
+      '@mailless/jmap-engine':
         specifier: workspace:*
-        version: link:../../jmap/server
+        version: link:../../jmap/engine
 
   libs/admin/client:
     dependencies:
@@ -498,9 +498,9 @@ importers:
       '@mailless/identity':
         specifier: workspace:*
         version: link:../../identity/core
-      '@mailless/jmap-server':
+      '@mailless/jmap-engine':
         specifier: workspace:*
-        version: link:../../jmap/server
+        version: link:../../jmap/engine
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -559,6 +559,21 @@ importers:
         specifier: '>=3.0.0'
         version: 4.1.11(@types/node@24.19.1)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@27.4.0(supports-color@8.1.1))(vite@8.3.2(@types/node@24.19.1)(esbuild@0.27.7)(jiti@2.4.2)(yaml@2.9.0))
 
+  libs/jmap/contacts:
+    dependencies:
+      '@mailless/jmap-core':
+        specifier: workspace:*
+        version: link:../core
+      '@mailless/jmap-engine':
+        specifier: workspace:*
+        version: link:../engine
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
   libs/jmap/core:
     dependencies:
       tslib:
@@ -568,14 +583,11 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
-  libs/jmap/server:
+  libs/jmap/engine:
     dependencies:
       '@mailless/jmap-core':
         specifier: workspace:*
         version: link:../core
-      postal-mime:
-        specifier: ^4.0.4
-        version: 4.0.4
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
@@ -586,6 +598,60 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  libs/jmap/mail:
+    dependencies:
+      '@mailless/jmap-core':
+        specifier: workspace:*
+        version: link:../core
+      '@mailless/jmap-engine':
+        specifier: workspace:*
+        version: link:../engine
+      postal-mime:
+        specifier: ^4.0.4
+        version: 4.0.4
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
+  libs/jmap/server:
+    dependencies:
+      '@mailless/jmap-contacts':
+        specifier: workspace:*
+        version: link:../contacts
+      '@mailless/jmap-core':
+        specifier: workspace:*
+        version: link:../core
+      '@mailless/jmap-engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@mailless/jmap-mail':
+        specifier: workspace:*
+        version: link:../mail
+      '@mailless/jmap-sharing':
+        specifier: workspace:*
+        version: link:../sharing
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
+      vitest:
+        specifier: '>=3.0.0'
+        version: 4.1.11(@types/node@24.19.1)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@27.4.0(supports-color@8.1.1))(vite@8.3.2(@types/node@24.19.1)(esbuild@0.27.7)(jiti@2.4.2)(yaml@2.9.0))
+
+  libs/jmap/sharing:
+    dependencies:
+      '@mailless/jmap-core':
+        specifier: workspace:*
+        version: link:../core
+      '@mailless/jmap-engine':
+        specifier: workspace:*
+        version: link:../engine
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
+
   libs/storage/dynamodb:
     dependencies:
       '@aws-sdk/client-dynamodb':
@@ -594,45 +660,61 @@ importers:
       '@aws-sdk/lib-dynamodb':
         specifier: ^3.1146.0
         version: 3.1146.0(@aws-sdk/client-dynamodb@3.1146.0)
-      '@mailless/jmap-server':
+      '@mailless/jmap-engine':
         specifier: workspace:*
-        version: link:../../jmap/server
+        version: link:../../jmap/engine
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
+    devDependencies:
+      '@mailless/jmap-server':
+        specifier: workspace:*
+        version: link:../../jmap/server
 
   libs/storage/fs:
     dependencies:
-      '@mailless/jmap-server':
+      '@mailless/jmap-engine':
         specifier: workspace:*
-        version: link:../../jmap/server
+        version: link:../../jmap/engine
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
+    devDependencies:
+      '@mailless/jmap-server':
+        specifier: workspace:*
+        version: link:../../jmap/server
 
   libs/storage/s3:
     dependencies:
       '@aws-sdk/client-s3':
         specifier: ^3.1146.0
         version: 3.1146.0
-      '@mailless/jmap-server':
+      '@mailless/jmap-engine':
         specifier: workspace:*
-        version: link:../../jmap/server
+        version: link:../../jmap/engine
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
+    devDependencies:
+      '@mailless/jmap-server':
+        specifier: workspace:*
+        version: link:../../jmap/server
 
   libs/transport/ses:
     dependencies:
       '@aws-sdk/client-sesv2':
         specifier: ^3.1146.0
         version: 3.1146.0
-      '@mailless/jmap-server':
+      '@mailless/jmap-mail':
         specifier: workspace:*
-        version: link:../../jmap/server
+        version: link:../../jmap/mail
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
+    devDependencies:
+      '@mailless/jmap-server':
+        specifier: workspace:*
+        version: link:../../jmap/server
 
 packages:
 

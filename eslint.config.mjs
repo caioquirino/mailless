@@ -30,22 +30,66 @@ export default [
               sourceTag: 'type:lib',
               notDependOnLibsWithTags: ['platform:aws'],
             },
-            // The protocol core depends on nothing; client and server depend only on it.
+            // The protocol core depends on nothing. The engine builds on it, each kind
+            // of data on the engine, and the server puts them together.
             { sourceTag: 'scope:jmap-core', onlyDependOnLibsWithTags: [] },
             {
-              sourceTag: 'scope:jmap-server',
+              sourceTag: 'scope:jmap-engine',
               onlyDependOnLibsWithTags: ['scope:jmap-core'],
+            },
+            ...[
+              'scope:jmap-mail',
+              'scope:jmap-contacts',
+              'scope:jmap-sharing',
+            ].map((sourceTag) => ({
+              sourceTag,
+              onlyDependOnLibsWithTags: [
+                'scope:jmap-core',
+                'scope:jmap-engine',
+              ],
+            })),
+            {
+              sourceTag: 'scope:jmap-server',
+              onlyDependOnLibsWithTags: [
+                'scope:jmap-core',
+                'scope:jmap-engine',
+                'scope:jmap-mail',
+                'scope:jmap-contacts',
+                'scope:jmap-sharing',
+              ],
             },
             {
               sourceTag: 'scope:jmap-client',
               onlyDependOnLibsWithTags: ['scope:jmap-core'],
             },
+            // A transport and a store are written against the part they plug into,
+            // and tested against the whole server.
             {
               sourceTag: 'scope:transport',
               onlyDependOnLibsWithTags: [
                 'scope:jmap-core',
+                'scope:jmap-engine',
+                'scope:jmap-mail',
                 'scope:jmap-server',
               ],
+            },
+            {
+              sourceTag: 'scope:storage',
+              onlyDependOnLibsWithTags: [
+                'scope:jmap-core',
+                'scope:jmap-engine',
+                'scope:jmap-server',
+              ],
+            },
+            // The directory knows nothing of JMAP: it says who has which mailbox.
+            {
+              sourceTag: 'scope:directory',
+              onlyDependOnLibsWithTags: ['scope:directory'],
+            },
+            // Nor does identity: it says who someone is, whatever they then do.
+            {
+              sourceTag: 'scope:identity',
+              onlyDependOnLibsWithTags: ['scope:identity'],
             },
             // The client is generated from the admin API, and tested against it.
             {
@@ -55,7 +99,7 @@ export default [
                 'scope:directory',
                 'scope:identity',
                 'scope:jmap-core',
-                'scope:jmap-server',
+                'scope:jmap-engine',
               ],
             },
             // The admin API brings the directory, identity and app passwords together.
@@ -66,24 +110,7 @@ export default [
                 'scope:directory',
                 'scope:identity',
                 'scope:jmap-core',
-                'scope:jmap-server',
-              ],
-            },
-            // Nor does identity: it says who someone is, whatever they then do.
-            {
-              sourceTag: 'scope:identity',
-              onlyDependOnLibsWithTags: ['scope:identity'],
-            },
-            // The directory knows nothing of JMAP: it says who has which mailbox.
-            {
-              sourceTag: 'scope:directory',
-              onlyDependOnLibsWithTags: ['scope:directory'],
-            },
-            {
-              sourceTag: 'scope:storage',
-              onlyDependOnLibsWithTags: [
-                'scope:jmap-core',
-                'scope:jmap-server',
+                'scope:jmap-engine',
               ],
             },
           ],

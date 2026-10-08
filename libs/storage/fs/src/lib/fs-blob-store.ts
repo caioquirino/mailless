@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { BlobStore } from '@mailless/jmap-server';
+import type { BlobStore } from '@mailless/jmap-engine';
 
 const SAFE_NAME = /^[A-Za-z0-9_-]{1,200}$/;
 

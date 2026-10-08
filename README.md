@@ -26,22 +26,26 @@ neutral next to what implements it for one service. The ones that are
 particular to AWS are tagged, and a lint rule keeps every other library from
 depending on them, so that only an app chooses a cloud.
 
-| Package                                                   | What it is                                                                                                                            | State   |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| [`@mailless/jmap-core`](libs/jmap/core)                   | Protocol types, validators, result references, patch objects. No I/O; runs anywhere.                                                  | Working |
-| [`@mailless/jmap-server`](libs/jmap/server)               | JMAP server framework: request engine, Mailbox / Email / Thread methods, storage contract, in-memory adapter, conformance test suite. | Working |
-| [`@mailless/storage-dynamodb`](libs/storage/dynamodb)     | Metadata store on DynamoDB (or DynamoDB Local).                                                                                       | Working |
-| [`@mailless/storage-s3`](libs/storage/s3)                 | Blob store on S3 or an S3-compatible server.                                                                                          | Working |
-| [`@mailless/storage-fs`](libs/storage/fs)                 | Blob store on a local directory.                                                                                                      | Working |
-| [`@mailless/transport-ses`](libs/transport/ses)           | Sends outgoing mail through Amazon SES.                                                                                               | Working |
-| [`@mailless/directory`](libs/directory/core)              | Who has a mailbox: accounts, their addresses and who they are shared with.                                                            | Working |
-| [`@mailless/directory-dynamodb`](libs/directory/dynamodb) | The directory on DynamoDB (or DynamoDB Local).                                                                                        | Working |
-| [`@mailless/identity`](libs/identity/core)                | Verifies the tokens of any OpenID Connect provider, and the interface for managing its users.                                         | Working |
-| [`@mailless/identity-cognito`](libs/identity/cognito)     | Amazon Cognito as the identity provider.                                                                                              | Working |
-| [`@mailless/app-passwords`](libs/identity/app-passwords)  | A password of its own for each mail app: made once, stored as hashes, revocable one by one.                                           | Working |
-| [`@mailless/admin-api`](libs/admin/api)                   | The administration API: accounts for administrators, and each user's own credentials.                                                 | Working |
-| [`@mailless/admin-client`](libs/admin/client)             | Typed client for it, generated from its OpenAPI document.                                                                             | Working |
-| `@mailless/jmap-client`                                   | Typed JMAP client.                                                                                                                    | Planned |
+| Package                                                   | What it is                                                                                                 | State   |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------- |
+| [`@mailless/jmap-core`](libs/jmap/core)                   | Protocol types, validators, result references, patch objects. No I/O; runs anywhere.                       | Working |
+| [`@mailless/jmap-server`](libs/jmap/server)               | A JMAP server with mail, contacts and sharing: the four packages below assembled.                          | Working |
+| [`@mailless/jmap-engine`](libs/jmap/engine)               | The JMAP engine: requests, sessions, accounts, blobs, push, the standard methods and the storage contract. | Working |
+| [`@mailless/jmap-mail`](libs/jmap/mail)                   | Mail as a module: mailboxes, emails, threads, sending, vacation response, read receipts, blobs and quota.  | Working |
+| [`@mailless/jmap-contacts`](libs/jmap/contacts)           | Contacts as a module: address books and JSContact cards.                                                   | Working |
+| [`@mailless/jmap-sharing`](libs/jmap/sharing)             | Sharing as a module: principals and share notifications.                                                   | Working |
+| [`@mailless/storage-dynamodb`](libs/storage/dynamodb)     | Metadata store on DynamoDB (or DynamoDB Local).                                                            | Working |
+| [`@mailless/storage-s3`](libs/storage/s3)                 | Blob store on S3 or an S3-compatible server.                                                               | Working |
+| [`@mailless/storage-fs`](libs/storage/fs)                 | Blob store on a local directory.                                                                           | Working |
+| [`@mailless/transport-ses`](libs/transport/ses)           | Sends outgoing mail through Amazon SES.                                                                    | Working |
+| [`@mailless/directory`](libs/directory/core)              | Who has a mailbox: accounts, their addresses and who they are shared with.                                 | Working |
+| [`@mailless/directory-dynamodb`](libs/directory/dynamodb) | The directory on DynamoDB (or DynamoDB Local).                                                             | Working |
+| [`@mailless/identity`](libs/identity/core)                | Verifies the tokens of any OpenID Connect provider, and the interface for managing its users.              | Working |
+| [`@mailless/identity-cognito`](libs/identity/cognito)     | Amazon Cognito as the identity provider.                                                                   | Working |
+| [`@mailless/app-passwords`](libs/identity/app-passwords)  | A password of its own for each mail app: made once, stored as hashes, revocable one by one.                | Working |
+| [`@mailless/admin-api`](libs/admin/api)                   | The administration API: accounts for administrators, and each user's own credentials.                      | Working |
+| [`@mailless/admin-client`](libs/admin/client)             | Typed client for it, generated from its OpenAPI document.                                                  | Working |
+| `@mailless/jmap-client`                                   | Typed JMAP client.                                                                                         | Planned |
 
 Also in this repository:
 

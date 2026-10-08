@@ -19,7 +19,7 @@ import {
   type MetadataStore,
   type StoredRecord,
   type WriteOp,
-} from '@mailless/jmap-server';
+} from '@mailless/jmap-engine';
 
 /*
  * Single-table layout. Every item has a string partition key `pk` and sort key `sk`.

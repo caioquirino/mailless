@@ -1,7 +1,7 @@
 {
   "name": "@mailless/jmap-server",
   "version": "0.0.1",
-  "description": "Transport- and storage-agnostic JMAP (RFC 8620/8621) server framework for TypeScript",
+  "description": "A JMAP server with mail, contacts and sharing: the mailless modules assembled on one engine",
   "license": "Apache-2.0",
   "keywords": [
     "jmap",
@@ -60,10 +60,12 @@
     ]
   },
   "dependencies": {
+    "@mailless/jmap-contacts": "workspace:*",
     "@mailless/jmap-core": "workspace:*",
-    "postal-mime": "^4.0.4",
-    "tslib": "^2.3.0",
-    "zod": "^4.6.5"
+    "@mailless/jmap-engine": "workspace:*",
+    "@mailless/jmap-mail": "workspace:*",
+    "@mailless/jmap-sharing": "workspace:*",
+    "tslib": "^2.3.0"
   },
   "peerDependencies": {
     "vitest": ">=3.0.0"

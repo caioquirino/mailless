@@ -1,6 +1,6 @@
 # @mailless/transport-ses
 
-An Amazon SES `MailTransport` for [`@mailless/jmap-server`](../../../jmap/server):
+An Amazon SES `MailTransport` for [`@mailless/jmap-server`](../../jmap/server):
 it is what makes `EmailSubmission/set` actually send.
 
 ```ts
