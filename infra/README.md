@@ -30,6 +30,7 @@ through SES.
 | SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message.                                          |
 | Table stream and push Lambda                             | Tells mail apps that registered for it when something changed, so new mail shows up without refreshing.                                                                           |
 | Send queue, schedule group and send Lambda               | Holds messages to send later, and wakes up to send them. Used by "undo send".                                                                                                     |
+| Purge queue and purge Lambda                             | Removes the mail of an account closed in the admin interface, then the account itself, which frees its id.                                                                        |
 | CloudWatch alarms                                        | Bounce rate, complaint rate, and anything left in a dead-letter queue.                                                                                                            |
 | Route53 records (optional)                               | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.                                                                    |
 
@@ -236,6 +237,17 @@ described in [`libs/admin/api/openapi.json`](../libs/admin/api/openapi.json).
   the users of the pool and app passwords. It has no access to the bucket and
   cannot send mail, and in the table that holds mail it can reach only the
   app-password entries and the counters that record that something changed.
+
+Closing an account stops it at once, and its mail is removed a couple of
+minutes later by a function of its own, the only one that may empty a
+mailbox. It can list and remove stored mail but not read a message, and it
+removes nothing unless the directory says the account is closed. The account
+stays listed as closed until nothing of it is left; then it disappears and
+its id can be used again. A large mailbox takes several runs. Each run logs
+the account id and how it ended in `/aws/lambda/<name>-purge`, and a removal
+that keeps failing lands in the queue named by the `purge_dead_letter_queue`
+output and raises an alarm; "Remove mail again" on the closed account's page
+retries it.
 
 To work on the interface on your own machine against this stack, let it be
 signed in to from there, apply, and then start it with the stack as its

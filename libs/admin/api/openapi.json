@@ -1142,7 +1142,7 @@
         "operationId": "deleteAccount",
         "tags": ["accounts"],
         "summary": "Close an account for good",
-        "description": "The user can no longer sign in, the addresses stop delivering, the app passwords are revoked and the account is no longer shared. The account stays listed as \"deleting\", so that its id cannot be given to someone else while its mail still exists.",
+        "description": "The user can no longer sign in, the addresses stop delivering, the app passwords are revoked and the account is no longer shared. Its mail is then removed, which takes a few minutes or more; until that is done the account stays listed as \"deleting\", so that its id cannot be given to someone else while its mail still exists. Closing an account that is already \"deleting\" asks for the removal again.",
         "security": [
           {
             "bearer": []

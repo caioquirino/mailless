@@ -1,10 +1,12 @@
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
-import type { BlobStore } from '@mailless/jmap-engine';
+import type { BlobStore, KeepGoing } from '@mailless/jmap-engine';
 
 export interface S3BlobStoreOptions {
   client: S3Client;
@@ -84,5 +86,38 @@ export class S3BlobStore implements BlobStore {
         Key: this.key(accountId, blobId),
       }),
     );
+  }
+
+  /**
+   * Lists the account's objects a page at a time (up to 1000) and removes
+   * each page with one call. Needs to list the bucket under the account's
+   * prefix, which nothing else here does.
+   */
+  async purge(accountId: string, keepGoing?: KeepGoing): Promise<boolean> {
+    const Prefix = `${this.keyPrefix}${encodeURIComponent(accountId)}/`;
+    for (;;) {
+      if (keepGoing && !keepGoing()) return false;
+      // Always from the start: what the last round listed is gone.
+      const listed = await this.client.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix }),
+      );
+      const keys = (listed.Contents ?? []).flatMap((object) =>
+        object.Key ? [{ Key: object.Key }] : [],
+      );
+      if (keys.length === 0) return true;
+      const removed = await this.client.send(
+        new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Objects: keys, Quiet: true },
+        }),
+      );
+      const failed = removed.Errors?.length ?? 0;
+      if (failed > 0) {
+        // No key in the message: a key holds the account and the blob's id.
+        throw new Error(
+          `${failed} objects could not be removed (${removed.Errors?.[0]?.Code ?? 'unknown'})`,
+        );
+      }
+    }
   }
 }

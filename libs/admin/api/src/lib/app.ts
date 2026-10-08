@@ -64,6 +64,13 @@ export interface AdminApiOptions {
     usedOctets(accountId: string): Promise<number | null>;
     limitOctets: number | null;
   };
+  /**
+   * Asks for a closed account's mail to be removed, when the host can. It
+   * need only take the request: the removal happens elsewhere, and whoever
+   * does it deletes the account from the directory once nothing is left.
+   * Without it, a closed account stays listed.
+   */
+  requestPurge?(accountId: string): Promise<void>;
   /** The identity provider's page for adding a passkey, when it has one. */
   passkeyEnrolmentUrl?: string;
   /**
@@ -628,7 +635,7 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
       tags: ['accounts'],
       summary: 'Close an account for good',
       description:
-        'The user can no longer sign in, the addresses stop delivering, the app passwords are revoked and the account is no longer shared. The account stays listed as "deleting", so that its id cannot be given to someone else while its mail still exists.',
+        'The user can no longer sign in, the addresses stop delivering, the app passwords are revoked and the account is no longer shared. Its mail is then removed, which takes a few minutes or more; until that is done the account stays listed as "deleting", so that its id cannot be given to someone else while its mail still exists. Closing an account that is already "deleting" asks for the removal again.',
       security,
       request: { params: AccountParams },
       responses: { ...NO_CONTENT, ...REFUSALS, ...NOT_FOUND },
@@ -655,6 +662,8 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
         await directory.removeShare(account, id);
       }
       audit(caller, 'deleteAccount', id);
+      // Last, and after the record of it: the account is closed whether or not this is taken.
+      await options.requestPurge?.(id);
       return c.body(null, 204);
     },
   );

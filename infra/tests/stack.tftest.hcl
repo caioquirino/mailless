@@ -167,6 +167,7 @@ variables {
   push_bundle               = "tests/fixture-bundle.mjs"
   send_bundle               = "tests/fixture-bundle.mjs"
   admin_bundle              = "tests/fixture-bundle.mjs"
+  purge_bundle              = "tests/fixture-bundle.mjs"
 
   # Every other variable is pinned too: Terraform loads a local terraform.tfvars
   # into tests, and these must not depend on whoever runs them.
@@ -585,7 +586,7 @@ run "delivery_reporting" {
       toset(keys(aws_cloudwatch_metric_alarm.reputation)) == toset(["bounce-rate", "complaint-rate"]) &&
       aws_cloudwatch_metric_alarm.reputation["bounce-rate"].threshold < 0.05 &&
       aws_cloudwatch_metric_alarm.reputation["complaint-rate"].threshold < 0.001 &&
-      toset(keys(aws_cloudwatch_metric_alarm.dead_letters)) == toset(["ingest", "delivery-events", "push", "scheduled-send"])
+      toset(keys(aws_cloudwatch_metric_alarm.dead_letters)) == toset(["ingest", "delivery-events", "push", "scheduled-send", "purge"])
     )
     error_message = "Alarms must fire before SES's own review thresholds, and on any unprocessed message."
   }
@@ -1370,4 +1371,59 @@ run "rejects_unsafe_account_ids" {
   }
 
   expect_failures = [var.mailboxes]
+}
+
+run "purging_closed_accounts" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.purge.statement :
+      !contains(statement.resources, "*") && alltrue([for action in statement.actions : !endswith(action, ":*") && action != "*"])
+    ])
+    error_message = "The purge role must not use wildcard actions or resources."
+  }
+
+  # It removes mail. It must not be able to read a message, write one, send, or touch a user.
+  assert {
+    condition = toset(flatten([
+      for statement in data.aws_iam_policy_document.purge.statement : statement.actions
+      if !contains(["Logs", "Queue", "Encryption"], statement.sid)
+      ])) == toset([
+      "s3:DeleteObject", "s3:ListBucket",
+      "dynamodb:Query", "dynamodb:BatchWriteItem", "dynamodb:DeleteItem", "dynamodb:GetItem",
+    ])
+    error_message = "The purge role may list and remove, and nothing else."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.purge.statement :
+      one(statement.condition).variable == "s3:prefix" && one(statement.condition).values == tolist(["blobs/*"])
+      if statement.sid == "ListBlobs"
+    ])
+    error_message = "Only stored mail may be listed, not what is waiting to be delivered."
+  }
+
+  # One account is never worked on twice at once, and not before the other functions have noticed it is closed.
+  assert {
+    condition = (
+      aws_sqs_queue.purge.fifo_queue &&
+      aws_sqs_queue.purge.delay_seconds >= 120 &&
+      aws_lambda_event_source_mapping.purge.batch_size == 1 &&
+      aws_sqs_queue.purge.visibility_timeout_seconds > aws_lambda_function.purge.timeout &&
+      jsondecode(aws_sqs_queue.purge.redrive_policy).maxReceiveCount == 5
+    )
+    error_message = "A removal must wait, run alone for its account, and be set aside when it keeps failing."
+  }
+
+  # The admin function asks; it does not remove.
+  assert {
+    condition = (
+      one(data.aws_iam_policy_document.admin_purge.statement).actions == toset(["sqs:SendMessage"]) &&
+      contains(keys(aws_lambda_function.admin.environment[0].variables), "PURGE_QUEUE_URL") &&
+      contains(keys(aws_lambda_function.purge.environment[0].variables), "DIRECTORY_TABLE")
+    )
+    error_message = "The admin function may only ask for a removal, and the purge function must be able to check the directory."
+  }
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { BlobStore } from '@mailless/jmap-engine';
+import type { BlobStore, KeepGoing } from '@mailless/jmap-engine';
 
 const SAFE_NAME = /^[A-Za-z0-9_-]{1,200}$/;
 
@@ -47,5 +47,14 @@ export class FsBlobStore implements BlobStore {
 
   async delete(accountId: string, blobId: string): Promise<void> {
     await rm(this.path(accountId, blobId), { force: true });
+  }
+
+  async purge(accountId: string, keepGoing?: KeepGoing): Promise<boolean> {
+    if (keepGoing && !keepGoing()) return false;
+    await rm(join(this.root, toFileName(accountId)), {
+      recursive: true,
+      force: true,
+    });
+    return true;
   }
 }

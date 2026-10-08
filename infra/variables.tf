@@ -270,6 +270,12 @@ variable "admin_bundle" {
   default     = "../apps/mailless-service/dist/admin-api.mjs"
 }
 
+variable "purge_bundle" {
+  description = "Path to the built purge Lambda bundle. Build it with `pnpm nx build mailless-service`."
+  type        = string
+  default     = "../apps/mailless-service/dist/purge.mjs"
+}
+
 variable "events_bundle" {
   description = "Path to the built delivery events Lambda bundle. Build it with `pnpm nx build mailless-service`."
   type        = string

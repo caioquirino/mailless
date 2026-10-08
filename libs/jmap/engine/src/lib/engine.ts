@@ -206,6 +206,14 @@ export interface JmapEngine {
  */
 const STATE_PREFIX = 's';
 
+/**
+ * Removing a whole account is for whoever closes it, with the storage in
+ * hand. No method has a reason to, so the stores methods are given refuse.
+ */
+const notForMethods = async (): Promise<never> => {
+  throw new Error('An account is purged through its storage, not by a method');
+};
+
 /** A store whose states carry the prefix, in and out. */
 function publicStates(store: MetadataStore): MetadataStore {
   const inner = (state: string): string | null =>
@@ -240,6 +248,7 @@ function publicStates(store: MetadataStore): MetadataStore {
       }
       return store.commit(accountId, ops, { ...commitOptions, expectedStates });
     },
+    purge: notForMethods,
   };
 }
 
@@ -254,6 +263,7 @@ function reportingCommits(
     list: (accountId, type, index) => store.list(accountId, type, index),
     getChanges: (accountId, type, sinceState) =>
       store.getChanges(accountId, type, sinceState),
+    purge: notForMethods,
     async commit(accountId, ops, commitOptions) {
       await store.commit(accountId, ops, commitOptions);
       if (ops.length === 0) return;
@@ -382,6 +392,7 @@ export function createJmapEngine(options: JmapEngineOptions): JmapEngine {
     commit: async () => {
       throw new MethodError('accountReadOnly');
     },
+    purge: notForMethods,
   });
   const readOnlyBlobs = (blobs: BlobStore): BlobStore => ({
     get: (accountId, blobId) => blobs.get(accountId, blobId),
@@ -391,6 +402,7 @@ export function createJmapEngine(options: JmapEngineOptions): JmapEngine {
     delete: async () => {
       throw new MethodError('accountReadOnly');
     },
+    purge: notForMethods,
   });
 
   /**

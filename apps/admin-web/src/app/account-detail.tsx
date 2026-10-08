@@ -99,8 +99,8 @@ export function AccountDetailPage({ me }: { me: Me }) {
       {closed ? (
         <p className="notice notice-warning">
           This account is closed. Nobody can sign in to it and no mail is
-          delivered to it. Its id is kept so that it cannot be given to someone
-          else.
+          delivered to it. Its mail is being removed; once that is done the
+          account leaves this list and its id can be used again.
         </p>
       ) : null}
       <Summary account={data} />
@@ -113,7 +113,11 @@ export function AccountDetailPage({ me }: { me: Me }) {
         </>
       )}
       <AccountAppPasswords id={data.id} readOnly={closed} />
-      {closed ? null : <CloseAccount account={data} isSelf={isSelf} />}
+      {closed ? (
+        <RemoveMailAgain account={data} />
+      ) : (
+        <CloseAccount account={data} isSelf={isSelf} />
+      )}
     </>
   );
 }
@@ -666,6 +670,37 @@ function AccountAppPasswords({
   );
 }
 
+/** For a removal that got stuck: closing a closed account asks for it again. */
+function RemoveMailAgain({ account }: { account: AccountDetail }) {
+  const { api } = useServices();
+  const again = useAccountChange(account.id, () =>
+    api.closeAccount(account.id),
+  );
+  return (
+    <Section title="Removing mail">
+      <p>
+        This normally finishes within minutes of closing, longer for a large
+        mailbox. If the account is still listed long after, ask for the removal
+        again.
+      </p>
+      <div className="actions">
+        <button
+          type="button"
+          className="button"
+          disabled={again.isPending}
+          onClick={() => again.mutate()}
+        >
+          Remove mail again
+        </button>
+      </div>
+      <Notice
+        error={again.error}
+        success={again.isSuccess ? 'The removal was asked for again.' : null}
+      />
+    </Section>
+  );
+}
+
 function CloseAccount({
   account,
   isSelf,
@@ -686,9 +721,10 @@ function CloseAccount({
         </li>
         <li>its addresses stop delivering, so mail sent to them is dropped;</li>
         <li>it is no longer shared with anyone;</li>
+        <li>its mail is removed, which takes a few minutes or more;</li>
         <li>
-          the id <strong>{account.id}</strong> is kept, so that it cannot be
-          given to someone else.
+          the id <strong>{account.id}</strong> is kept until then, so that it
+          cannot be given to someone else while the mail still exists.
         </li>
       </ul>
       <div className="actions">

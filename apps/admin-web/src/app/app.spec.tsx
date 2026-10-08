@@ -395,6 +395,21 @@ describe('accounts', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('asks again for the mail of a closed account to be removed', async () => {
+    const backend = fakeBackend({ username: 'root', isAdmin: true });
+    (backend.state.accounts.get('bob') as { status: string }).status =
+      'deleting';
+    await renderApp(backend, '/accounts/bob');
+    await userEvent
+      .setup()
+      .click(await screen.findByRole('button', { name: 'Remove mail again' }));
+    await waitFor(() =>
+      expect(backend.state.calls).toContainEqual(
+        expect.objectContaining({ method: 'DELETE', path: '/accounts/bob' }),
+      ),
+    );
+  });
+
   it('says so when there is no such account, or no such page', async () => {
     const backend = fakeBackend({ username: 'root', isAdmin: true });
     const first = await renderApp(backend, '/accounts/nobody');

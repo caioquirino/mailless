@@ -364,6 +364,70 @@ export function describeStorageContract(
         await store().getChanges(ACCOUNT, 'Note', 'not-a-real-state'),
       ).toBeNull();
     });
+
+    it('purges an account and leaves the others alone', async () => {
+      for (const account of [ACCOUNT, OTHER_ACCOUNT]) {
+        await store().commit(account, [
+          {
+            kind: 'create',
+            type: 'Note',
+            id: 'a',
+            value: { text: 'one' },
+            indexes: { folder: ['inbox', 'work'] },
+          },
+          { kind: 'create', type: 'Tag', id: 't', value: {} },
+        ]);
+        await store().commit(account, [
+          { kind: 'destroy', type: 'Tag', id: 't' },
+        ]);
+      }
+
+      expect(await store().purge(ACCOUNT)).toBe(true);
+
+      expect(await store().list(ACCOUNT, 'Note')).toEqual([]);
+      expect(await store().get(ACCOUNT, 'Note', ['a'])).toEqual([]);
+      expect(
+        await store().list(ACCOUNT, 'Note', { name: 'folder', value: 'inbox' }),
+      ).toEqual([]);
+      // Nothing of the old account is left to meet whoever is given the id next.
+      const fresh = await store().getState(ACCOUNT, 'Tag');
+      expect(await store().getChanges(ACCOUNT, 'Tag', fresh)).toEqual([]);
+      await store().commit(ACCOUNT, [
+        { kind: 'create', type: 'Note', id: 'a', value: { text: 'new' } },
+      ]);
+      expect(await store().get(ACCOUNT, 'Note', ['a'])).toEqual([
+        { id: 'a', version: 1, value: { text: 'new' } },
+      ]);
+      expect(
+        await store().list(ACCOUNT, 'Note', { name: 'folder', value: 'work' }),
+      ).toEqual([]);
+
+      expect(await store().list(OTHER_ACCOUNT, 'Note')).toHaveLength(1);
+      expect(
+        await store().list(OTHER_ACCOUNT, 'Note', {
+          name: 'folder',
+          value: 'inbox',
+        }),
+      ).toHaveLength(1);
+    });
+
+    it('stops a purge when told to and carries on when called again', async () => {
+      await store().commit(
+        ACCOUNT,
+        Array.from({ length: 12 }, (_, index) => ({
+          kind: 'create' as const,
+          type: 'Note',
+          id: `n${index}`,
+          value: {},
+          indexes: { folder: ['inbox'] },
+        })),
+      );
+      expect(await store().purge(ACCOUNT, () => false)).toBe(false);
+      expect(await store().purge(ACCOUNT, () => true)).toBe(true);
+      expect(await store().list(ACCOUNT, 'Note')).toEqual([]);
+      // Purging what is already gone is not an error.
+      expect(await store().purge(ACCOUNT)).toBe(true);
+    });
   });
 
   describe(`${name}: BlobStore contract`, () => {
@@ -400,6 +464,22 @@ export function describeStorageContract(
     it('keeps accounts apart', async () => {
       await adapter.blobs.put(ACCOUNT, 'b1', encoder.encode('mine'));
       expect(await adapter.blobs.get(OTHER_ACCOUNT, 'b1')).toBeNull();
+    });
+
+    it('purges an account and leaves the others alone', async () => {
+      await adapter.blobs.put(ACCOUNT, 'b1', encoder.encode('mine'));
+      await adapter.blobs.put(ACCOUNT, 'b2', encoder.encode('mine too'));
+      await adapter.blobs.put(OTHER_ACCOUNT, 'b1', encoder.encode('theirs'));
+
+      expect(await adapter.blobs.purge(ACCOUNT, () => false)).toBe(false);
+      expect(await adapter.blobs.purge(ACCOUNT)).toBe(true);
+
+      expect(await adapter.blobs.get(ACCOUNT, 'b1')).toBeNull();
+      expect(await adapter.blobs.get(ACCOUNT, 'b2')).toBeNull();
+      expect(await adapter.blobs.get(OTHER_ACCOUNT, 'b1')).toEqual(
+        encoder.encode('theirs'),
+      );
+      expect(await adapter.blobs.purge(ACCOUNT)).toBe(true);
     });
   });
 }

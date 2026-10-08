@@ -45,6 +45,11 @@ output "send_dead_letter_queue" {
   value       = aws_sqs_queue.send_dead_letters.url
 }
 
+output "purge_dead_letter_queue" {
+  description = "Closed accounts whose mail could not be removed. It should stay empty."
+  value       = aws_sqs_queue.purge_dead_letters.url
+}
+
 output "receiving_active" {
   description = "Whether SES is routing inbound mail through this stack."
   value       = var.activate_receipt_rule_set

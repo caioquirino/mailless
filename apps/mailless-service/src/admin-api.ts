@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { createAdminApi } from '@mailless/admin-api';
 import { DynamoDbDirectory } from '@mailless/directory-dynamodb';
@@ -35,6 +37,9 @@ const metadata = new DynamoDbMetadataStore({
   client: dynamodb,
   tableName: required('TABLE_NAME'),
 });
+// Where to ask for a closed account's mail to be removed. Without it, nothing removes it.
+const purgeQueueUrl = process.env['PURGE_QUEUE_URL'];
+const sqs = purgeQueueUrl ? new SQSClient({}) : undefined;
 // The same limit the JMAP API is given. Without one there is none.
 const quotaOctets = Number(process.env['QUOTA_OCTETS'] ?? '');
 
@@ -55,6 +60,22 @@ const api = createAdminApi({
     limitOctets:
       Number.isSafeInteger(quotaOctets) && quotaOctets > 0 ? quotaOctets : null,
   },
+  ...(sqs
+    ? {
+        requestPurge: async (accountId: string) => {
+          await sqs.send(
+            new SendMessageCommand({
+              QueueUrl: purgeQueueUrl,
+              MessageBody: JSON.stringify({ accountId }),
+              // One account's requests are handed out one at a time, and
+              // each is its own: asking twice is not asking once.
+              MessageGroupId: accountId,
+              MessageDeduplicationId: randomUUID(),
+            }),
+          );
+        },
+      }
+    : {}),
   verifyToken: createTokenVerifier(oidc),
   adminRole: required('ADMIN_ROLE'),
   ...(passkeyEnrolmentUrl ? { passkeyEnrolmentUrl } : {}),

@@ -21,6 +21,8 @@ async function setup() {
   const errors: unknown[] = [];
   /** What each mailbox holds, for those that have been counted. */
   const used = new Map<string, number>();
+  /** The accounts whose mail was asked to be removed, in order. */
+  const purges: string[] = [];
   const api = createAdminApi({
     directory,
     identity,
@@ -41,6 +43,9 @@ async function setup() {
         scopes: [],
         claims: {},
       };
+    },
+    requestPurge: async (accountId) => {
+      purges.push(accountId);
     },
     audit: (entry) => audit.push(entry),
     onError: (error) => errors.push(error),
@@ -85,6 +90,7 @@ async function setup() {
     audit,
     errors,
     used,
+    purges,
     person,
     signIn,
     call,
@@ -597,11 +603,15 @@ describe('admin API', () => {
           `${method} ${path}`,
         ).toBe(403);
       }
-      // Deleting it again changes nothing and fails nothing.
+      // Its mail is asked to be removed, once it can no longer be used.
+      expect(t.purges).toEqual(['ann']);
+      // Deleting it again fails nothing, and asks again: the way to retry a removal that got stuck.
       expect((await t.call(admin, 'DELETE', '/accounts/ann')).status).toBe(204);
+      expect(t.purges).toEqual(['ann', 'ann']);
       expect((await t.call(admin, 'DELETE', '/accounts/nobody')).status).toBe(
         404,
       );
+      expect(t.purges).toEqual(['ann', 'ann']);
     });
   });
 

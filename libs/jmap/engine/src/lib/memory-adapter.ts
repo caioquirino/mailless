@@ -7,6 +7,7 @@ import {
   type IndexKeys,
   type IndexQuery,
   type JsonObject,
+  type KeepGoing,
   type MetadataStore,
   type StorageAdapter,
   type StoredRecord,
@@ -204,6 +205,12 @@ export class InMemoryMetadataStore implements MetadataStore {
           : {}),
       }));
   }
+
+  async purge(accountId: string, keepGoing?: KeepGoing): Promise<boolean> {
+    if (keepGoing && !keepGoing()) return false;
+    this.accounts.delete(accountId);
+    return true;
+  }
 }
 
 export class InMemoryBlobStore implements BlobStore {
@@ -227,6 +234,16 @@ export class InMemoryBlobStore implements BlobStore {
 
   async delete(accountId: string, blobId: string): Promise<void> {
     this.blobs.delete(this.key(accountId, blobId));
+  }
+
+  async purge(accountId: string, keepGoing?: KeepGoing): Promise<boolean> {
+    const prefix = this.key(accountId, '');
+    for (const key of [...this.blobs.keys()]) {
+      if (!key.startsWith(prefix)) continue;
+      if (keepGoing && !keepGoing()) return false;
+      this.blobs.delete(key);
+    }
+    return true;
   }
 }
 

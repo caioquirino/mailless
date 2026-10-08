@@ -149,6 +149,8 @@ resource "aws_lambda_function" "admin" {
       PASSKEY_ENROLMENT_URL = module.identity.hosted.passkey_enrolment_url
       # The limit the JMAP API applies, so that usage can be shown against it. 0 means none.
       QUOTA_OCTETS = var.account_quota_bytes == null ? "0" : tostring(var.account_quota_bytes)
+      # Where to ask for a closed account's mail to be removed.
+      PURGE_QUEUE_URL = aws_sqs_queue.purge.url
       # What the pages in the browser need to send someone to sign in, handed
       # to them as config.json. None of it is secret: the client has no secret.
       ADMIN_CLIENT_ID    = module.identity.admin_client_id

@@ -32,6 +32,7 @@ export {
   type IndexKeys,
   type IndexQuery,
   type JsonObject,
+  type KeepGoing,
   type MetadataStore,
   type StorageAdapter,
   type StoredRecord,

@@ -42,8 +42,12 @@ Rules worth knowing:
 - Closing an account stops it being used at once: the user is removed, the
   addresses stop delivering, app passwords are revoked and shares end. The
   account stays listed as `deleting`, so that its id cannot be given to
-  someone else while its mail still exists. Removing the mail itself is not
-  part of this API yet.
+  someone else while its mail still exists.
+- The API does not remove mail itself: it has no access to any. With the
+  `requestPurge` option it asks the host to, and whoever does the removing
+  deletes the account from the directory when nothing is left. Closing an
+  account that is already `deleting` asks again. Without the option a closed
+  account stays listed.
 - An administrator can see and revoke a user's app passwords but not make
   one: a secret is only ever shown to the user it belongs to.
 - With the `usage` option, accounts are shown with how much their mailbox

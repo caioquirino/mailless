@@ -72,6 +72,12 @@ export interface IndexQuery {
   value: string;
 }
 
+/**
+ * Asked between the steps of a long removal. False means "stop here": what
+ * was removed stays removed and the rest is left for another call.
+ */
+export type KeepGoing = () => boolean;
+
 export interface MetadataStore {
   /** Opaque state string for a data type; a type that was never written has a stable initial state. */
   getState(accountId: string, type: string): Promise<string>;
@@ -110,12 +116,24 @@ export interface MetadataStore {
     type: string,
     sinceState: string,
   ): Promise<ChangeLogEntry[] | null>;
+
+  /**
+   * Removes everything kept for an account: records, indexes, change log and
+   * states. Meant for an account that is closed and no longer written to.
+   * Returns false when `keepGoing` stopped it early; calling again carries on.
+   */
+  purge(accountId: string, keepGoing?: KeepGoing): Promise<boolean>;
 }
 
 export interface BlobStore {
   put(accountId: string, blobId: string, data: Uint8Array): Promise<void>;
   get(accountId: string, blobId: string): Promise<Uint8Array | null>;
   delete(accountId: string, blobId: string): Promise<void>;
+  /**
+   * Removes every blob of an account. Returns false when `keepGoing` stopped
+   * it early; calling again carries on.
+   */
+  purge(accountId: string, keepGoing?: KeepGoing): Promise<boolean>;
 }
 
 export interface StorageAdapter {

@@ -416,6 +416,8 @@ An adapter is a `{ metadata, blobs }` pair implementing `MetadataStore` and
   optional expected-state check
 - `getState` and `getChanges` over a per-account change log
 - `put`, `get`, `delete` for blobs
+- `purge` on both: removes everything of one account, in steps that can be
+  stopped and taken up again, for when an account is closed
 
 Filters, sorting, threading and counting are done by the server, so an adapter
 never needs to understand JMAP.

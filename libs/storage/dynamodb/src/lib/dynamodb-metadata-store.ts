@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import type { CreateTableCommandInput } from '@aws-sdk/client-dynamodb';
 import {
   BatchGetCommand,
+  BatchWriteCommand,
   GetCommand,
   QueryCommand,
   TransactWriteCommand,
+  type BatchWriteCommandOutput,
   type DynamoDBDocumentClient,
   type TransactWriteCommandInput,
 } from '@aws-sdk/lib-dynamodb';
@@ -16,6 +18,7 @@ import {
   type IndexKeys,
   type IndexQuery,
   type JsonObject,
+  type KeepGoing,
   type MetadataStore,
   type StoredRecord,
   type WriteOp,
@@ -52,6 +55,8 @@ interface RecordItem extends Key {
 
 const MAX_TRANSACTION_ITEMS = 100;
 const BATCH_GET_SIZE = 100;
+const BATCH_WRITE_SIZE = 25;
+const PURGE_PAGE_SIZE = 200;
 const MAX_COMMIT_ATTEMPTS = 30;
 const MAX_BACKOFF_MS = 200;
 const MAX_INDEX_VALUE_BYTES = 512;
@@ -582,5 +587,90 @@ export class DynamoDbMetadataStore implements MetadataStore {
     }
 
     return { items, recordItemIndexes };
+  }
+
+  private async batchDelete(keys: readonly Key[]): Promise<void> {
+    for (let start = 0; start < keys.length; start += BATCH_WRITE_SIZE) {
+      let pending: Record<string, unknown>[] | undefined = keys
+        .slice(start, start + BATCH_WRITE_SIZE)
+        .map((Key) => ({ DeleteRequest: { Key } }));
+      for (let attempt = 1; pending && pending.length > 0; attempt++) {
+        const response: BatchWriteCommandOutput = await this.client.send(
+          new BatchWriteCommand({
+            RequestItems: { [this.tableName]: pending },
+          }),
+        );
+        pending = response.UnprocessedItems?.[this.tableName];
+        if (pending && pending.length > 0) await sleep(attempt);
+      }
+    }
+  }
+
+  /**
+   * Empties one partition a page at a time. `also` names further items that
+   * go with an item of the partition. False when told to stop before the end.
+   */
+  private async emptyPartition(
+    pk: string,
+    keepGoing: KeepGoing | undefined,
+    also: (item: Record<string, unknown>) => Key[] = () => [],
+  ): Promise<boolean> {
+    for (;;) {
+      if (keepGoing && !keepGoing()) return false;
+      // Always from the start: what the last round read is gone.
+      const response = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          ConsistentRead: true,
+          KeyConditionExpression: '#pk = :pk',
+          ExpressionAttributeNames: { '#pk': 'pk' },
+          ExpressionAttributeValues: { ':pk': pk },
+          Limit: PURGE_PAGE_SIZE,
+        }),
+      );
+      const items = response.Items ?? [];
+      if (items.length === 0 && !response.LastEvaluatedKey) return true;
+      // What goes with an item first, so that an item is never gone while
+      // something only it could name is still there.
+      await this.batchDelete(items.flatMap(also));
+      await this.batchDelete(
+        items.map((item) => ({
+          pk: item['pk'] as string,
+          sk: item['sk'] as string,
+        })),
+      );
+    }
+  }
+
+  /**
+   * The state partition lists every data type the account ever wrote, which
+   * is what makes this possible without reading the whole table. For each
+   * type: the index items its records are listed under, the records, the
+   * change log, and last the state item, so that a purge cut short still
+   * knows the type when it is called again.
+   */
+  async purge(accountId: string, keepGoing?: KeepGoing): Promise<boolean> {
+    const states = await this.queryAll(statePk(accountId));
+    for (const state of states) {
+      const encodedType = state['sk'] as string;
+      const type = decodeURIComponent(encodedType);
+      const records = await this.emptyPartition(
+        recordPk(accountId, type),
+        keepGoing,
+        (item) =>
+          indexKeys(
+            accountId,
+            type,
+            item['sk'] as string,
+            (item as unknown as RecordItem).x ?? {},
+          ),
+      );
+      if (!records) return false;
+      if (!(await this.emptyPartition(logPk(accountId, type), keepGoing))) {
+        return false;
+      }
+      await this.batchDelete([{ pk: statePk(accountId), sk: encodedType }]);
+    }
+    return true;
   }
 }

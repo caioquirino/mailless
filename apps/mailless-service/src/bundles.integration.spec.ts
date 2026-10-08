@@ -4,6 +4,7 @@ import {
   CreateTableCommand,
   DeleteTableCommand,
   DynamoDBClient,
+  ScanCommand,
 } from '@aws-sdk/client-dynamodb';
 import {
   CreateBucketCommand,
@@ -481,6 +482,101 @@ describe.skipIf(!reachable)('scheduled send Lambda bundle', () => {
         ],
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe.skipIf(!reachable)('purge Lambda bundle', () => {
+  it('removes a closed account from the table and the bucket, and no other', async () => {
+    Object.assign(process.env, {
+      AWS_REGION: 'us-east-1',
+      AWS_ACCESS_KEY_ID: credentials.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: credentials.secretAccessKey,
+      AWS_ENDPOINT_URL_DYNAMODB: dynamoEndpoint,
+      AWS_ENDPOINT_URL_S3: s3Endpoint,
+      S3_FORCE_PATH_STYLE: 'true',
+      TABLE_NAME: tableName,
+      BUCKET: bucket,
+      BLOB_PREFIX: 'blobs/',
+      DIRECTORY_TABLE: directoryTable,
+      // Only used when a run is cut short, which this one is not.
+      PURGE_QUEUE_URL: 'http://127.0.0.1:9/purge',
+    });
+    const bundle = new URL('../dist/purge.mjs', import.meta.url).href;
+    const { handler } = (await import(
+      /* @vite-ignore */ bundle
+    )) as typeof import('./purge.js');
+
+    const directory = new DynamoDbDirectory({
+      client: DynamoDBDocumentClient.from(dynamo),
+      tableName: directoryTable,
+    });
+    const storage = {
+      metadata: new DynamoDbMetadataStore({
+        client: DynamoDBDocumentClient.from(dynamo),
+        tableName,
+      }),
+      blobs: new S3BlobStore({ client: s3, bucket, keyPrefix: 'blobs/' }),
+    };
+    const jmap = createJmapServer({
+      storage,
+      urls: { api: 'x', download: 'x', upload: 'x', eventSource: 'x' },
+    });
+    const message = new TextEncoder().encode(
+      buildMessage({ subject: 'To be removed', text: 'Body text' }),
+    );
+    for (const id of ['purge-gone', 'purge-kept']) {
+      await directory.createAccount({ id });
+      await jmap.provisionAccount({ accountId: id, username: id });
+      await jmap.importMessage({ accountId: id, username: id }, message, {
+        mailboxRole: 'inbox',
+      });
+    }
+    const objects = async (id: string) =>
+      (
+        await s3.send(
+          new ListObjectsV2Command({ Bucket: bucket, Prefix: `blobs/${id}/` }),
+        )
+      ).KeyCount ?? 0;
+    const items = async (id: string) =>
+      (
+        await dynamo.send(
+          new ScanCommand({
+            TableName: tableName,
+            FilterExpression:
+              'begins_with(pk, :r) OR begins_with(pk, :i) OR begins_with(pk, :l) OR pk = :s',
+            ExpressionAttributeValues: {
+              ':r': { S: `R#${id}#` },
+              ':i': { S: `I#${id}#` },
+              ':l': { S: `L#${id}#` },
+              ':s': { S: `S#${id}` },
+            },
+            Select: 'COUNT',
+          }),
+        )
+      ).Count ?? 0;
+    expect(await objects('purge-gone')).toBeGreaterThan(0);
+    expect(await items('purge-gone')).toBeGreaterThan(0);
+
+    // An open account is left alone, whoever asks.
+    await handler({ Records: [{ body: '{"accountId":"purge-gone"}' }] });
+    expect(await items('purge-gone')).toBeGreaterThan(0);
+
+    await directory.updateAccount('purge-gone', { status: 'deleting' });
+    const kept = [await objects('purge-kept'), await items('purge-kept')];
+    await handler({ Records: [{ body: '{"accountId":"purge-gone"}' }] });
+
+    expect(await objects('purge-gone')).toBe(0);
+    expect(await items('purge-gone')).toBe(0);
+    expect(await directory.account('purge-gone')).toBeUndefined();
+    expect([await objects('purge-kept'), await items('purge-kept')]).toEqual(
+      kept,
+    );
+    expect((await directory.account('purge-kept'))?.status).toBe('active');
+
+    // The other one too, as a request made directly: the tests after this count what the bucket holds.
+    await directory.updateAccount('purge-kept', { status: 'deleting' });
+    await handler({ accountId: 'purge-kept' });
+    expect(await objects('purge-kept')).toBe(0);
   });
 });
 
