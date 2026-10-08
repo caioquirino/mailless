@@ -8,10 +8,8 @@ import {
   tokenVerifierOptionsFromEnvironment,
 } from '@mailless/identity';
 import { CognitoIdentityProvider } from '@mailless/identity-cognito';
-import {
-  createAppPasswordStore,
-  storedUsage,
-} from '@mailless/jmap-server/auth';
+import { createAppPasswordStore } from '@mailless/app-passwords';
+import { storedUsage } from '@mailless/jmap-server';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import { Hono } from 'hono';
 import { handle } from 'hono/aws-lambda';

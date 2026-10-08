@@ -64,8 +64,8 @@ infra/**/terraform.tfvars
 # The latest full outcome of `pnpm compliance`; the baseline next to it is what is kept
 tools/compliance/results.json
 
-# Made from libs/admin-api/openapi.json by `nx run admin-client:generate`
-libs/admin-client/src/generated
+# Made from libs/admin/api/openapi.json by `nx run admin-client:generate`
+libs/admin/client/src/generated
 
 vite.config.*.timestamp*
 

@@ -349,7 +349,7 @@ importers:
     dependencies:
       '@mailless/admin-client':
         specifier: workspace:*
-        version: link:../../libs/admin-client
+        version: link:../../libs/admin/client
       '@tanstack/react-query':
         specifier: ^5.104.1
         version: 5.104.1(react@19.3.0)
@@ -374,10 +374,10 @@ importers:
     dependencies:
       '@mailless/jmap-core':
         specifier: workspace:*
-        version: link:../../libs/jmap-core
+        version: link:../../libs/jmap/core
       '@mailless/jmap-server':
         specifier: workspace:*
-        version: link:../../libs/jmap-server
+        version: link:../../libs/jmap/server
 
   apps/mailless-service:
     dependencies:
@@ -407,34 +407,37 @@ importers:
         version: 3.1146.0
       '@mailless/admin-api':
         specifier: workspace:*
-        version: link:../../libs/admin-api
+        version: link:../../libs/admin/api
+      '@mailless/app-passwords':
+        specifier: workspace:*
+        version: link:../../libs/identity/app-passwords
       '@mailless/directory':
         specifier: workspace:*
-        version: link:../../libs/directory
+        version: link:../../libs/directory/core
       '@mailless/directory-dynamodb':
         specifier: workspace:*
-        version: link:../../libs/directory-dynamodb
+        version: link:../../libs/directory/dynamodb
       '@mailless/identity':
         specifier: workspace:*
-        version: link:../../libs/identity
+        version: link:../../libs/identity/core
       '@mailless/identity-cognito':
         specifier: workspace:*
-        version: link:../../libs/identity-cognito
+        version: link:../../libs/identity/cognito
       '@mailless/jmap-core':
         specifier: workspace:*
-        version: link:../../libs/jmap-core
+        version: link:../../libs/jmap/core
       '@mailless/jmap-server':
         specifier: workspace:*
-        version: link:../../libs/jmap-server
+        version: link:../../libs/jmap/server
       '@mailless/storage-dynamodb':
         specifier: workspace:*
-        version: link:../../libs/storage-dynamodb
+        version: link:../../libs/storage/dynamodb
       '@mailless/storage-s3':
         specifier: workspace:*
-        version: link:../../libs/storage-s3
+        version: link:../../libs/storage/s3
       '@mailless/transport-ses':
         specifier: workspace:*
-        version: link:../../libs/transport-ses
+        version: link:../../libs/transport/ses
       aws-jwt-verify:
         specifier: ^5.2.1
         version: 5.2.1
@@ -446,20 +449,20 @@ importers:
         specifier: ^8.10.164
         version: 8.10.164
 
-  libs/admin-api:
+  libs/admin/api:
     dependencies:
       '@hono/zod-openapi':
         specifier: ^1.6.3
         version: 1.6.3(hono@4.13.13)(zod@4.6.5)
+      '@mailless/app-passwords':
+        specifier: workspace:*
+        version: link:../../identity/app-passwords
       '@mailless/directory':
         specifier: workspace:*
-        version: link:../directory
+        version: link:../../directory/core
       '@mailless/identity':
         specifier: workspace:*
-        version: link:../identity
-      '@mailless/jmap-server':
-        specifier: workspace:*
-        version: link:../jmap-server
+        version: link:../../identity/core
       hono:
         specifier: ^4.13.13
         version: 4.13.13
@@ -469,8 +472,12 @@ importers:
       zod:
         specifier: ^4.6.5
         version: 4.6.5
+    devDependencies:
+      '@mailless/jmap-server':
+        specifier: workspace:*
+        version: link:../../jmap/server
 
-  libs/admin-client:
+  libs/admin/client:
     dependencies:
       tslib:
         specifier: ^2.3.0
@@ -481,21 +488,24 @@ importers:
         version: 0.99.0(magicast@0.5.5)(typescript@6.0.3)
       '@mailless/admin-api':
         specifier: workspace:*
-        version: link:../admin-api
+        version: link:../api
+      '@mailless/app-passwords':
+        specifier: workspace:*
+        version: link:../../identity/app-passwords
       '@mailless/directory':
         specifier: workspace:*
-        version: link:../directory
+        version: link:../../directory/core
       '@mailless/identity':
         specifier: workspace:*
-        version: link:../identity
+        version: link:../../identity/core
       '@mailless/jmap-server':
         specifier: workspace:*
-        version: link:../jmap-server
+        version: link:../../jmap/server
       hono:
         specifier: ^4.13.13
         version: 4.13.13
 
-  libs/directory:
+  libs/directory/core:
     dependencies:
       tslib:
         specifier: ^2.3.0
@@ -504,7 +514,7 @@ importers:
         specifier: '>=3.0.0'
         version: 4.1.11(@types/node@24.19.1)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@27.4.0(supports-color@8.1.1))(vite@8.3.2(@types/node@24.19.1)(esbuild@0.27.7)(jiti@2.4.2)(yaml@2.9.0))
 
-  libs/directory-dynamodb:
+  libs/directory/dynamodb:
     dependencies:
       '@aws-sdk/client-dynamodb':
         specifier: ^3.1146.0
@@ -514,12 +524,30 @@ importers:
         version: 3.1146.0(@aws-sdk/client-dynamodb@3.1146.0)
       '@mailless/directory':
         specifier: workspace:*
-        version: link:../directory
+        version: link:../core
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
 
-  libs/identity:
+  libs/identity/app-passwords:
+    dependencies:
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
+
+  libs/identity/cognito:
+    dependencies:
+      '@aws-sdk/client-cognito-identity-provider':
+        specifier: ^3.1146.0
+        version: 3.1146.0
+      '@mailless/identity':
+        specifier: workspace:*
+        version: link:../core
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
+
+  libs/identity/core:
     dependencies:
       aws-jwt-verify:
         specifier: ^5.2.1
@@ -529,21 +557,9 @@ importers:
         version: 2.8.1
       vitest:
         specifier: '>=3.0.0'
-        version: 4.1.11(@types/node@24.19.1)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@27.4.0(supports-color@7.2.0))(vite@8.3.2(@types/node@24.19.1)(esbuild@0.27.7)(jiti@2.4.2)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.19.1)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@27.4.0(supports-color@8.1.1))(vite@8.3.2(@types/node@24.19.1)(esbuild@0.27.7)(jiti@2.4.2)(yaml@2.9.0))
 
-  libs/identity-cognito:
-    dependencies:
-      '@aws-sdk/client-cognito-identity-provider':
-        specifier: ^3.1146.0
-        version: 3.1146.0
-      '@mailless/identity':
-        specifier: workspace:*
-        version: link:../identity
-      tslib:
-        specifier: ^2.3.0
-        version: 2.8.1
-
-  libs/jmap-core:
+  libs/jmap/core:
     dependencies:
       tslib:
         specifier: ^2.3.0
@@ -552,11 +568,11 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
-  libs/jmap-server:
+  libs/jmap/server:
     dependencies:
       '@mailless/jmap-core':
         specifier: workspace:*
-        version: link:../jmap-core
+        version: link:../core
       postal-mime:
         specifier: ^4.0.4
         version: 4.0.4
@@ -565,12 +581,12 @@ importers:
         version: 2.8.1
       vitest:
         specifier: '>=3.0.0'
-        version: 4.1.11(@types/node@24.19.1)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@27.4.0(supports-color@7.2.0))(vite@8.3.2(@types/node@24.19.1)(esbuild@0.27.7)(jiti@2.4.2)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.19.1)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@27.4.0(supports-color@8.1.1))(vite@8.3.2(@types/node@24.19.1)(esbuild@0.27.7)(jiti@2.4.2)(yaml@2.9.0))
       zod:
         specifier: ^4.6.5
         version: 4.6.5
 
-  libs/storage-dynamodb:
+  libs/storage/dynamodb:
     dependencies:
       '@aws-sdk/client-dynamodb':
         specifier: ^3.1146.0
@@ -580,40 +596,40 @@ importers:
         version: 3.1146.0(@aws-sdk/client-dynamodb@3.1146.0)
       '@mailless/jmap-server':
         specifier: workspace:*
-        version: link:../jmap-server
+        version: link:../../jmap/server
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
 
-  libs/storage-fs:
+  libs/storage/fs:
     dependencies:
       '@mailless/jmap-server':
         specifier: workspace:*
-        version: link:../jmap-server
+        version: link:../../jmap/server
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
 
-  libs/storage-s3:
+  libs/storage/s3:
     dependencies:
       '@aws-sdk/client-s3':
         specifier: ^3.1146.0
         version: 3.1146.0
       '@mailless/jmap-server':
         specifier: workspace:*
-        version: link:../jmap-server
+        version: link:../../jmap/server
       tslib:
         specifier: ^2.3.0
         version: 2.8.1
 
-  libs/transport-ses:
+  libs/transport/ses:
     dependencies:
       '@aws-sdk/client-sesv2':
         specifier: ^3.1146.0
         version: 3.1146.0
       '@mailless/jmap-server':
         specifier: workspace:*
-        version: link:../jmap-server
+        version: link:../../jmap/server
       tslib:
         specifier: ^2.3.0
         version: 2.8.1

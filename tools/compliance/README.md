@@ -40,7 +40,7 @@ calendars.
 The suite expects one particular behaviour in a few places where the RFCs
 allow several. The server follows the suite there, since that is what clients
 written against other servers expect; the choices are listed in the
-[`jmap-server` README](../../libs/jmap-server/README.md#choices-the-specification-leaves-open).
+[`jmap-server` README](../../libs/jmap/server/README.md#choices-the-specification-leaves-open).
 
 When a test fails after a change, read the spec citation in its comments
 first. If the suite turns out to expect more than the RFC asks, a `note` on

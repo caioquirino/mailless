@@ -4,49 +4,52 @@
   "files": [],
   "references": [
     {
-      "path": "./libs/jmap-core"
+      "path": "./libs/jmap/core"
     },
     {
-      "path": "./libs/jmap-server"
+      "path": "./libs/jmap/server"
     },
     {
       "path": "./apps/dev-server"
     },
     {
-      "path": "./libs/storage-dynamodb"
+      "path": "./libs/storage/dynamodb"
     },
     {
-      "path": "./libs/storage-s3"
+      "path": "./libs/storage/s3"
     },
     {
-      "path": "./libs/storage-fs"
+      "path": "./libs/storage/fs"
     },
     {
       "path": "./apps/mailless-service"
     },
     {
-      "path": "./libs/transport-ses"
+      "path": "./libs/transport/ses"
     },
     {
-      "path": "./libs/directory-dynamodb"
+      "path": "./libs/directory/dynamodb"
     },
     {
-      "path": "./libs/directory"
+      "path": "./libs/directory/core"
     },
     {
-      "path": "./libs/identity-cognito"
+      "path": "./libs/identity/cognito"
     },
     {
-      "path": "./libs/identity"
+      "path": "./libs/identity/core"
     },
     {
-      "path": "./libs/admin-api"
+      "path": "./libs/admin/api"
     },
     {
-      "path": "./libs/admin-client"
+      "path": "./libs/admin/client"
     },
     {
       "path": "./apps/admin-web"
+    },
+    {
+      "path": "./libs/identity/app-passwords"
     }
   ],
   "compilerOptions": {}

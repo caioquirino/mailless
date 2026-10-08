@@ -7,5 +7,5 @@
 pnpm-lock.yaml
 # Written by `pnpm compliance --update`
 tools/compliance/baseline.json
-libs/admin-client/src/generated
+libs/admin/client/src/generated
 apps/mailless-service/src/admin/web-assets.gen.ts

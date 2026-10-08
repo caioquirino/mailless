@@ -1,0 +1,104 @@
+{
+  "name": "@mailless/admin-client",
+  "version": "0.0.1",
+  "description": "Typed client for the mailless administration API, generated from its OpenAPI document",
+  "license": "Apache-2.0",
+  "keywords": [
+    "email",
+    "mail",
+    "admin",
+    "openapi",
+    "client"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@mailless/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "name": "admin-client",
+    "tags": [
+      "scope:admin-client",
+      "type:lib"
+    ],
+    "implicitDependencies": [
+      "admin-api"
+    ],
+    "targets": {
+      "generate": {
+        "command": "openapi-ts",
+        "options": {
+          "cwd": "{projectRoot}"
+        },
+        "inputs": [
+          "{workspaceRoot}/libs/admin/api/openapi.json",
+          "{projectRoot}/openapi-ts.config.ts",
+          {
+            "externalDependencies": [
+              "@hey-api/openapi-ts"
+            ]
+          }
+        ],
+        "outputs": [
+          "{projectRoot}/src/generated"
+        ],
+        "cache": true
+      },
+      "build": {
+        "dependsOn": [
+          "generate",
+          "^build"
+        ]
+      },
+      "typecheck": {
+        "dependsOn": [
+          "generate",
+          "^typecheck",
+          "build"
+        ]
+      },
+      "lint": {
+        "dependsOn": [
+          "generate"
+        ]
+      },
+      "test": {
+        "dependsOn": [
+          "generate",
+          "^build"
+        ]
+      }
+    }
+  },
+  "dependencies": {
+    "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0",
+    "@mailless/admin-api": "workspace:*",
+    "@mailless/app-passwords": "workspace:*",
+    "@mailless/directory": "workspace:*",
+    "@mailless/identity": "workspace:*",
+    "@mailless/jmap-server": "workspace:*",
+    "hono": "^4.13.13"
+  }
+}

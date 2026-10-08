@@ -1,4 +1,4 @@
-import type { AppPasswordStore } from '@mailless/jmap-server/auth';
+import type { AppPasswordStore } from '@mailless/app-passwords';
 
 export interface AppPasswordCliOptions {
   store: AppPasswordStore;

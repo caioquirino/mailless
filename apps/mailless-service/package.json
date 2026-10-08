@@ -119,6 +119,7 @@
     "@aws-sdk/lib-dynamodb": "^3.1146.0",
     "@aws-sdk/s3-request-presigner": "^3.1146.0",
     "@mailless/admin-api": "workspace:*",
+    "@mailless/app-passwords": "workspace:*",
     "@mailless/directory": "workspace:*",
     "@mailless/directory-dynamodb": "workspace:*",
     "@mailless/identity": "workspace:*",

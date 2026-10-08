@@ -57,13 +57,13 @@
   ],
   "analytics": false,
   "release": {
-    "projects": ["libs/*"],
+    "projects": ["libs/*/*"],
     "projectsRelationship": "independent",
     "releaseTag": {
       "pattern": "{projectName}@{version}"
     },
     "version": {
-      "preVersionCommand": "pnpm nx run-many -t build --projects=libs/*",
+      "preVersionCommand": "pnpm nx run-many -t build --projects=libs/*/*",
       "conventionalCommits": true
     },
     "changelog": {

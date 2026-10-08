@@ -1,4 +1,4 @@
-import { createAppPasswordStore } from '@mailless/jmap-server/auth';
+import { createAppPasswordStore } from '@mailless/app-passwords';
 import { InMemoryMetadataStore } from '@mailless/jmap-server/memory';
 import { runAppPasswordCommand, UsageError } from './app-password-cli.js';
 

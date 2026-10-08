@@ -24,6 +24,12 @@ export default [
             // Libraries never depend on apps; apps may use any library.
             { sourceTag: 'type:lib', onlyDependOnLibsWithTags: ['type:lib'] },
             { sourceTag: 'type:app', onlyDependOnLibsWithTags: ['type:lib'] },
+            // What is particular to one cloud is chosen by an app, never built on by a
+            // library: that is what keeps the libraries usable anywhere.
+            {
+              sourceTag: 'type:lib',
+              notDependOnLibsWithTags: ['platform:aws'],
+            },
             // The protocol core depends on nothing; client and server depend only on it.
             { sourceTag: 'scope:jmap-core', onlyDependOnLibsWithTags: [] },
             {

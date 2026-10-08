@@ -18,7 +18,7 @@ import {
 } from '@mailless/directory-dynamodb';
 import { issueTestToken, testKeys } from '@mailless/identity/testing';
 import { createJmapServer } from '@mailless/jmap-server';
-import { createAppPasswordStore } from '@mailless/jmap-server/auth';
+import { createAppPasswordStore } from '@mailless/app-passwords';
 import { InMemoryBlobStore } from '@mailless/jmap-server/memory';
 import { buildMessage } from '@mailless/jmap-server/testing';
 import {

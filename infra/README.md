@@ -226,7 +226,7 @@ can sign in to it for their own credentials. Managing accounts needs the
 The pages themselves are public, as the files of any web application are.
 Everything they do goes through an API at `terraform output admin_api_url`
 (`<API address>/admin/api`), and that needs a sign-in. What the API offers is
-described in [`libs/admin-api/openapi.json`](../libs/admin-api/openapi.json).
+described in [`libs/admin/api/openapi.json`](../libs/admin/api/openapi.json).
 
 - Every call needs an access token from the sign-in pages, issued for the
   admin client. The gateway checks it before anything runs, and the function

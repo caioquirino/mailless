@@ -10,10 +10,10 @@
   "exclude": ["eslint.config.js", "eslint.config.cjs", "eslint.config.mjs"],
   "references": [
     {
-      "path": "../../libs/jmap-server/tsconfig.lib.json"
+      "path": "../../libs/jmap/server/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/jmap-core/tsconfig.lib.json"
+      "path": "../../libs/jmap/core/tsconfig.lib.json"
     }
   ]
 }

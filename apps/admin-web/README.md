@@ -9,8 +9,8 @@ function under `/admin/`.
   set passwords and end sessions; addresses, shares and the administrator
   role.
 
-It is a client of the [admin API](../../libs/admin-api) and of nothing else,
-through the [generated client](../../libs/admin-client): when the API changes
+It is a client of the [admin API](../../libs/admin/api) and of nothing else,
+through the [generated client](../../libs/admin/client): when the API changes
 in a way a screen depends on, this app stops compiling.
 
 ## Signing in

@@ -5,7 +5,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { DynamoDbDirectory } from '@mailless/directory-dynamodb';
 import { CognitoIdentityProvider } from '@mailless/identity-cognito';
-import { createAppPasswordStore } from '@mailless/jmap-server/auth';
+import { createAppPasswordStore } from '@mailless/app-passwords';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import {
   ADMIN_ROLE_USAGE,

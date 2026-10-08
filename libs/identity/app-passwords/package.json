@@ -1,0 +1,46 @@
+{
+  "name": "@mailless/app-passwords",
+  "version": "0.0.1",
+  "description": "Per-client passwords for mail apps: made once, stored as hashes, revocable one by one",
+  "license": "Apache-2.0",
+  "keywords": [
+    "email",
+    "mail",
+    "authentication",
+    "app-passwords"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@mailless/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "name": "app-passwords",
+    "tags": [
+      "scope:identity",
+      "type:lib"
+    ]
+  },
+  "dependencies": {
+    "tslib": "^2.3.0"
+  }
+}

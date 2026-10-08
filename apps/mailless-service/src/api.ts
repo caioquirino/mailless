@@ -18,10 +18,7 @@ import {
   tokenVerifierOptionsFromEnvironment,
 } from '@mailless/identity';
 import { createJmapServer } from '@mailless/jmap-server';
-import {
-  createAppPasswordStore,
-  isAppPassword,
-} from '@mailless/jmap-server/auth';
+import { createAppPasswordStore, isAppPassword } from '@mailless/app-passwords';
 import { createFetchHandler, jmapUrls } from '@mailless/jmap-server/http';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import { S3BlobStore } from '@mailless/storage-s3';
