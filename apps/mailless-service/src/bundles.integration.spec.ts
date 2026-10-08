@@ -16,6 +16,7 @@ import {
   directoryTableDefinition,
   DynamoDbDirectory,
 } from '@mailless/directory-dynamodb';
+import { issueTestToken, testKeys } from '@mailless/identity/testing';
 import { createJmapServer } from '@mailless/jmap-server';
 import { createAppPasswordStore } from '@mailless/jmap-server/auth';
 import { InMemoryBlobStore } from '@mailless/jmap-server/memory';
@@ -37,6 +38,9 @@ const run = Date.now().toString(36);
 const tableName = `mailless-ingest-${run}`;
 const bucket = `mailless-ingest-${run}`;
 const directoryTable = `mailless-directory-${run}`;
+// Stands in for the identity provider: tokens signed with these keys are its tokens.
+const ISSUER = 'https://id.example.com/pool';
+const providerKeys = testKeys();
 
 const dynamo = new DynamoDBClient({
   endpoint: dynamoEndpoint,
@@ -90,6 +94,14 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
       // Most accounts are in the table; one is still only in the environment.
       DIRECTORY_TABLE: directoryTable,
       MAILBOXES: JSON.stringify({ 'old@example.com': 'acc-old' }),
+      // Tokens are checked as any OpenID Connect provider's, with claims named as Cognito names them.
+      OIDC_ISSUER: ISSUER,
+      OIDC_AUDIENCES: JSON.stringify(['mail-client']),
+      OIDC_AUDIENCE_CLAIM: 'client_id',
+      OIDC_USERNAME_CLAIM: 'username',
+      OIDC_ROLES_CLAIM: 'cognito:groups',
+      OIDC_REQUIRED_CLAIMS: JSON.stringify({ token_use: 'access' }),
+      OIDC_JWKS: JSON.stringify(providerKeys.jwks),
     });
     const bundle = new URL('../dist/api.mjs', import.meta.url).href;
     const { handler } = (await import(
@@ -174,6 +186,45 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
     // A different spelling of the same secret is a fresh check, so revocation is seen at once.
     await passwords.revoke('acc-1', id);
     expect((await session('acc-1', secret.toUpperCase())).statusCode).toBe(401);
+  });
+
+  it('accepts the identity provider’s token for an account in use, and no other token', async () => {
+    const bundle = new URL('../dist/api.mjs', import.meta.url).href;
+    const { handler } = (await import(
+      /* @vite-ignore */ bundle
+    )) as typeof import('./api.js');
+    const session = (claims: Record<string, unknown>, keys = providerKeys) =>
+      handler({
+        rawPath: '/.well-known/jmap',
+        rawQueryString: '',
+        headers: {
+          authorization: `Bearer ${issueTestToken(keys, {
+            iss: ISSUER,
+            client_id: 'mail-client',
+            token_use: 'access',
+            username: 'acc-1',
+            ...claims,
+          })}`,
+        },
+        isBase64Encoded: false,
+        requestContext: { domainName: 'internal', http: { method: 'GET' } },
+      } as unknown as Parameters<typeof handler>[0]);
+
+    const accepted = await session({});
+    expect(accepted.statusCode).toBe(200);
+    expect(JSON.parse(accepted.body as string).username).toBe('acc-1');
+
+    for (const [why, refused] of Object.entries({
+      'issued for another client': session({ client_id: 'admin-client' }),
+      'an id token': session({ token_use: 'id' }),
+      'another issuer': session({ iss: 'https://elsewhere.example.com' }),
+      expired: session({ exp: Math.floor(Date.now() / 1000) - 60 }),
+      'signed by someone else': session({}, testKeys()),
+      'an account that is switched off': session({ username: 'acc-off' }),
+      'a user with no account': session({ username: 'acc-nobody' }),
+    })) {
+      expect((await refused).statusCode, why).toBe(401);
+    }
   });
 });
 

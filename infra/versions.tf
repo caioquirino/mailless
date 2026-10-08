@@ -32,6 +32,20 @@ provider "aws" {
   }
 }
 
+# The sign-in pages are served through CloudFront, which takes its certificates
+# from us-east-1 wherever the rest of the stack is.
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+
+  default_tags {
+    tags = {
+      Project   = var.name
+      ManagedBy = "terraform"
+    }
+  }
+}
+
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 

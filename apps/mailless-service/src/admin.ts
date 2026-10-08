@@ -1,10 +1,16 @@
 // Command-line administration, run with AWS credentials: `pnpm infra app-password ...`
-// and `pnpm infra directory ...`.
+// `pnpm infra directory ...` and `pnpm infra admin ...`.
+import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { DynamoDbDirectory } from '@mailless/directory-dynamodb';
+import { CognitoIdentityProvider } from '@mailless/identity-cognito';
 import { createAppPasswordStore } from '@mailless/jmap-server/auth';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
+import {
+  ADMIN_ROLE_USAGE,
+  runAdminRoleCommand,
+} from './admin/admin-role-cli.js';
 import {
   APP_PASSWORD_USAGE,
   runAppPasswordCommand,
@@ -45,8 +51,19 @@ try {
       print,
     });
     if (!matches) process.exitCode = 1;
+  } else if (topic === 'admin') {
+    await runAdminRoleCommand(rest, {
+      identity: new CognitoIdentityProvider({
+        client: new CognitoIdentityProviderClient({}),
+        userPoolId: required('USER_POOL_ID'),
+      }),
+      role: process.env['ADMIN_ROLE'] || 'MAILLESS_ADMIN',
+      print,
+    });
   } else {
-    throw new UsageError(`${APP_PASSWORD_USAGE}\n\n${DIRECTORY_USAGE}`);
+    throw new UsageError(
+      [APP_PASSWORD_USAGE, DIRECTORY_USAGE, ADMIN_ROLE_USAGE].join('\n\n'),
+    );
   }
 } catch (error) {
   console.error(

@@ -14,11 +14,11 @@
       "cache": true
     },
     "validate": {
-      "command": "TF_DATA_DIR=.terraform-check terraform init -backend=false -input=false && TF_DATA_DIR=.terraform-check terraform validate",
+      "command": "TF_DATA_DIR=.terraform-check terraform init -backend=false -input=false && TF_DATA_DIR=.terraform-check terraform validate -no-tests",
       "options": {
         "cwd": "{projectRoot}"
       },
-      "inputs": ["{projectRoot}/**/*.tf", "{projectRoot}/.terraform.lock.hcl"],
+      "inputs": ["{projectRoot}/**/*.tf", "{projectRoot}/**/*.hcl"],
       "cache": true
     },
     "test": {

@@ -60,14 +60,29 @@ output "jmap_session_url" {
 }
 
 output "user_pool_id" {
-  value = aws_cognito_user_pool.main.id
+  value = module.identity.provider.user_pool_id
 }
 
 output "user_pool_client_id" {
-  value = aws_cognito_user_pool_client.jmap.id
+  value = module.identity.jmap_client_id
 }
 
 output "users" {
   description = "Sign-in names. Set each one's password with `pnpm infra password <name>`."
-  value       = sort(keys(aws_cognito_user.account))
+  value       = module.identity.users
+}
+
+output "admin_client_id" {
+  description = "The client the admin interface signs in to."
+  value       = module.identity.admin_client_id
+}
+
+output "admin_role" {
+  description = "The role whose members may manage accounts."
+  value       = module.identity.admin_role
+}
+
+output "auth" {
+  description = "The identity provider's own pages: where people sign in, sign out and enrol a passkey."
+  value       = module.identity.hosted
 }

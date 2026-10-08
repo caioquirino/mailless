@@ -30,6 +30,8 @@ be served by functions that only run while a request is in flight.
 | [`@mailless/transport-ses`](libs/transport-ses)           | Sends outgoing mail through Amazon SES.                                                                                               | Working |
 | [`@mailless/directory`](libs/directory)                   | Who has a mailbox: accounts, their addresses and who they are shared with.                                                            | Working |
 | [`@mailless/directory-dynamodb`](libs/directory-dynamodb) | The directory on DynamoDB (or DynamoDB Local).                                                                                        | Working |
+| [`@mailless/identity`](libs/identity)                     | Verifies the tokens of any OpenID Connect provider, and the interface for managing its users.                                         | Working |
+| [`@mailless/identity-cognito`](libs/identity-cognito)     | Amazon Cognito as the identity provider.                                                                                              | Working |
 | `@mailless/jmap-client`                                   | Typed JMAP client.                                                                                                                    | Planned |
 
 Also in this repository:

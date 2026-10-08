@@ -12,24 +12,25 @@ through SES.
 
 ## What it creates
 
-| Resource                                                 | Purpose                                                                                                                                  |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| SES domain identity with DKIM                            | Proves ownership of the domain.                                                                                                          |
-| SES receipt rule set and rule                            | Accepts mail for the domain over TLS, scans it, stores it in S3, then invokes the ingest function.                                       |
-| S3 bucket                                                | `inbound/` holds raw messages until imported; `blobs/` holds the mailbox content. Encrypted, private, TLS only.                          |
-| DynamoDB table                                           | Mailbox metadata and change log. On-demand billing, point-in-time recovery, deletion protection.                                         |
-| Ingest Lambda (`nodejs24.x`, arm64)                      | Imports each message into the recipients' accounts.                                                                                      |
-| SQS dead-letter queue                                    | Catches deliveries that still fail after two retries.                                                                                    |
-| KMS key (optional, on by default)                        | Customer-managed encryption for the bucket and table.                                                                                    |
-| Cognito user pool                                        | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed.                                                              |
-| API Lambda and HTTP API                                  | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                                                     |
-| Certificate and `mail.<domain>` (with Route53)           | The API's own hostname, plus an SRV record so clients can find it from an address.                                                       |
-| MAIL FROM subdomain                                      | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                                            |
-| SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message. |
-| Table stream and push Lambda                             | Tells mail apps that registered for it when something changed, so new mail shows up without refreshing.                                  |
-| Send queue, schedule group and send Lambda               | Holds messages to send later, and wakes up to send them. Used by "undo send".                                                            |
-| CloudWatch alarms                                        | Bounce rate, complaint rate, and anything left in a dead-letter queue.                                                                   |
-| Route53 records (optional)                               | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.                           |
+| Resource                                                 | Purpose                                                                                                                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SES domain identity with DKIM                            | Proves ownership of the domain.                                                                                                                         |
+| SES receipt rule set and rule                            | Accepts mail for the domain over TLS, scans it, stores it in S3, then invokes the ingest function.                                                      |
+| S3 bucket                                                | `inbound/` holds raw messages until imported; `blobs/` holds the mailbox content. Encrypted, private, TLS only.                                         |
+| DynamoDB table                                           | Mailbox metadata and change log. On-demand billing, point-in-time recovery, deletion protection.                                                        |
+| Ingest Lambda (`nodejs24.x`, arm64)                      | Imports each message into the recipients' accounts.                                                                                                     |
+| SQS dead-letter queue                                    | Catches deliveries that still fail after two retries.                                                                                                   |
+| KMS key (optional, on by default)                        | Customer-managed encryption for the bucket and table.                                                                                                   |
+| Cognito user pool                                        | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed. A password or, once enrolled, a passkey.                                    |
+| Sign-in pages, admin client and `MAILLESS_ADMIN` group   | Cognito's own pages for signing in and enrolling a passkey, on `auth.<domain>` with Route53, for the admin interface and those who may manage accounts. |
+| API Lambda and HTTP API                                  | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                                                                    |
+| Certificate and `mail.<domain>` (with Route53)           | The API's own hostname, plus an SRV record so clients can find it from an address.                                                                      |
+| MAIL FROM subdomain                                      | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                                                           |
+| SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message.                |
+| Table stream and push Lambda                             | Tells mail apps that registered for it when something changed, so new mail shows up without refreshing.                                                 |
+| Send queue, schedule group and send Lambda               | Holds messages to send later, and wakes up to send them. Used by "undo send".                                                                           |
+| CloudWatch alarms                                        | Bounce rate, complaint rate, and anything left in a dead-letter queue.                                                                                  |
+| Route53 records (optional)                               | Inbound MX, three DKIM CNAMEs, the MAIL FROM records and a DMARC record, when the domain's zone is in Route53.                                          |
 
 Everything is pay-per-use except the KMS key, which costs about 1 USD a month.
 Set `use_customer_kms_key = false` to use the free AWS-managed encryption.
@@ -181,6 +182,41 @@ lost or compromised device never holds it. The account password remains what
 These commands need your AWS credentials: app passwords are created from the
 command line, not through the API, so nothing reachable from the internet can
 mint one.
+
+### Sign-in pages and passkeys
+
+Besides the password a mail client checks, the stack has Cognito's own sign-in
+pages, which the admin interface uses. They are where a passkey is enrolled
+and used. `terraform output auth` gives their addresses.
+
+- With `route53_zone_id` set, the pages are on `auth.<domain>` (change it with
+  `auth_hostname`). Cognito refuses a hostname whose parent domain has no A
+  record, so `example.com` itself must have one before `auth.example.com` can
+  be made. Passkeys are bound to the mail domain, so they keep working if the
+  hostname changes later.
+- Without a zone, the pages are on a hostname Cognito provides and passkeys
+  are bound to that hostname. Moving to a hostname of your own later means
+  every passkey has to be enrolled again.
+
+Members of the `MAILLESS_ADMIN` group may manage accounts in the admin
+interface. The first administrator is made from here:
+
+```sh
+pnpm infra admin grant <account>
+pnpm infra admin list
+pnpm infra admin revoke <account>   # also ends that user's sessions
+```
+
+To run that interface on your own machine against this stack, allow
+it to be signed in to from there:
+
+```hcl
+admin_extra_callback_urls = ["http://localhost:5173/admin/callback"]
+```
+
+All of this is in `modules/identity-cognito`. The rest of the stack reads only
+that module's outputs, so signing in with another provider is another module
+with the same outputs.
 
 ### The accounts directory
 

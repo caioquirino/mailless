@@ -27,3 +27,10 @@ activate_receipt_rule_set = false
 # Set when the domain's DNS is hosted in Route53; otherwise add the records from
 # the dns_records output by hand.
 # route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# Where the sign-in pages are, with route53_zone_id set. Defaults to
+# auth.<domain>; the domain itself must have an A record.
+# auth_hostname = "auth.example.com"
+
+# For running the admin interface on your own machine against this stack.
+# admin_extra_callback_urls = ["http://localhost:5173/admin/callback"]

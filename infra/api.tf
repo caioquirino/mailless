@@ -129,8 +129,16 @@ resource "aws_lambda_function" "api" {
         BUCKET              = aws_s3_bucket.mail.id
         BLOB_PREFIX         = local.blob_prefix
         DOWNLOAD_PREFIX     = local.download_prefix
-        USER_POOL_ID        = aws_cognito_user_pool.main.id
-        USER_POOL_CLIENT_ID = aws_cognito_user_pool_client.jmap.id
+        USER_POOL_ID        = module.identity.provider.user_pool_id
+        USER_POOL_CLIENT_ID = module.identity.jmap_client_id
+        # How a token is checked, whichever identity provider issued it.
+        OIDC_ISSUER          = module.identity.oidc.issuer
+        OIDC_JWKS_URI        = module.identity.oidc.jwks_uri
+        OIDC_AUDIENCES       = jsonencode([module.identity.jmap_client_id])
+        OIDC_AUDIENCE_CLAIM  = module.identity.oidc.audience_claim
+        OIDC_USERNAME_CLAIM  = module.identity.oidc.username_claim
+        OIDC_ROLES_CLAIM     = module.identity.oidc.roles_claim
+        OIDC_REQUIRED_CLAIMS = jsonencode(module.identity.oidc.required_claims)
         # Decides which addresses each account may send from.
         # Who has a mailbox. What the table does not have yet is taken from the three below.
         DIRECTORY_TABLE   = aws_dynamodb_table.directory.name

@@ -32,6 +32,12 @@
     },
     {
       "path": "./libs/directory"
+    },
+    {
+      "path": "./libs/identity-cognito"
+    },
+    {
+      "path": "./libs/identity"
     }
   ],
   "compilerOptions": {}

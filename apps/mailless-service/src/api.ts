@@ -13,6 +13,10 @@ import { SESv2Client } from '@aws-sdk/client-sesv2';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import {
+  createTokenVerifier,
+  tokenVerifierOptionsFromEnvironment,
+} from '@mailless/identity';
 import { createJmapServer } from '@mailless/jmap-server';
 import {
   createAppPasswordStore,
@@ -71,11 +75,21 @@ const directory = directoryFromEnvironment(process.env, dynamodb, (question) =>
 );
 
 const cognito = new CognitoIdentityProviderClient({});
-const verifier = CognitoJwtVerifier.create({
-  userPoolId,
-  tokenUse: 'access',
-  clientId,
-});
+// Whose token it is. Any OpenID Connect provider will do: which claim says what is
+// configuration. Without that configuration the pool is asked the way it always was.
+const oidc = tokenVerifierOptionsFromEnvironment(process.env);
+const verifyToken = oidc
+  ? createTokenVerifier(oidc)
+  : (() => {
+      const verifier = CognitoJwtVerifier.create({
+        userPoolId,
+        tokenUse: 'access',
+        clientId,
+      });
+      return async (token: string) => ({
+        username: (await verifier.verify(token)).username,
+      });
+    })();
 
 /** Errors that mean "these credentials are not accepted", as opposed to a failure on our side. */
 const REFUSALS = new Set([
@@ -118,7 +132,7 @@ const authenticate = createAuthenticator({
       : username,
   onFailure: (failure) =>
     console.log(JSON.stringify({ event: 'sign-in-failed', ...failure })),
-  verifyAccessToken: async (token) => (await verifier.verify(token)).username,
+  verifyAccessToken: async (token) => (await verifyToken(token)).username,
   passwordLogin: async (username, password) => {
     try {
       const result = await cognito.send(

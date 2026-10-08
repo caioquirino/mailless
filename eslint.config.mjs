@@ -36,6 +36,11 @@ export default [
                 'scope:jmap-server',
               ],
             },
+            // Nor does identity: it says who someone is, whatever they then do.
+            {
+              sourceTag: 'scope:identity',
+              onlyDependOnLibsWithTags: ['scope:identity'],
+            },
             // The directory knows nothing of JMAP: it says who has which mailbox.
             {
               sourceTag: 'scope:directory',

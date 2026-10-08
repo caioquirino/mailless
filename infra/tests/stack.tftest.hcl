@@ -87,6 +87,19 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_cognito_user_pool" {
+    defaults = {
+      id  = "eu-west-1_Example00"
+      arn = "arn:aws:cognito-idp:eu-west-1:123456789012:userpool/eu-west-1_Example00"
+    }
+  }
+
+  mock_resource "aws_cognito_user_pool_client" {
+    defaults = {
+      id = "exampleclientid"
+    }
+  }
+
   mock_resource "aws_kms_key" {
     defaults = {
       arn = "arn:aws:kms:eu-west-1:123456789012:key/mock-key"
@@ -97,6 +110,25 @@ mock_provider "aws" {
   mock_data "aws_iam_policy_document" {
     defaults = {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
+    }
+  }
+}
+
+# The certificate of the sign-in hostname is the one thing made in us-east-1.
+mock_provider "aws" {
+  alias           = "us_east_1"
+  override_during = plan
+
+  override_resource {
+    target = module.identity.aws_acm_certificate.auth
+    values = {
+      arn = "arn:aws:acm:us-east-1:123456789012:certificate/mock-auth"
+      domain_validation_options = [{
+        domain_name           = "auth.example.com"
+        resource_record_name  = "_validation.auth.example.com."
+        resource_record_type  = "CNAME"
+        resource_record_value = "_value.acm-validations.aws."
+      }]
     }
   }
 }
@@ -126,6 +158,9 @@ variables {
   account_names          = { me = "Me Myself" }
   shared_accounts        = {}
   account_quota_bytes    = null
+
+  auth_hostname             = null
+  admin_extra_callback_urls = []
 }
 
 run "defaults" {
@@ -294,26 +329,43 @@ run "api_and_sign_in" {
   command = plan
 
   assert {
-    condition     = toset(keys(aws_cognito_user.account)) == toset(["catchall", "me"])
+    condition     = tolist(output.users) == tolist(["catchall", "me"])
     error_message = "There must be one user per distinct account id."
   }
 
+  # The API checks tokens by what the identity module says about them, not by knowing the provider.
   assert {
     condition = (
-      aws_cognito_user_pool.main.admin_create_user_config[0].allow_admin_create_user_only &&
-      aws_cognito_user_pool.main.deletion_protection == "ACTIVE" &&
-      aws_cognito_user_pool.main.password_policy[0].minimum_length >= 14
+      aws_lambda_function.api.environment[0].variables["OIDC_ISSUER"] == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_Example00" &&
+      aws_lambda_function.api.environment[0].variables["OIDC_JWKS_URI"] == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_Example00/.well-known/jwks.json" &&
+      jsondecode(aws_lambda_function.api.environment[0].variables["OIDC_AUDIENCES"]) == ["exampleclientid"] &&
+      aws_lambda_function.api.environment[0].variables["OIDC_AUDIENCE_CLAIM"] == "client_id" &&
+      aws_lambda_function.api.environment[0].variables["OIDC_USERNAME_CLAIM"] == "username" &&
+      aws_lambda_function.api.environment[0].variables["OIDC_ROLES_CLAIM"] == "cognito:groups" &&
+      jsondecode(aws_lambda_function.api.environment[0].variables["OIDC_REQUIRED_CLAIMS"]) == { token_use = "access" }
     )
-    error_message = "Sign-up must be closed, the pool protected, and passwords long."
+    error_message = "The API must be told how to check a token: issuer, keys, audience and claims."
   }
 
   assert {
     condition = (
-      !aws_cognito_user_pool_client.jmap.generate_secret &&
-      aws_cognito_user_pool_client.jmap.prevent_user_existence_errors == "ENABLED" &&
-      aws_cognito_user_pool_client.jmap.explicit_auth_flows == toset(["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"])
+      output.admin_role == "MAILLESS_ADMIN" &&
+      output.admin_client_id == "exampleclientid" &&
+      output.user_pool_id == "eu-west-1_Example00"
     )
-    error_message = "Unexpected app client configuration."
+    error_message = "The admin role, the admin client and the pool must be outputs."
+  }
+
+  # Without a zone the sign-in pages are on a hostname Cognito provides.
+  assert {
+    condition = output.auth == {
+      base_url              = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com"
+      authorize_url         = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com/oauth2/authorize"
+      token_url             = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com/oauth2/token"
+      logout_url            = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com/logout"
+      passkey_enrolment_url = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com/passkeys/add"
+    }
+    error_message = "The sign-in pages must be an output, with the page for enrolling a passkey."
   }
 
   assert {
@@ -744,6 +796,257 @@ run "with_hosted_zone_and_activation" {
   assert {
     condition     = length(aws_ses_active_receipt_rule_set.main) == 1
     error_message = "The rule set must be activated when asked."
+  }
+
+  # With a zone the sign-in pages get a hostname of our own.
+  assert {
+    condition     = output.auth.base_url == "https://auth.example.com" && output.auth.passkey_enrolment_url == "https://auth.example.com/passkeys/add"
+    error_message = "The sign-in pages must be on auth.<domain> when the zone is managed here."
+  }
+}
+
+run "sign_in_hostname_can_be_chosen" {
+  command = plan
+
+  variables {
+    route53_zone_id = "Z0123456789ABCDEFGHIJ"
+    auth_hostname   = "login.example.com"
+  }
+
+  assert {
+    condition     = output.auth.base_url == "https://login.example.com"
+    error_message = "The sign-in pages must be on the hostname asked for."
+  }
+}
+
+run "rejects_a_malformed_sign_in_hostname" {
+  command = plan
+
+  variables {
+    auth_hostname = "Auth.Example.com"
+  }
+
+  expect_failures = [var.auth_hostname]
+}
+
+run "the_admin_interface_can_be_run_locally" {
+  command = plan
+
+  variables {
+    admin_extra_callback_urls = ["http://localhost:5173/admin/callback", "https://staging.example.com/admin/callback"]
+  }
+}
+
+run "rejects_sign_in_returning_over_plain_http" {
+  command = plan
+
+  variables {
+    admin_extra_callback_urls = ["http://admin.example.com/admin/callback"]
+  }
+
+  expect_failures = [var.admin_extra_callback_urls]
+}
+
+# The runs below look inside the identity module, which a run of the whole
+# stack cannot: there, only what the module gives out is visible.
+
+run "identity_closed_sign_up_with_passkeys" {
+  command = plan
+
+  module {
+    source = "./modules/identity-cognito"
+  }
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  variables {
+    account_id     = "123456789012"
+    users          = ["catchall", "me"]
+    auth_hostname  = "auth.example.com"
+    admin_base_url = "https://abc123.execute-api.eu-west-1.amazonaws.com"
+  }
+
+  assert {
+    condition     = toset(keys(aws_cognito_user.account)) == toset(["catchall", "me"])
+    error_message = "There must be one user per account asked for."
+  }
+
+  assert {
+    condition = (
+      aws_cognito_user_pool.main.admin_create_user_config[0].allow_admin_create_user_only &&
+      aws_cognito_user_pool.main.deletion_protection == "ACTIVE" &&
+      aws_cognito_user_pool.main.password_policy[0].minimum_length >= 14
+    )
+    error_message = "Sign-up must be closed, the pool protected, and passwords long."
+  }
+
+  assert {
+    condition = (
+      !aws_cognito_user_pool_client.jmap.generate_secret &&
+      aws_cognito_user_pool_client.jmap.prevent_user_existence_errors == "ENABLED" &&
+      aws_cognito_user_pool_client.jmap.explicit_auth_flows == toset(["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"])
+    )
+    error_message = "Unexpected app client configuration."
+  }
+
+  # A passkey may replace the password, which stays: it is how a new user gets in to enrol one.
+  assert {
+    condition     = toset(aws_cognito_user_pool.main.sign_in_policy[0].allowed_first_auth_factors) == toset(["PASSWORD", "WEB_AUTHN"])
+    error_message = "People must be able to sign in with a passkey, and still with a password."
+  }
+
+  # On a hostname Cognito provides, a passkey can only be bound to that hostname.
+  assert {
+    condition = (
+      aws_cognito_user_pool.main.web_authn_configuration[0].relying_party_id == "mailless-123456789012.auth.eu-west-1.amazoncognito.com" &&
+      aws_cognito_user_pool_domain.main.domain == "mailless-123456789012" &&
+      aws_cognito_user_pool_domain.main.managed_login_version == 2 &&
+      length(aws_acm_certificate.auth) == 0 &&
+      length(aws_route53_record.auth) == 0
+    )
+    error_message = "Without a zone the sign-in pages must be Cognito's own hostname, in the version that enrols passkeys."
+  }
+
+  assert {
+    condition     = aws_cognito_user_group.admin.name == "MAILLESS_ADMIN"
+    error_message = "There must be a group for those who may manage accounts."
+  }
+
+  # A browser cannot keep a secret, so the admin interface signs in one way only.
+  assert {
+    condition = (
+      !aws_cognito_user_pool_client.admin.generate_secret &&
+      aws_cognito_user_pool_client.admin.allowed_oauth_flows_user_pool_client &&
+      aws_cognito_user_pool_client.admin.allowed_oauth_flows == toset(["code"]) &&
+      aws_cognito_user_pool_client.admin.allowed_oauth_scopes == toset(["openid", "aws.cognito.signin.user.admin"]) &&
+      aws_cognito_user_pool_client.admin.supported_identity_providers == toset(["COGNITO"]) &&
+      aws_cognito_user_pool_client.admin.explicit_auth_flows == toset(["ALLOW_USER_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]) &&
+      aws_cognito_user_pool_client.admin.prevent_user_existence_errors == "ENABLED" &&
+      aws_cognito_user_pool_client.admin.enable_token_revocation
+    )
+    error_message = "The admin client must be public, use the code flow only, and ask for the two scopes."
+  }
+
+  assert {
+    condition = (
+      aws_cognito_user_pool_client.admin.callback_urls == toset(["https://abc123.execute-api.eu-west-1.amazonaws.com/admin/callback"]) &&
+      aws_cognito_user_pool_client.admin.logout_urls == toset(["https://abc123.execute-api.eu-west-1.amazonaws.com/admin/"])
+    )
+    error_message = "Sign-in must return to the admin interface and nowhere else."
+  }
+
+  assert {
+    condition     = aws_cognito_managed_login_branding.admin.use_cognito_provided_values
+    error_message = "The sign-in pages need a style for the admin client, or they show nothing."
+  }
+}
+
+run "identity_on_a_hostname_of_our_own" {
+  command = plan
+
+  module {
+    source = "./modules/identity-cognito"
+  }
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  override_resource {
+    target          = aws_acm_certificate.auth
+    override_during = plan
+    values = {
+      arn = "arn:aws:acm:us-east-1:123456789012:certificate/mock-auth"
+      domain_validation_options = [{
+        domain_name           = "auth.example.com"
+        resource_record_name  = "_validation.auth.example.com."
+        resource_record_type  = "CNAME"
+        resource_record_value = "_value.acm-validations.aws."
+      }]
+    }
+  }
+
+  variables {
+    account_id                = "123456789012"
+    users                     = ["me"]
+    route53_zone_id           = "Z0123456789ABCDEFGHIJ"
+    auth_hostname             = "auth.example.com"
+    admin_base_url            = "https://mail.example.com"
+    admin_extra_callback_urls = ["http://localhost:5173/admin/callback"]
+  }
+
+  # Bound to the mail domain, a passkey outlives a change of the sign-in hostname.
+  assert {
+    condition     = aws_cognito_user_pool.main.web_authn_configuration[0].relying_party_id == "example.com"
+    error_message = "Passkeys must be bound to the mail domain when the sign-in pages are under it."
+  }
+
+  assert {
+    condition = (
+      aws_cognito_user_pool_domain.main.domain == "auth.example.com" &&
+      aws_cognito_user_pool_domain.main.managed_login_version == 2 &&
+      aws_acm_certificate.auth[0].domain_name == "auth.example.com" &&
+      toset(keys(aws_route53_record.auth)) == toset(["A", "AAAA"])
+    )
+    error_message = "The sign-in pages must get their hostname, a certificate for it and its DNS records."
+  }
+
+  assert {
+    condition = aws_cognito_user_pool_client.admin.callback_urls == toset([
+      "https://mail.example.com/admin/callback",
+      "http://localhost:5173/admin/callback",
+    ])
+    error_message = "Sign-in must also be able to return to an admin interface run locally."
+  }
+
+  assert {
+    condition     = output.hosted.passkey_enrolment_url == "https://auth.example.com/passkeys/add"
+    error_message = "The page for enrolling a passkey must be on the sign-in hostname."
+  }
+}
+
+run "identity_sign_in_hostname_on_another_domain" {
+  command = plan
+
+  module {
+    source = "./modules/identity-cognito"
+  }
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  override_resource {
+    target          = aws_acm_certificate.auth
+    override_during = plan
+    values = {
+      arn = "arn:aws:acm:us-east-1:123456789012:certificate/mock-auth"
+      domain_validation_options = [{
+        domain_name           = "auth.example.org"
+        resource_record_name  = "_validation.auth.example.org."
+        resource_record_type  = "CNAME"
+        resource_record_value = "_value.acm-validations.aws."
+      }]
+    }
+  }
+
+  variables {
+    account_id      = "123456789012"
+    users           = ["me"]
+    route53_zone_id = "Z0123456789ABCDEFGHIJ"
+    auth_hostname   = "auth.example.org"
+    admin_base_url  = "https://mail.example.com"
+  }
+
+  # A passkey cannot be bound to a domain its sign-in page is not under.
+  assert {
+    condition     = aws_cognito_user_pool.main.web_authn_configuration[0].relying_party_id == "auth.example.org"
+    error_message = "Passkeys must be bound to the sign-in hostname when it is not under the mail domain."
   }
 }
 

@@ -21,6 +21,12 @@
       "path": "../../libs/jmap-core/tsconfig.lib.json"
     },
     {
+      "path": "../../libs/identity-cognito/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/identity/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/directory-dynamodb/tsconfig.lib.json"
     },
     {

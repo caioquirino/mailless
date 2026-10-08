@@ -165,6 +165,40 @@ variable "api_hostname" {
   default     = null
 }
 
+variable "auth_hostname" {
+  description = <<-EOT
+    Hostname of the sign-in pages. Defaults to auth.<domain>. Only used when
+    route53_zone_id is set; otherwise the pages are on a hostname Cognito
+    provides. Its parent domain must have an A record, or Cognito refuses it.
+    Passkeys are bound to the mail domain as long as this hostname is under it.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.auth_hostname == null ? true : can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.auth_hostname))
+    error_message = "auth_hostname must be a lower-case DNS name such as auth.example.com."
+  }
+}
+
+variable "admin_extra_callback_urls" {
+  description = <<-EOT
+    Further addresses the admin interface may be signed in to from, besides
+    the deployed one. For running it on your own machine, for example
+    ["http://localhost:5173/admin/callback"].
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for url in var.admin_extra_callback_urls :
+      can(regex("^https://[^\\s]+$", url)) || can(regex("^http://localhost(:[0-9]+)?(/[^\\s]*)?$", url))
+    ])
+    error_message = "Each address must be https, or http://localhost for local development."
+  }
+}
+
 variable "api_throttle_rate" {
   description = "Sustained requests per second the API accepts, across all clients."
   type        = number
