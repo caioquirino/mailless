@@ -10,6 +10,7 @@ if (!task || task.startsWith('-')) {
       '  apply     deploy (Terraform asks before changing anything)\n' +
       '  password  set the sign-in password of a mailbox user: pnpm infra password <name>\n' +
       '  app-password  create, list or revoke per-client passwords\n' +
+      '  directory seed or show the accounts directory: pnpm infra directory <seed|show>\n' +
       '  send-test send a test message and wait for it to arrive: pnpm infra send-test [recipient]\n' +
       '  init      create the state bucket if needed and initialise Terraform\n' +
       '  validate  check the configuration\n' +
@@ -27,6 +28,10 @@ const direct = {
   // Uses the admin tool from the service build, so that is brought up to date first.
   'app-password': {
     script: 'infra/scripts/app-password.mjs',
+    build: 'mailless-service',
+  },
+  directory: {
+    script: 'infra/scripts/directory.mjs',
     build: 'mailless-service',
   },
 };

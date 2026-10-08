@@ -27,8 +27,8 @@ import { createAuthenticator } from './api/authenticator.js';
 import { identitiesFor } from './api/identities.js';
 import { createLambdaHttpHandler } from './api/lambda-http.js';
 import { createAwsSendScheduler } from './api/send-scheduler.js';
-import { parseAccountShares, sharedAccountsFor } from './api/shares.js';
-import { parseMailboxMap, resolveAccount } from './ingest/recipients.js';
+import { sharedAccountsFor } from './api/shares.js';
+import { directoryFromEnvironment } from './directory.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -41,12 +41,6 @@ const userPoolId = required('USER_POOL_ID');
 const clientId = required('USER_POOL_CLIENT_ID');
 const downloadPrefix = process.env['DOWNLOAD_PREFIX'] ?? 'downloads/';
 const DOWNLOAD_URL_SECONDS = 300;
-const mailboxes = parseMailboxMap(process.env['MAILBOXES']);
-// Display names for the From header, by account.
-const accountNames = JSON.parse(process.env['ACCOUNT_NAMES'] ?? '{}') as Record<
-  string,
-  string
->;
 const configurationSetName = process.env['CONFIGURATION_SET'];
 const transport = new SesMailTransport({
   client: new SESv2Client({}),
@@ -58,9 +52,10 @@ const transport = new SesMailTransport({
 const s3 = new S3Client({
   forcePathStyle: process.env['S3_FORCE_PATH_STYLE'] === 'true',
 });
+const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const storage = {
   metadata: new DynamoDbMetadataStore({
-    client: DynamoDBDocumentClient.from(new DynamoDBClient({})),
+    client: dynamodb,
     tableName: required('TABLE_NAME'),
   }),
   blobs: new S3BlobStore({
@@ -69,6 +64,11 @@ const storage = {
     keyPrefix: process.env['BLOB_PREFIX'] ?? 'blobs/',
   }),
 };
+// Who has a mailbox, which addresses deliver to it and who else may use it.
+const directory = directoryFromEnvironment(process.env, dynamodb, (question) =>
+  // Says that the table does not have everything yet. The question only, never whom it was about.
+  console.log(JSON.stringify({ event: 'directory-fallback', question })),
+);
 
 const cognito = new CognitoIdentityProviderClient({});
 const verifier = CognitoJwtVerifier.create({
@@ -105,8 +105,6 @@ const scheduler = sendQueueUrl
 const quotaOctets = Number(process.env['QUOTA_OCTETS'] ?? '');
 
 const appPasswords = createAppPasswordStore(storage.metadata);
-// Accounts more than one user may use, such as a shared mailbox.
-const accountShares = parseAccountShares(process.env['ACCOUNT_SHARES']);
 
 const authenticate = createAuthenticator({
   isAppPassword,
@@ -114,9 +112,9 @@ const authenticate = createAuthenticator({
     (await appPasswords.verify(username, password)) ? username : null,
   allowPasswordLogin: process.env['ALLOW_PASSWORD_SIGN_IN'] !== 'false',
   // Mail clients ask for an email address. Sign in as the account that address delivers to.
-  resolveUsername: (username) =>
+  resolveUsername: async (username) =>
     username.includes('@')
-      ? (resolveAccount(mailboxes, username) ?? username)
+      ? ((await directory.resolveAddress(username)) ?? username)
       : username,
   onFailure: (failure) =>
     console.log(JSON.stringify({ event: 'sign-in-failed', ...failure })),
@@ -156,8 +154,12 @@ export const handler = createLambdaHttpHandler({
         // Mail apps register where to be told of new mail. The push function does the telling.
         push: {},
         // An account may send from the addresses that deliver to it.
-        identities: (auth) =>
-          identitiesFor(mailboxes, auth.accountId, accountNames),
+        identities: async (auth) =>
+          identitiesFor(
+            auth.accountId,
+            await directory.addressesOf(auth.accountId),
+            (await directory.account(auth.accountId))?.name,
+          ),
         onError: (error, method) =>
           console.error(JSON.stringify({ method, error: String(error) })),
         // What each request asked for and how it fared, by name only: this is how a
@@ -179,10 +181,20 @@ export const handler = createLambdaHttpHandler({
       authenticate: async (request) => {
         const auth = await authenticate(request);
         if (!auth) return null;
-        const sharedAccounts = sharedAccountsFor(
-          accountShares,
+        // A sign-in proves who someone is. Whether they have a mailbox is the directory's to say.
+        const account = await directory.account(auth.accountId);
+        if (account?.status !== 'active') {
+          console.log(
+            JSON.stringify({
+              event: 'sign-in-failed',
+              reason: account ? 'account-not-active' : 'no-account',
+            }),
+          );
+          return null;
+        }
+        const sharedAccounts = await sharedAccountsFor(
+          directory,
           auth.accountId,
-          accountNames,
         );
         return Object.keys(sharedAccounts).length > 0
           ? { ...auth, sharedAccounts }

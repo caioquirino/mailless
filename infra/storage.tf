@@ -225,3 +225,40 @@ resource "aws_dynamodb_table" "metadata" {
     prevent_destroy = true
   }
 }
+
+# ------------------------------------------------------------------ directory
+
+# Who has a mailbox: accounts, the addresses that deliver to each, and who an
+# account is shared with. Kept apart from the mail so that the functions that
+# handle mail can be allowed to read it and nothing more.
+# Key schema must match directoryTableDefinition() in @mailless/directory-dynamodb.
+resource "aws_dynamodb_table" "directory" {
+  name                        = "${var.name}-directory"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "pk"
+  range_key                   = "sk"
+  deletion_protection_enabled = true
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = var.use_customer_kms_key
+    kms_key_arn = local.kms_key_arn
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

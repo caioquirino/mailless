@@ -16,6 +16,11 @@ output "metadata_table" {
   value = aws_dynamodb_table.metadata.name
 }
 
+output "directory_table" {
+  description = "Who has a mailbox. Filled from terraform.tfvars with `pnpm infra directory seed`."
+  value       = aws_dynamodb_table.directory.name
+}
+
 output "ingest_function" {
   value = aws_lambda_function.ingest.function_name
 }

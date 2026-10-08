@@ -1,6 +1,8 @@
-// Command-line administration, run with AWS credentials: `pnpm infra app-password ...`.
+// Command-line administration, run with AWS credentials: `pnpm infra app-password ...`
+// and `pnpm infra directory ...`.
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { DynamoDbDirectory } from '@mailless/directory-dynamodb';
 import { createAppPasswordStore } from '@mailless/jmap-server/auth';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import {
@@ -8,24 +10,44 @@ import {
   runAppPasswordCommand,
   UsageError,
 } from './admin/app-password-cli.js';
+import { DIRECTORY_USAGE, runDirectoryCommand } from './admin/directory-cli.js';
+import { configurationFromEnvironment } from './directory.js';
 
 const [topic, ...rest] = process.argv.slice(2);
 
-try {
-  if (topic !== 'app-password') throw new UsageError(APP_PASSWORD_USAGE);
-  const tableName = process.env['TABLE_NAME'];
-  if (!tableName) throw new Error('Missing environment variable TABLE_NAME');
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing environment variable ${name}`);
+  return value;
+}
 
-  await runAppPasswordCommand(rest, {
-    store: createAppPasswordStore(
-      new DynamoDbMetadataStore({
-        client: DynamoDBDocumentClient.from(new DynamoDBClient({})),
-        tableName,
+try {
+  const client = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+  const print = (line: string) => console.log(line);
+  if (topic === 'app-password') {
+    await runAppPasswordCommand(rest, {
+      store: createAppPasswordStore(
+        new DynamoDbMetadataStore({
+          client,
+          tableName: required('TABLE_NAME'),
+        }),
+      ),
+      accounts: JSON.parse(process.env['ACCOUNTS'] ?? '[]') as string[],
+      print,
+    });
+  } else if (topic === 'directory') {
+    const matches = await runDirectoryCommand(rest, {
+      directory: new DynamoDbDirectory({
+        client,
+        tableName: required('DIRECTORY_TABLE'),
       }),
-    ),
-    accounts: JSON.parse(process.env['ACCOUNTS'] ?? '[]') as string[],
-    print: (line) => console.log(line),
-  });
+      configuration: configurationFromEnvironment(process.env),
+      print,
+    });
+    if (!matches) process.exitCode = 1;
+  } else {
+    throw new UsageError(`${APP_PASSWORD_USAGE}\n\n${DIRECTORY_USAGE}`);
+  }
 } catch (error) {
   console.error(
     `\n${error instanceof Error ? error.message : String(error)}\n`,

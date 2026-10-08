@@ -57,6 +57,13 @@ data "aws_iam_policy_document" "api" {
     resources = [aws_dynamodb_table.metadata.arn]
   }
 
+  # Reading only: who has which mailbox is changed elsewhere, never by this function.
+  statement {
+    sid       = "ReadDirectory"
+    actions   = ["dynamodb:GetItem", "dynamodb:Query"]
+    resources = [aws_dynamodb_table.directory.arn]
+  }
+
   # Sending is allowed only with a From address at this stack's domain, and only
   # through the configuration set that reports what became of each message.
   # The identity is a wildcard because, while an account is in the SES sandbox,
@@ -125,6 +132,8 @@ resource "aws_lambda_function" "api" {
         USER_POOL_ID        = aws_cognito_user_pool.main.id
         USER_POOL_CLIENT_ID = aws_cognito_user_pool_client.jmap.id
         # Decides which addresses each account may send from.
+        # Who has a mailbox. What the table does not have yet is taken from the three below.
+        DIRECTORY_TABLE   = aws_dynamodb_table.directory.name
         MAILBOXES         = jsonencode(var.mailboxes)
         ACCOUNT_NAMES     = jsonencode(var.account_names)
         ACCOUNT_SHARES    = jsonencode(var.shared_accounts)

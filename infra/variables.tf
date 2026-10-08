@@ -25,9 +25,9 @@ variable "mailboxes" {
   validation {
     condition = alltrue([
       for address, account in var.mailboxes :
-      address == lower(address) && can(regex("^[^@\\s]+@[^@\\s]+$", address)) && can(regex("^[A-Za-z0-9_-]{1,64}$", account))
+      address == lower(address) && can(regex("^[^@\\s]+@[^@\\s]+$", address)) && can(regex("^[a-z0-9_-]{1,64}$", account))
     ])
-    error_message = "Keys must be lower-case addresses (or *@domain); account ids may contain letters, digits, '-' and '_' only."
+    error_message = "Keys must be lower-case addresses (or *@domain); account ids may contain small letters, digits, '-' and '_' only."
   }
 }
 

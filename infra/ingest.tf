@@ -73,6 +73,13 @@ data "aws_iam_policy_document" "ingest" {
     resources = [aws_dynamodb_table.metadata.arn]
   }
 
+  # Reading only: who has which mailbox is changed elsewhere, never by this function.
+  statement {
+    sid       = "ReadDirectory"
+    actions   = ["dynamodb:GetItem", "dynamodb:Query"]
+    resources = [aws_dynamodb_table.directory.arn]
+  }
+
   statement {
     sid       = "DeadLetters"
     actions   = ["sqs:SendMessage"]
@@ -134,8 +141,10 @@ resource "aws_lambda_function" "ingest" {
       BUCKET         = aws_s3_bucket.mail.id
       INBOUND_PREFIX = local.inbound_prefix
       BLOB_PREFIX    = local.blob_prefix
-      MAILBOXES      = jsonencode(var.mailboxes)
-      ACCOUNT_NAMES  = jsonencode(var.account_names)
+      # Who has a mailbox. What the table does not have yet is taken from the two below.
+      DIRECTORY_TABLE = aws_dynamodb_table.directory.name
+      MAILBOXES       = jsonencode(var.mailboxes)
+      ACCOUNT_NAMES   = jsonencode(var.account_names)
       # Automatic replies go through the configuration set too, so that an address
       # that bounced or complained is not written to again.
       CONFIGURATION_SET = aws_sesv2_configuration_set.main.configuration_set_name

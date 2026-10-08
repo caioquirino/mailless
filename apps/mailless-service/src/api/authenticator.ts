@@ -9,7 +9,7 @@ export interface AuthenticatorOptions {
    * Maps what was typed as the username to the sign-in name. Mail clients ask
    * for an email address, so this is where an address becomes its account.
    */
-  resolveUsername?(username: string): string;
+  resolveUsername?(username: string): string | Promise<string>;
   /**
    * Checks an app password for a sign-in name and returns that name when it
    * is valid. Passwords are routed here when `isAppPassword` says so.
@@ -120,7 +120,7 @@ export function createAuthenticator(
     if (!pending) {
       pending = (async () => {
         const username =
-          options.resolveUsername?.(credentials.username) ??
+          (await options.resolveUsername?.(credentials.username)) ??
           credentials.username;
         let auth: AuthContext | null;
         let acceptedFor = ACCEPTED_TTL_MS;

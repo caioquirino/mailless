@@ -73,6 +73,8 @@
     "@aws-sdk/client-sqs": "^3.1147.0",
     "@aws-sdk/lib-dynamodb": "^3.1146.0",
     "@aws-sdk/s3-request-presigner": "^3.1146.0",
+    "@mailless/directory": "workspace:*",
+    "@mailless/directory-dynamodb": "workspace:*",
     "@mailless/jmap-core": "workspace:*",
     "@mailless/jmap-server": "workspace:*",
     "@mailless/storage-dynamodb": "workspace:*",

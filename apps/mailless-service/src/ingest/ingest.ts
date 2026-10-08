@@ -11,8 +11,11 @@ export interface InboundStore {
 export interface IngestDependencies {
   jmap: Pick<JmapServer, 'importMessage' | 'provisionAccount'>;
   inbound: InboundStore;
-  /** Recipient address to account id, or undefined when nobody owns the address. */
-  resolveAccount(recipient: string): string | undefined;
+  /**
+   * Recipient address to account id, or undefined when the address delivers
+   * to nobody: it belongs to no account, or to one that is being deleted.
+   */
+  resolveAccount(recipient: string): Promise<string | undefined>;
   log?(entry: Record<string, unknown>): void;
 }
 
@@ -39,7 +42,7 @@ async function ingestRecord(
   // One delivery per account, even when several of its addresses were recipients.
   const accounts = new Map<string, string>();
   for (const recipient of receipt.recipients) {
-    const accountId = deps.resolveAccount(recipient);
+    const accountId = await deps.resolveAccount(recipient);
     if (accountId !== undefined && !accounts.has(accountId)) {
       accounts.set(accountId, recipient.toLowerCase());
     }

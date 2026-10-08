@@ -20,15 +20,17 @@ be served by functions that only run while a request is in flight.
 
 ## Packages
 
-| Package                                               | What it is                                                                                                                            | State   |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| [`@mailless/jmap-core`](libs/jmap-core)               | Protocol types, validators, result references, patch objects. No I/O; runs anywhere.                                                  | Working |
-| [`@mailless/jmap-server`](libs/jmap-server)           | JMAP server framework: request engine, Mailbox / Email / Thread methods, storage contract, in-memory adapter, conformance test suite. | Working |
-| [`@mailless/storage-dynamodb`](libs/storage-dynamodb) | Metadata store on DynamoDB (or DynamoDB Local).                                                                                       | Working |
-| [`@mailless/storage-s3`](libs/storage-s3)             | Blob store on S3 or an S3-compatible server.                                                                                          | Working |
-| [`@mailless/storage-fs`](libs/storage-fs)             | Blob store on a local directory.                                                                                                      | Working |
-| [`@mailless/transport-ses`](libs/transport-ses)       | Sends outgoing mail through Amazon SES.                                                                                               | Working |
-| `@mailless/jmap-client`                               | Typed JMAP client.                                                                                                                    | Planned |
+| Package                                                   | What it is                                                                                                                            | State   |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| [`@mailless/jmap-core`](libs/jmap-core)                   | Protocol types, validators, result references, patch objects. No I/O; runs anywhere.                                                  | Working |
+| [`@mailless/jmap-server`](libs/jmap-server)               | JMAP server framework: request engine, Mailbox / Email / Thread methods, storage contract, in-memory adapter, conformance test suite. | Working |
+| [`@mailless/storage-dynamodb`](libs/storage-dynamodb)     | Metadata store on DynamoDB (or DynamoDB Local).                                                                                       | Working |
+| [`@mailless/storage-s3`](libs/storage-s3)                 | Blob store on S3 or an S3-compatible server.                                                                                          | Working |
+| [`@mailless/storage-fs`](libs/storage-fs)                 | Blob store on a local directory.                                                                                                      | Working |
+| [`@mailless/transport-ses`](libs/transport-ses)           | Sends outgoing mail through Amazon SES.                                                                                               | Working |
+| [`@mailless/directory`](libs/directory)                   | Who has a mailbox: accounts, their addresses and who they are shared with.                                                            | Working |
+| [`@mailless/directory-dynamodb`](libs/directory-dynamodb) | The directory on DynamoDB (or DynamoDB Local).                                                                                        | Working |
+| `@mailless/jmap-client`                                   | Typed JMAP client.                                                                                                                    | Planned |
 
 Also in this repository:
 

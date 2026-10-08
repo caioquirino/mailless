@@ -26,6 +26,12 @@
     },
     {
       "path": "./libs/transport-ses"
+    },
+    {
+      "path": "./libs/directory-dynamodb"
+    },
+    {
+      "path": "./libs/directory"
     }
   ],
   "compilerOptions": {}

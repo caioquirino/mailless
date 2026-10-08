@@ -1,19 +1,20 @@
+import { InMemoryDirectory } from '@mailless/directory';
 import { createJmapServer, type JmapServer } from '@mailless/jmap-server';
 import { InMemoryStorageAdapter } from '@mailless/jmap-server/memory';
 import { buildMessage } from '@mailless/jmap-server/testing';
 import type { SESEvent } from 'aws-lambda';
 import { ingest, type InboundStore } from './ingest.js';
-import { parseMailboxMap, resolveAccount } from './recipients.js';
+import { parseMailboxMap } from './recipients.js';
 
 const USING = ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'];
 const URL = 'https://jmap.example.com';
-const mailboxes = parseMailboxMap(
-  JSON.stringify({
+const directory = await InMemoryDirectory.from({
+  mailboxes: {
     'Me@Example.com': 'acc-me',
     'alias@example.com': 'acc-me',
     '*@team.example.com': 'acc-team',
-  }),
-);
+  },
+});
 
 function sesEvent(
   messageId: string,
@@ -62,7 +63,7 @@ describe('ingest', () => {
     ingest(event, {
       jmap: server,
       inbound,
-      resolveAccount: (recipient) => resolveAccount(mailboxes, recipient),
+      resolveAccount: (recipient) => directory.resolveAddress(recipient),
     });
 
   const store = (id: string, subject = 'Hello') =>
@@ -201,19 +202,11 @@ describe('ingest', () => {
   });
 });
 
-describe('resolveAccount', () => {
-  it('prefers an exact address over the domain wildcard', () => {
-    const map = parseMailboxMap('{"a@x.org":"one","*@x.org":"rest"}');
-    expect(resolveAccount(map, 'A@X.org')).toBe('one');
-    expect(resolveAccount(map, 'b@x.org')).toBe('rest');
-    expect(resolveAccount(map, 'b@y.org')).toBeUndefined();
-    expect(resolveAccount(map, 'not-an-address')).toBeUndefined();
-    expect(resolveAccount(map, '__proto__@nowhere')).toBeUndefined();
-  });
-
+describe('parseMailboxMap', () => {
   it('rejects malformed configuration', () => {
     expect(() => parseMailboxMap('[]')).toThrow();
     expect(() => parseMailboxMap('{"a@x.org":""}')).toThrow();
     expect(parseMailboxMap(undefined)).toEqual({});
+    expect(parseMailboxMap('{"A@X.org":"one"}')).toEqual({ 'a@x.org': 'one' });
   });
 });

@@ -1,7 +1,6 @@
 /**
- * Maps recipient addresses to account ids. Keys are full addresses
- * (`me@example.com`) or a whole domain (`*@example.com`); an exact address
- * wins over the domain wildcard. Matching is case-insensitive.
+ * Recipient addresses to account ids, as configuration gives them. Keys are
+ * full addresses (`me@example.com`) or a whole domain (`*@example.com`).
  */
 export type MailboxMap = Record<string, string>;
 
@@ -21,18 +20,4 @@ export function parseMailboxMap(json: string | undefined): MailboxMap {
     map[address.toLowerCase()] = accountId;
   }
   return map;
-}
-
-export function resolveAccount(
-  map: MailboxMap,
-  recipient: string,
-): string | undefined {
-  const address = recipient.trim().toLowerCase();
-  const at = address.lastIndexOf('@');
-  if (at <= 0) return undefined;
-  if (Object.prototype.hasOwnProperty.call(map, address)) return map[address];
-  const wildcard = `*${address.slice(at)}`;
-  return Object.prototype.hasOwnProperty.call(map, wildcard)
-    ? map[wildcard]
-    : undefined;
 }

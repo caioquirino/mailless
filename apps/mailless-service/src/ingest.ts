@@ -13,7 +13,7 @@ import { SesMailTransport } from '@mailless/transport-ses';
 import type { SESEvent } from 'aws-lambda';
 import { identitiesFor } from './api/identities.js';
 import { ingest, type InboundStore } from './ingest/ingest.js';
-import { parseMailboxMap, resolveAccount } from './ingest/recipients.js';
+import { directoryFromEnvironment } from './directory.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -24,12 +24,6 @@ function required(name: string): string {
 const bucket = required('BUCKET');
 const inboundPrefix = process.env['INBOUND_PREFIX'] ?? 'inbound/';
 const publicUrl = process.env['PUBLIC_URL'] ?? 'https://jmap.invalid';
-const mailboxes = parseMailboxMap(process.env['MAILBOXES']);
-// Display names for the From header of automatic replies, by account.
-const accountNames = JSON.parse(process.env['ACCOUNT_NAMES'] ?? '{}') as Record<
-  string,
-  string
->;
 const configurationSetName = process.env['CONFIGURATION_SET'];
 
 // The SDK reads AWS_ENDPOINT_URL_S3 and AWS_ENDPOINT_URL_DYNAMODB itself, which is how tests
@@ -38,6 +32,10 @@ const s3 = new S3Client({
   forcePathStyle: process.env['S3_FORCE_PATH_STYLE'] === 'true',
 });
 const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+// Who has a mailbox and which addresses deliver to it.
+const directory = directoryFromEnvironment(process.env, dynamodb, (question) =>
+  console.log(JSON.stringify({ event: 'directory-fallback', question })),
+);
 
 const jmap = createJmapServer({
   storage: {
@@ -62,7 +60,12 @@ const jmap = createJmapServer({
     client: new SESv2Client({}),
     ...(configurationSetName ? { configurationSetName } : {}),
   }),
-  identities: (auth) => identitiesFor(mailboxes, auth.accountId, accountNames),
+  identities: async (auth) =>
+    identitiesFor(
+      auth.accountId,
+      await directory.addressesOf(auth.accountId),
+      (await directory.account(auth.accountId))?.name,
+    ),
   // The outcome only: who wrote, and to whom, stays out of the logs.
   onAutoReply: (outcome, error) => {
     if (outcome === 'disabled') return;
@@ -107,7 +110,13 @@ export async function handler(event: SESEvent): Promise<void> {
   await ingest(event, {
     jmap,
     inbound,
-    resolveAccount: (recipient) => resolveAccount(mailboxes, recipient),
+    resolveAccount: async (recipient) => {
+      const accountId = await directory.resolveAddress(recipient);
+      if (accountId === undefined) return undefined;
+      // Mail still arrives for an account that is switched off, but not for one on its way out.
+      const account = await directory.account(accountId);
+      return account && account.status !== 'deleting' ? accountId : undefined;
+    },
     log: (entry) => console.log(JSON.stringify(entry)),
   });
 }

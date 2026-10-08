@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import type { IdentityInput } from '@mailless/jmap-server';
-import type { MailboxMap } from '../ingest/recipients.js';
 
 /**
  * The sending identities of an account, derived from the addresses that
@@ -13,13 +12,10 @@ import type { MailboxMap } from '../ingest/recipients.js';
  * made from the account name.
  */
 export function identitiesFor(
-  mailboxes: MailboxMap,
   accountId: string,
-  names: Record<string, string> = {},
+  own: readonly string[],
+  name?: string | null,
 ): IdentityInput[] {
-  const own = Object.entries(mailboxes)
-    .filter(([, account]) => account === accountId)
-    .map(([address]) => address);
   const wildcards = own.filter((address) => address.startsWith('*@'));
   const addresses = new Set(own.filter((address) => !address.startsWith('*@')));
 
@@ -34,7 +30,6 @@ export function identitiesFor(
     address.slice(0, address.lastIndexOf('@'));
   const isNamedAfterAccount = (address: string) =>
     localPart(address) === accountId.toLowerCase();
-  const name = names[accountId];
 
   return (
     [...addresses]

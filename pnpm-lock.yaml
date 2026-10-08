@@ -325,6 +325,12 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.1146.0
         version: 3.1146.0
+      '@mailless/directory':
+        specifier: workspace:*
+        version: link:../../libs/directory
+      '@mailless/directory-dynamodb':
+        specifier: workspace:*
+        version: link:../../libs/directory-dynamodb
       '@mailless/jmap-core':
         specifier: workspace:*
         version: link:../../libs/jmap-core
@@ -347,6 +353,30 @@ importers:
       '@types/aws-lambda':
         specifier: ^8.10.164
         version: 8.10.164
+
+  libs/directory:
+    dependencies:
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
+      vitest:
+        specifier: '>=3.0.0'
+        version: 4.1.11(@types/node@24.19.1)(@vitest/coverage-v8@4.1.11)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.27.7)(yaml@2.9.0))
+
+  libs/directory-dynamodb:
+    dependencies:
+      '@aws-sdk/client-dynamodb':
+        specifier: ^3.1146.0
+        version: 3.1146.0
+      '@aws-sdk/lib-dynamodb':
+        specifier: ^3.1146.0
+        version: 3.1146.0(@aws-sdk/client-dynamodb@3.1146.0)
+      '@mailless/directory':
+        specifier: workspace:*
+        version: link:../directory
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
 
   libs/jmap-core:
     dependencies:

@@ -36,6 +36,11 @@ export default [
                 'scope:jmap-server',
               ],
             },
+            // The directory knows nothing of JMAP: it says who has which mailbox.
+            {
+              sourceTag: 'scope:directory',
+              onlyDependOnLibsWithTags: ['scope:directory'],
+            },
             {
               sourceTag: 'scope:storage',
               onlyDependOnLibsWithTags: [

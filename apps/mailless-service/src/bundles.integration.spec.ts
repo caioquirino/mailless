@@ -12,6 +12,10 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  directoryTableDefinition,
+  DynamoDbDirectory,
+} from '@mailless/directory-dynamodb';
 import { createJmapServer } from '@mailless/jmap-server';
 import { createAppPasswordStore } from '@mailless/jmap-server/auth';
 import { InMemoryBlobStore } from '@mailless/jmap-server/memory';
@@ -32,6 +36,7 @@ const credentials = { accessKeyId: 'test', secretAccessKey: 'test' };
 const run = Date.now().toString(36);
 const tableName = `mailless-ingest-${run}`;
 const bucket = `mailless-ingest-${run}`;
+const directoryTable = `mailless-directory-${run}`;
 
 const dynamo = new DynamoDBClient({
   endpoint: dynamoEndpoint,
@@ -48,6 +53,9 @@ const s3 = new S3Client({
 let reachable = true;
 try {
   await dynamo.send(new CreateTableCommand(tableDefinition(tableName)));
+  await dynamo.send(
+    new CreateTableCommand(directoryTableDefinition(directoryTable)),
+  );
   await s3.send(new CreateBucketCommand({ Bucket: bucket }));
 } catch (error) {
   reachable = false;
@@ -58,9 +66,11 @@ try {
 }
 
 afterAll(async () => {
-  await dynamo
-    .send(new DeleteTableCommand({ TableName: tableName }))
-    .catch(() => undefined);
+  for (const TableName of [tableName, directoryTable]) {
+    await dynamo
+      .send(new DeleteTableCommand({ TableName }))
+      .catch(() => undefined);
+  }
 });
 
 describe.skipIf(!reachable)('API Lambda bundle', () => {
@@ -77,6 +87,9 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
       USER_POOL_ID: 'us-east-1_Example00',
       USER_POOL_CLIENT_ID: 'exampleclientid',
       PUBLIC_URL: 'https://mail.example.com',
+      // Most accounts are in the table; one is still only in the environment.
+      DIRECTORY_TABLE: directoryTable,
+      MAILBOXES: JSON.stringify({ 'old@example.com': 'acc-old' }),
     });
     const bundle = new URL('../dist/api.mjs', import.meta.url).href;
     const { handler } = (await import(
@@ -118,6 +131,14 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
         tableName,
       }),
     );
+    const directory = new DynamoDbDirectory({
+      client: DynamoDBDocumentClient.from(dynamo),
+      tableName: directoryTable,
+    });
+    await directory.createAccount({ id: 'acc-1' });
+    await directory.addAddress('acc-1', 'me@example.com');
+    await directory.createAccount({ id: 'acc-off' });
+    await directory.updateAccount('acc-off', { status: 'disabled' });
     const { id, secret } = await passwords.create('acc-1', 'Integration test');
 
     const session = (username: string, password: string) =>
@@ -131,13 +152,24 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
         requestContext: { domainName: 'internal', http: { method: 'GET' } },
       } as unknown as Parameters<typeof handler>[0]);
 
-    const accepted = await session('acc-1', secret);
-    expect(accepted.statusCode).toBe(200);
-    expect(JSON.parse(accepted.body as string).username).toBe('acc-1');
+    for (const username of ['acc-1', 'Me@Example.com']) {
+      const accepted = await session(username, secret);
+      expect(accepted.statusCode, username).toBe(200);
+      expect(JSON.parse(accepted.body as string).username).toBe('acc-1');
+    }
 
     const wrong = `${secret.slice(0, -1)}${secret.endsWith('a') ? 'b' : 'a'}`;
     expect((await session('acc-1', wrong)).statusCode).toBe(401);
     expect((await session('someone-else', secret)).statusCode).toBe(401);
+
+    // A right password is not enough: the account must be one that is in use.
+    const off = await passwords.create('acc-off', 'Switched off');
+    expect((await session('acc-off', off.secret)).statusCode).toBe(401);
+    const stray = await passwords.create('acc-stray', 'In no directory');
+    expect((await session('acc-stray', stray.secret)).statusCode).toBe(401);
+    // An account the table does not have yet is still found in the environment.
+    const old = await passwords.create('acc-old', 'Not moved yet');
+    expect((await session('old@example.com', old.secret)).statusCode).toBe(200);
 
     // A different spelling of the same secret is a fresh check, so revocation is seen at once.
     await passwords.revoke('acc-1', id);

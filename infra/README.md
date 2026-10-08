@@ -182,6 +182,29 @@ These commands need your AWS credentials: app passwords are created from the
 command line, not through the API, so nothing reachable from the internet can
 mint one.
 
+### The accounts directory
+
+Who has a mailbox, which addresses deliver to it and who it is shared with is
+kept in a table of its own, which the functions that handle mail may read and
+nothing more. Today it is filled from `terraform.tfvars`:
+
+```sh
+pnpm infra directory seed   # copy mailboxes, account_names and shared_accounts into the table
+pnpm infra directory show   # list what the table holds
+```
+
+`seed` only adds, so it can be run as often as you like. It then checks that
+every configured address delivers to the same account in the table, and says
+so where the two differ instead of replacing anything. Run it after each
+`pnpm infra apply` that changed the accounts.
+
+What the table does not have is still taken from `terraform.tfvars`, so mail
+keeps arriving whether or not the table has been filled. A log line
+`directory-fallback` says when that happened.
+
+Account ids are small letters, digits, `-` and `_`. A user whose account is
+`disabled` in the directory cannot sign in; mail for it still arrives.
+
 ### Push notifications
 
 A mail app that supports JMAP push registers a push subscription when it signs

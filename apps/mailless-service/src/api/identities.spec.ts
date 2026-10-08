@@ -2,9 +2,7 @@ import { identitiesFor } from './identities.js';
 
 describe('identitiesFor', () => {
   it('never offers a wildcard as an address to send from', () => {
-    const identities = identitiesFor({ '*@example.com': 'caio' }, 'caio', {
-      caio: 'Caio Quirino',
-    });
+    const identities = identitiesFor('caio', ['*@example.com'], 'Caio Quirino');
     expect(identities).toEqual([
       {
         id: expect.stringMatching(/^id[0-9a-f]{24}$/),
@@ -16,17 +14,13 @@ describe('identitiesFor', () => {
   });
 
   it('uses the addresses an account has, and lets them send across its catch-all domains', () => {
-    const identities = identitiesFor(
-      {
-        '*@example.com': 'me',
-        'hello@example.com': 'me',
-        'me@example.com': 'me',
-        'alias@example.org': 'me',
-        '*@example.net': 'me',
-        'other@example.com': 'someone-else',
-      },
-      'me',
-    );
+    const identities = identitiesFor('me', [
+      '*@example.com',
+      'hello@example.com',
+      'me@example.com',
+      'alias@example.org',
+      '*@example.net',
+    ]);
     expect(identities.map((identity) => identity.email)).toEqual([
       'me@example.com',
       'me@example.net',
@@ -41,18 +35,13 @@ describe('identitiesFor', () => {
     expect(new Set(identities.map((identity) => identity.id)).size).toBe(4);
   });
 
-  it('keeps ids stable and other accounts out', () => {
-    const mailboxes = {
-      'me@example.com': 'me',
-      'other@example.com': 'someone-else',
-    };
-    expect(identitiesFor(mailboxes, 'me')).toEqual(
-      identitiesFor({ ...mailboxes }, 'me'),
+  it('keeps ids stable, and gives an account without addresses none', () => {
+    const addresses = ['me@example.com'];
+    expect(identitiesFor('me', addresses)).toEqual(
+      identitiesFor('me', [...addresses]),
     );
-    expect(identitiesFor(mailboxes, 'me')[0]?.allowedFrom).toEqual([]);
-    expect(
-      identitiesFor(mailboxes, 'someone-else').map((i) => i.email),
-    ).toEqual(['other@example.com']);
-    expect(identitiesFor(mailboxes, 'nobody')).toEqual([]);
+    expect(identitiesFor('me', addresses)[0]?.allowedFrom).toEqual([]);
+    expect(identitiesFor('me', addresses, null)[0]).not.toHaveProperty('name');
+    expect(identitiesFor('nobody', [])).toEqual([]);
   });
 });

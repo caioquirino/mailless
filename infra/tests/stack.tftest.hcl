@@ -255,7 +255,7 @@ run "defaults" {
   assert {
     condition = toset([
       for statement in data.aws_iam_policy_document.ingest.statement : statement.sid
-    ]) == toset(["Logs", "ReadAndRemoveInbound", "TellMissingFromForbidden", "StoreMessages", "Metadata", "DeadLetters", "SendAutomaticReplies", "Encryption"])
+    ]) == toset(["Logs", "ReadAndRemoveInbound", "TellMissingFromForbidden", "StoreMessages", "Metadata", "ReadDirectory", "DeadLetters", "SendAutomaticReplies", "Encryption"])
     error_message = "Unexpected statements in the ingest role policy."
   }
 
@@ -791,6 +791,55 @@ run "rejects_malformed_mailboxes" {
 
   variables {
     mailboxes = { "not-an-address" = "me" }
+  }
+
+  expect_failures = [var.mailboxes]
+}
+
+run "the_directory_is_read_by_the_functions_that_handle_mail" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_dynamodb_table.directory.billing_mode == "PAY_PER_REQUEST" &&
+      aws_dynamodb_table.directory.hash_key == "pk" &&
+      aws_dynamodb_table.directory.range_key == "sk" &&
+      aws_dynamodb_table.directory.deletion_protection_enabled &&
+      aws_dynamodb_table.directory.point_in_time_recovery[0].enabled
+    )
+    error_message = "The directory table must be on-demand, keyed pk/sk, protected and recoverable."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.api.environment[0].variables["DIRECTORY_TABLE"] == "mailless-directory" &&
+      aws_lambda_function.ingest.environment[0].variables["DIRECTORY_TABLE"] == "mailless-directory"
+    )
+    error_message = "The API and the ingest function must be told where the directory is."
+  }
+
+  assert {
+    condition = alltrue([
+      for statements in [data.aws_iam_policy_document.api.statement, data.aws_iam_policy_document.ingest.statement] :
+      anytrue([
+        for statement in statements :
+        statement.sid == "ReadDirectory" && toset(statement.actions) == toset(["dynamodb:GetItem", "dynamodb:Query"])
+      ])
+    ])
+    error_message = "The functions that handle mail may read the directory and nothing more."
+  }
+
+  assert {
+    condition     = output.directory_table == "mailless-directory"
+    error_message = "The directory table must be an output, for the seed command."
+  }
+}
+
+run "rejects_account_ids_with_capitals" {
+  command = plan
+
+  variables {
+    mailboxes = { "me@example.com" = "Me" }
   }
 
   expect_failures = [var.mailboxes]
