@@ -3,9 +3,14 @@ import { challengeFor, randomToken, sameText } from './pkce';
 
 /*
  * Who is signed in. Signing in happens on the identity provider's own pages
- * (OpenID Connect authorization code flow with PKCE); what comes back is kept
- * in memory and nowhere else, so closing or reloading the page signs out of
- * it. The provider's own session then makes signing in again one click.
+ * (OpenID Connect authorization code flow with PKCE). What comes back is kept
+ * for as long as the tab is open: in memory, and in the tab's session storage
+ * so that a reload does not sign out. That storage belongs to this tab alone
+ * and is emptied when it closes; scripts of this page can read it, which is
+ * why the page is served so that no other script can run in it.
+ *
+ * When what was kept has run out and cannot be renewed, the page goes to the
+ * provider, whose own session sends it straight back signed in.
  */
 
 interface Tokens {
@@ -35,6 +40,41 @@ export interface SessionDependencies {
 }
 
 const PENDING_KEY = 'mailless.admin.sign-in';
+/** The tokens, for as long as the tab is open. */
+const TOKENS_KEY = 'mailless.admin.tokens';
+/** Says only that this tab was signed in, so that it may sign in again by itself when the tokens have run out. */
+const RESUME_KEY = 'mailless.admin.was-signed-in';
+/** A token this close to running out is renewed rather than used. */
+const NEARLY_OVER_MS = 5_000;
+
+function storedTokens(text: string | null): Tokens | null {
+  if (!text) return null;
+  try {
+    const value = JSON.parse(text) as Partial<Tokens> | null;
+    return value &&
+      typeof value.accessToken === 'string' &&
+      value.accessToken !== '' &&
+      typeof value.expiresAt === 'number' &&
+      (value.refreshToken === null || typeof value.refreshToken === 'string')
+      ? {
+          accessToken: value.accessToken,
+          refreshToken: value.refreshToken ?? null,
+          expiresAt: value.expiresAt,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** An address inside the interface to go back to, or null for anything else. */
+function innerPath(value: unknown): string | null {
+  return typeof value === 'string' &&
+    /^\/(?!\/)/.test(value) &&
+    !value.startsWith('/callback')
+    ? value
+    : null;
+}
 /** Renew this long before the token runs out. */
 const RENEW_AHEAD_MS = 60_000;
 
@@ -45,11 +85,48 @@ export class Session {
   private renewing: Promise<boolean> | undefined;
   /** The exchange under way, by code, so that asking twice exchanges once. */
   private exchange: { code: string; done: Promise<boolean> } | undefined;
+  private returnPath: string | null = null;
+
+  /** Tokens kept from before a reload that have run out, to renew in `restore`. */
+  private lapsed: Tokens | null = null;
 
   constructor(
     private readonly config: AppConfig,
     private readonly deps: SessionDependencies,
-  ) {}
+  ) {
+    const kept = storedTokens(deps.storage.getItem(TOKENS_KEY));
+    if (!kept) return;
+    if (kept.expiresAt - deps.now() > NEARLY_OVER_MS) this.adopt(kept);
+    else this.lapsed = kept;
+  }
+
+  /**
+   * Finishes picking up where the tab left off before a reload: tokens that
+   * have run out since are renewed if they can be. To be awaited once, before
+   * anything is shown.
+   */
+  async restore(): Promise<void> {
+    const lapsed = this.lapsed;
+    this.lapsed = null;
+    if (!lapsed || this.isSignedIn) return;
+    const tokens = lapsed.refreshToken
+      ? await this.requestTokens({
+          grant_type: 'refresh_token',
+          client_id: this.config.clientId,
+          refresh_token: lapsed.refreshToken,
+        })
+      : null;
+    // Someone signed in while this was being asked: leave that as it is.
+    if (this.isSignedIn) return;
+    if (tokens) {
+      this.adopt({
+        ...tokens,
+        refreshToken: tokens.refreshToken ?? lapsed.refreshToken,
+      });
+    } else {
+      this.deps.storage.removeItem(TOKENS_KEY);
+    }
+  }
 
   get redirectUri(): string {
     return `${this.deps.baseUrl}callback`;
@@ -73,11 +150,37 @@ export class Session {
     for (const listener of this.listeners) listener();
   }
 
-  /** Goes to the provider's sign-in page. */
-  async beginSignIn(): Promise<void> {
+  /**
+   * Whether to sign in again without being asked: this tab was signed in, and
+   * what it kept has run out and could not be renewed. True once; if signing
+   * in again does not work, the user is asked, rather than sent round in
+   * circles.
+   */
+  takeResume(): boolean {
+    if (this.isSignedIn) return false;
+    const resume = this.deps.storage.getItem(RESUME_KEY) !== null;
+    this.deps.storage.removeItem(RESUME_KEY);
+    return resume;
+  }
+
+  /** Where the user was when sign-in began, to go back to once; `/` when nowhere in particular. */
+  takeReturnPath(): string {
+    const path = this.returnPath ?? '/';
+    this.returnPath = null;
+    return path;
+  }
+
+  /**
+   * Goes to the provider's sign-in page. `returnTo` is the address inside the
+   * interface to come back to afterwards.
+   */
+  async beginSignIn(returnTo?: string): Promise<void> {
     const state = randomToken();
     const verifier = randomToken();
-    this.deps.storage.setItem(PENDING_KEY, JSON.stringify({ state, verifier }));
+    this.deps.storage.setItem(
+      PENDING_KEY,
+      JSON.stringify({ state, verifier, returnTo: innerPath(returnTo) }),
+    );
     const url = new URL(this.config.authorizeUrl);
     url.search = new URLSearchParams({
       response_type: 'code',
@@ -122,7 +225,8 @@ export class Session {
     const stored = this.deps.storage.getItem(PENDING_KEY);
     // Used once, whatever comes of it.
     this.deps.storage.removeItem(PENDING_KEY);
-    let pending: { state?: unknown; verifier?: unknown } = {};
+    let pending: { state?: unknown; verifier?: unknown; returnTo?: unknown } =
+      {};
     try {
       pending = stored ? (JSON.parse(stored) as typeof pending) : {};
     } catch {
@@ -151,6 +255,7 @@ export class Session {
         'Sign-in could not be completed. Please try again.',
       );
     }
+    this.returnPath = innerPath(pending.returnTo);
     this.adopt(tokens);
     return true;
   }
@@ -189,6 +294,8 @@ export class Session {
 
   private adopt(tokens: Tokens): void {
     this.tokens = tokens;
+    this.deps.storage.setItem(TOKENS_KEY, JSON.stringify(tokens));
+    this.deps.storage.setItem(RESUME_KEY, '1');
     clearTimeout(this.renewTimer);
     if (tokens.refreshToken !== null) {
       const wait = Math.max(
@@ -232,6 +339,8 @@ export class Session {
   forget(): void {
     clearTimeout(this.renewTimer);
     this.exchange = undefined;
+    this.lapsed = null;
+    this.deps.storage.removeItem(TOKENS_KEY);
     if (this.tokens === null) return;
     this.tokens = null;
     this.changed();
@@ -240,6 +349,8 @@ export class Session {
   /** Signs out here and at the provider. */
   signOut(): void {
     this.forget();
+    // Signed out on purpose: a reload must not sign in again by itself.
+    this.deps.storage.removeItem(RESUME_KEY);
     const url = new URL(this.config.logoutUrl);
     url.search = new URLSearchParams({
       client_id: this.config.clientId,

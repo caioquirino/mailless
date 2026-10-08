@@ -20,11 +20,14 @@ authorization code flow with PKCE). Nothing about the provider is built in:
 the pages read where to send people from `/admin/config.json`, which the
 function fills from its configuration.
 
-The tokens are kept in memory and nowhere else, so reloading or closing the
-page signs out of it; the provider's own session makes signing in again one
-click. The page is served with a Content-Security-Policy that lets no script
-or style in from anywhere else, so there are no inline styles and nothing
-from other sites in it.
+The tokens are kept for as long as the tab is open: in memory, and in the
+tab's session storage so that a reload does not sign out. That storage
+belongs to the one tab and is emptied when it closes. Scripts of the page can
+read it, which is why the page is served with a Content-Security-Policy that
+lets no script or style in from anywhere else (so there are no inline styles
+and nothing from other sites in it). When what was kept has run out and
+cannot be renewed, the page goes to the provider once, whose own session
+sends it straight back signed in, to the address it was at.
 
 ## Working on it
 

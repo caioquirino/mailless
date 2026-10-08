@@ -215,6 +215,9 @@ export const handler = createLambdaHttpHandler({
           : auth;
       },
       challenge: 'Basic realm="mailless", Bearer',
+      // A request turned away whole runs no method, so it would otherwise leave no trace here.
+      onRefused: (refusal) =>
+        console.log(JSON.stringify({ event: 'request-refused', ...refusal })),
       onError: (error) =>
         console.error(JSON.stringify({ error: String(error) })),
     }),

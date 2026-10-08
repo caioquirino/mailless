@@ -8,13 +8,6 @@ import {
 import { challengeFor } from './pkce';
 import { SignInError } from './session';
 
-const everythingStored = () =>
-  JSON.stringify([
-    { ...window.sessionStorage },
-    { ...window.localStorage },
-    document.cookie,
-  ]);
-
 describe('Session', () => {
   it('sends the browser to the provider with a challenge, keeping the verifier for the way back', async () => {
     const { session, visited } = testSession(fakeBackend());
@@ -40,7 +33,7 @@ describe('Session', () => {
     expect(session.isSignedIn).toBe(false);
   });
 
-  it('exchanges the code and keeps the tokens in memory and nowhere else', async () => {
+  it('exchanges the code and keeps the tokens for this tab, and nowhere that outlives it', async () => {
     const backend = fakeBackend();
     const { session, visited } = testSession(backend);
     const changes = vi.fn();
@@ -68,9 +61,24 @@ describe('Session', () => {
     expect(session.isSignedIn).toBe(true);
     expect(session.accessToken()).toBe('access-1');
     expect(changes).toHaveBeenCalledTimes(1);
-    // The verifier was used once and is gone; no token was ever written down.
-    expect(window.sessionStorage.length).toBe(0);
-    expect(everythingStored()).not.toMatch(/access-1|refresh-1/);
+    // The verifier was used once and is gone. The tokens are kept for this tab,
+    // with a note that it was signed in; nothing is kept where it would outlive the tab.
+    expect(Object.keys({ ...window.sessionStorage }).sort()).toEqual([
+      'mailless.admin.tokens',
+      'mailless.admin.was-signed-in',
+    ]);
+    expect(
+      JSON.parse(
+        window.sessionStorage.getItem('mailless.admin.tokens') as string,
+      ),
+    ).toEqual({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+      expiresAt: expect.any(Number),
+    });
+    expect(
+      JSON.stringify([{ ...window.localStorage }, document.cookie]),
+    ).not.toMatch(/access-1|refresh-1/);
   });
 
   it('exchanges a code once, however often it is asked to', async () => {
@@ -176,7 +184,13 @@ describe('Session', () => {
 
     backend.state.nextAccessToken = null;
     expect(await session.renew()).toBe(false);
-    expect(everythingStored()).not.toMatch(/access-|refresh-/);
+    // What is kept for a reload is what is in use: the newest token, not the first.
+    expect(window.sessionStorage.getItem('mailless.admin.tokens')).toContain(
+      'access-3',
+    );
+    expect(
+      JSON.stringify([{ ...window.localStorage }, document.cookie]),
+    ).not.toMatch(/access-|refresh-/);
   });
 
   it('signs out here and at the provider', async () => {

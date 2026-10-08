@@ -285,6 +285,8 @@ export async function renderApp(
   options: { signedIn?: boolean } = {},
 ): Promise<RenderResult & { session: Session; visited: string[] }> {
   const { session, visited } = testSession(backend);
+  // As the page does on loading: pick up what this tab kept, if anything.
+  await session.restore();
   if (options.signedIn ?? true) await signIn(session, visited);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },

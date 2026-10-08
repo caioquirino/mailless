@@ -37,12 +37,9 @@ describe('signing in', () => {
       await screen.findByRole('heading', { name: 'My account' }),
     ).toBeInTheDocument();
     expect(session.isSignedIn).toBe(true);
+    // Kept for this tab only: never where another tab or a later visit could find it.
     expect(
-      JSON.stringify([
-        { ...window.sessionStorage },
-        { ...window.localStorage },
-        document.cookie,
-      ]),
+      JSON.stringify([{ ...window.localStorage }, document.cookie]),
     ).not.toMatch(/access-1|refresh-1/);
   });
 

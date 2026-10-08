@@ -29,6 +29,8 @@ async function start(): Promise<Services> {
     now: () => Date.now(),
     baseUrl: appBaseUrl(),
   });
+  // After a reload: pick up where this tab left off, before anything is shown.
+  await session.restore();
   // Whoever signs in next must not see what the last user's screens held.
   session.subscribe(() => {
     if (!session.isSignedIn) queryClient.clear();

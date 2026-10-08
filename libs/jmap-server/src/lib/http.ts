@@ -10,6 +10,22 @@ export interface FetchHandlerOptions {
   challenge?: string;
   /** Called with unexpected errors, which the client only sees as a 500. */
   onError?(error: unknown): void;
+  /**
+   * Called when a request is turned away as a whole, before any method ran:
+   * not a JMAP request, an unknown capability, over a limit, an unknown
+   * address. The detail names what was wrong with the request's shape, never
+   * what it carried. Without this, such a request leaves no trace: the client
+   * is told, and nobody else.
+   */
+  onRefused?(refusal: RequestRefusal): void;
+}
+
+export interface RequestRefusal {
+  /** The problem type sent to the client, such as `urn:ietf:params:jmap:error:notRequest`. */
+  type: string;
+  status: number;
+  limit?: string;
+  detail: string;
 }
 
 /** The URLs to give `createJmapServer` so that they match the routes of `createFetchHandler`. */
@@ -207,7 +223,15 @@ export function createFetchHandler(
     try {
       return await route(request);
     } catch (error) {
-      if (error instanceof RequestError) return problem(error);
+      if (error instanceof RequestError) {
+        options.onRefused?.({
+          type: error.type,
+          status: error.status,
+          ...(error.limit === undefined ? {} : { limit: error.limit }),
+          detail: error.message.slice(0, 200),
+        });
+        return problem(error);
+      }
       options.onError?.(error);
       return problem(
         new RequestError('about:blank', 'Internal server error', {

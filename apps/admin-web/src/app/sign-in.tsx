@@ -1,11 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { SignInError } from '../lib/session';
 import { useServices } from './services';
 
 export function SignInPage({ message }: { message?: string }) {
   const { session } = useServices();
+  const location = useLocation();
+  const here = `${location.pathname}${location.search}`;
+  // This tab was signed in and what it kept has run out: sign in again without being asked. Decided once, on arrival.
+  const [resuming] = useState(() => !message && session.takeResume());
   const [starting, setStarting] = useState(false);
+  const begun = useRef(false);
+  useEffect(() => {
+    if (!resuming || begun.current) return;
+    begun.current = true;
+    void session.beginSignIn(here);
+  }, [resuming, session, here]);
+
+  if (resuming) {
+    return (
+      <main className="centered">
+        <p role="status" className="muted">
+          Signing you in again…
+        </p>
+      </main>
+    );
+  }
   return (
     <main className="centered">
       <div className="card card-narrow">
@@ -25,13 +45,13 @@ export function SignInPage({ message }: { message?: string }) {
           disabled={starting}
           onClick={() => {
             setStarting(true);
-            void session.beginSignIn();
+            void session.beginSignIn(here);
           }}
         >
           {starting ? 'Opening the sign-in page…' : 'Sign in'}
         </button>
         <p className="muted small">
-          You stay signed in until you close or reload this page.
+          You stay signed in until you sign out or close this tab.
         </p>
       </div>
     </main>
@@ -54,7 +74,7 @@ export function CallbackPage() {
     let current = true;
     session.completeSignIn(arrived.current).then(
       () => {
-        if (current) void navigate('/', { replace: true });
+        if (current) void navigate(session.takeReturnPath(), { replace: true });
       },
       (error: unknown) => {
         if (!current) return;

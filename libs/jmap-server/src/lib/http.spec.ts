@@ -1,6 +1,6 @@
 import { CAPABILITY_CORE, CAPABILITY_MAIL } from '@mailless/jmap-core';
 import { buildMessage } from './conformance/jmap-conformance.js';
-import { createFetchHandler, jmapUrls } from './http.js';
+import { createFetchHandler, jmapUrls, type RequestRefusal } from './http.js';
 import { InMemoryStorageAdapter } from './memory-adapter.js';
 import { createJmapServer } from './server.js';
 
@@ -14,6 +14,7 @@ const body = async (response: Response): Promise<any> => response.json();
 
 function setup(limits = {}) {
   const errors: unknown[] = [];
+  const refusals: RequestRefusal[] = [];
   const server = createJmapServer({
     storage: new InMemoryStorageAdapter(),
     urls: jmapUrls(`${BASE}/`),
@@ -25,6 +26,7 @@ function setup(limits = {}) {
       request.headers.get('authorization') === 'Bearer good' ? AUTH : null,
     challenge: 'Basic realm="test", Bearer',
     onError: (error) => errors.push(error),
+    onRefused: (refusal) => refusals.push(refusal),
   });
   const call = (path: string, init: RequestInit = {}) =>
     handle(
@@ -39,7 +41,7 @@ function setup(limits = {}) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ using: USING, methodCalls }),
     });
-  return { server, handle, call, api, errors };
+  return { refusals, server, handle, call, api, errors };
 }
 
 describe('createFetchHandler', () => {
@@ -92,6 +94,36 @@ describe('createFetchHandler', () => {
     expect((await body(response)).methodResponses).toEqual([
       ['Core/echo', { hello: 1 }, 'c1'],
     ]);
+  });
+
+  it('tells the host of every request it turns away whole, by what was wrong with its shape', async () => {
+    const { call, refusals, errors } = setup();
+    const post = (content: string, contentType = 'application/json') =>
+      call('/jmap/api', {
+        method: 'POST',
+        headers: { 'content-type': contentType },
+        body: content,
+      });
+    await post('{}', 'text/plain');
+    await post('{"using":["urn:example:unknown"],"methodCalls":[]}');
+    await post('{"using":[],"methodCalls":"a secret that must not be logged"}');
+    await call('/elsewhere');
+
+    expect(refusals.map(({ type, status }) => [type, status])).toEqual([
+      ['urn:ietf:params:jmap:error:notJSON', 400],
+      ['urn:ietf:params:jmap:error:unknownCapability', 400],
+      ['urn:ietf:params:jmap:error:notRequest', 400],
+      ['about:blank', 404],
+    ]);
+    // What is passed on says where the request was wrong, never what it held.
+    expect(JSON.stringify(refusals)).not.toContain('a secret');
+    expect(refusals[2]?.detail).toContain('methodCalls');
+    // A request that was understood, whatever became of its calls, is not one of these.
+    await post(
+      '{"using":["urn:ietf:params:jmap:core"],"methodCalls":[["No/such",{},"c"]]}',
+    );
+    expect(refusals).toHaveLength(4);
+    expect(errors).toEqual([]);
   });
 
   it('rejects bodies that are not JSON requests', async () => {
