@@ -17,7 +17,6 @@ import {
   UsageError,
 } from './admin/app-password-cli.js';
 import { DIRECTORY_USAGE, runDirectoryCommand } from './admin/directory-cli.js';
-import { configurationFromEnvironment } from './directory.js';
 
 const [topic, ...rest] = process.argv.slice(2);
 
@@ -30,6 +29,8 @@ function required(name: string): string {
 try {
   const client = DynamoDBDocumentClient.from(new DynamoDBClient({}));
   const print = (line: string) => console.log(line);
+  const directory = () =>
+    new DynamoDbDirectory({ client, tableName: required('DIRECTORY_TABLE') });
   if (topic === 'app-password') {
     await runAppPasswordCommand(rest, {
       store: createAppPasswordStore(
@@ -38,25 +39,21 @@ try {
           tableName: required('TABLE_NAME'),
         }),
       ),
-      accounts: JSON.parse(process.env['ACCOUNTS'] ?? '[]') as string[],
+      // Closed accounts are left out: nothing can be made for them.
+      accounts: (await directory().listAccounts())
+        .filter((account) => account.status !== 'deleting')
+        .map((account) => account.id),
       print,
     });
   } else if (topic === 'directory') {
-    const matches = await runDirectoryCommand(rest, {
-      directory: new DynamoDbDirectory({
-        client,
-        tableName: required('DIRECTORY_TABLE'),
-      }),
-      configuration: configurationFromEnvironment(process.env),
-      print,
-    });
-    if (!matches) process.exitCode = 1;
+    await runDirectoryCommand(rest, { directory: directory(), print });
   } else if (topic === 'admin') {
     await runAdminRoleCommand(rest, {
       identity: new CognitoIdentityProvider({
         client: new CognitoIdentityProviderClient({}),
         userPoolId: required('USER_POOL_ID'),
       }),
+      directory: directory(),
       role: process.env['ADMIN_ROLE'] || 'MAILLESS_ADMIN',
       print,
     });

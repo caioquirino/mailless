@@ -141,10 +141,8 @@ resource "aws_lambda_function" "ingest" {
       BUCKET         = aws_s3_bucket.mail.id
       INBOUND_PREFIX = local.inbound_prefix
       BLOB_PREFIX    = local.blob_prefix
-      # Who has a mailbox. What the table does not have yet is taken from the two below.
+      # Who has a mailbox and which addresses deliver to it.
       DIRECTORY_TABLE = aws_dynamodb_table.directory.name
-      MAILBOXES       = jsonencode(var.mailboxes)
-      ACCOUNT_NAMES   = jsonencode(var.account_names)
       # Automatic replies go through the configuration set too, so that an address
       # that bounced or complained is not written to again.
       CONFIGURATION_SET = aws_sesv2_configuration_set.main.configuration_set_name

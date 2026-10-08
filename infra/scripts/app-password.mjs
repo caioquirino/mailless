@@ -48,8 +48,8 @@ try {
         ...process.env,
         AWS_REGION: process.env.AWS_REGION ?? region,
         TABLE_NAME: process.env.TABLE_NAME ?? terraformOutput('metadata_table'),
-        ACCOUNTS:
-          process.env.ACCOUNTS ?? JSON.stringify(terraformOutput('users')),
+        DIRECTORY_TABLE:
+          process.env.DIRECTORY_TABLE ?? terraformOutput('directory_table'),
       },
     },
   );

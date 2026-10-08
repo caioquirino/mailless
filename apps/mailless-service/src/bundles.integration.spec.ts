@@ -89,12 +89,8 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
       S3_FORCE_PATH_STYLE: 'true',
       TABLE_NAME: tableName,
       BUCKET: bucket,
-      USER_POOL_ID: 'us-east-1_Example00',
-      USER_POOL_CLIENT_ID: 'exampleclientid',
       PUBLIC_URL: 'https://mail.example.com',
-      // Most accounts are in the table; one is still only in the environment.
       DIRECTORY_TABLE: directoryTable,
-      MAILBOXES: JSON.stringify({ 'old@example.com': 'acc-old' }),
       // Tokens are checked as any OpenID Connect provider's, with claims named as Cognito names them.
       OIDC_ISSUER: ISSUER,
       OIDC_AUDIENCES: JSON.stringify(['mail-client']),
@@ -180,10 +176,6 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
     expect((await session('acc-off', off.secret)).statusCode).toBe(401);
     const stray = await passwords.create('acc-stray', 'In no directory');
     expect((await session('acc-stray', stray.secret)).statusCode).toBe(401);
-    // An account the table does not have yet is still found in the environment.
-    const old = await passwords.create('acc-old', 'Not moved yet');
-    expect((await session('old@example.com', old.secret)).statusCode).toBe(200);
-
     // A different spelling of the same secret is a fresh check, so revocation is seen at once.
     await passwords.revoke('acc-1', id);
     expect((await session('acc-1', secret.toUpperCase())).statusCode).toBe(401);
@@ -700,8 +692,19 @@ describe.skipIf(!reachable)('ingest Lambda entry point', () => {
       S3_FORCE_PATH_STYLE: 'true',
       TABLE_NAME: tableName,
       BUCKET: bucket,
-      MAILBOXES: JSON.stringify({ '*@example.com': 'acc-1' }),
+      DIRECTORY_TABLE: directoryTable,
     });
+    // Who the mail is for is the directory's to say: here, the whole domain goes to one account.
+    const directory = new DynamoDbDirectory({
+      client: DynamoDBDocumentClient.from(dynamo),
+      tableName: directoryTable,
+    });
+    if (!(await directory.account('acc-1'))) {
+      await directory.createAccount({ id: 'acc-1' });
+    }
+    if (!(await directory.addressesOf('acc-1')).includes('*@example.com')) {
+      await directory.addAddress('acc-1', '*@example.com');
+    }
     // Load the bundle that is actually deployed, not the sources: bundling problems only show up there.
     const bundle = new URL('../dist/ingest.mjs', import.meta.url).href;
     const { handler } = (await import(

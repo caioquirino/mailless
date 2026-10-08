@@ -10,7 +10,6 @@
 #   hosted           the provider's own pages: sign-in, sign-out, passkey enrolment
 #   provider         what the admin API needs to manage users with this provider
 #   admin_role       the role whose members may manage accounts
-#   users            the sign-in names that exist
 
 output "oidc" {
   value = {
@@ -58,8 +57,4 @@ output "provider" {
 
 output "admin_role" {
   value = aws_cognito_user_group.admin.name
-}
-
-output "users" {
-  value = sort(keys(aws_cognito_user.account))
 }

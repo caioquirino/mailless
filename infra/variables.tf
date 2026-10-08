@@ -13,39 +13,6 @@ variable "domain" {
   }
 }
 
-variable "mailboxes" {
-  description = <<-EOT
-    Recipient address to account id. Keys are full addresses ("me@example.com")
-    or a whole domain ("*@example.com"); an exact address wins over the
-    wildcard. Several addresses may share one account. Mail for any other
-    address is accepted by SES and then dropped.
-  EOT
-  type        = map(string)
-
-  validation {
-    condition = alltrue([
-      for address, account in var.mailboxes :
-      address == lower(address) && can(regex("^[^@\\s]+@[^@\\s]+$", address)) && can(regex("^[a-z0-9_-]{1,64}$", account))
-    ])
-    error_message = "Keys must be lower-case addresses (or *@domain); account ids may contain small letters, digits, '-' and '_' only."
-  }
-}
-
-variable "account_names" {
-  description = <<-EOT
-    Display name for each account, shown as the sender of its mail, for
-    example { me = "Ada Lovelace" }. Mail without a sender name is more likely
-    to be treated as spam.
-  EOT
-  type        = map(string)
-  default     = {}
-
-  validation {
-    condition     = alltrue([for name in values(var.account_names) : length(trimspace(name)) > 0 && !can(regex("[\\r\\n]", name))])
-    error_message = "Names must be non-empty and on one line."
-  }
-}
-
 variable "account_quota_bytes" {
   description = <<-EOT
     How much mail an account may hold, in bytes, or null for no limit. With a
@@ -58,41 +25,6 @@ variable "account_quota_bytes" {
   validation {
     condition     = var.account_quota_bytes == null || try(var.account_quota_bytes >= 1048576 && floor(var.account_quota_bytes) == var.account_quota_bytes, false)
     error_message = "The quota must be a whole number of bytes, at least 1 MB, or null."
-  }
-}
-
-variable "shared_accounts" {
-  description = <<-EOT
-    Accounts that other users may use besides their own, such as a mailbox a
-    team shares. The key is the account; `members` may read and change it,
-    `readers` may only read it. For example:
-
-      shared_accounts = { family = { members = ["ann", "bob"] } }
-
-    Every name must be an account in `mailboxes`. The shared account shows up
-    in each user's mail app next to their own.
-  EOT
-  type = map(object({
-    members = optional(list(string), [])
-    readers = optional(list(string), [])
-  }))
-  default = {}
-
-  validation {
-    condition = alltrue([
-      for account, share in var.shared_accounts :
-      contains(values(var.mailboxes), account) && alltrue([
-        for user in concat(share.members, share.readers) : contains(values(var.mailboxes), user)
-      ])
-    ])
-    error_message = "Shared accounts, and the users they are shared with, must all be accounts in mailboxes."
-  }
-
-  validation {
-    condition = alltrue([
-      for account, share in var.shared_accounts : length(share.members) + length(share.readers) > 0
-    ])
-    error_message = "A shared account needs at least one member or reader."
   }
 }
 
@@ -147,16 +79,6 @@ variable "alarm_email" {
     condition     = var.alarm_email == null ? true : can(regex("^[^@\\s]+@[^@\\s]+$", var.alarm_email))
     error_message = "alarm_email must be an email address or null."
   }
-}
-
-variable "allow_password_sign_in" {
-  description = <<-EOT
-    Whether mail clients may sign in with the account's own password. Set to
-    false once every client uses an app password (`pnpm infra app-password
-    create`), so that a client can no longer hold the real password.
-  EOT
-  type        = bool
-  default     = true
 }
 
 variable "api_hostname" {

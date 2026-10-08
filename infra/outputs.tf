@@ -72,11 +72,6 @@ output "user_pool_client_id" {
   value = module.identity.jmap_client_id
 }
 
-output "users" {
-  description = "Sign-in names. Set each one's password with `pnpm infra password <name>`."
-  value       = module.identity.users
-}
-
 output "admin_client_id" {
   description = "The client the admin interface signs in to."
   value       = module.identity.admin_client_id
@@ -97,7 +92,7 @@ output "admin_function" {
 }
 
 output "admin_url" {
-  description = "Where the admin interface is. An administrator is made with `pnpm infra admin grant <account>`."
+  description = "Where the admin interface is. The first account and administrator are made with `pnpm infra admin create <account>`."
   value       = "${local.admin_base_url}/admin/"
 }
 

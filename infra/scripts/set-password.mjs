@@ -32,10 +32,9 @@ function terraformOutput(name) {
 
 try {
   const username = process.argv[2];
-  const users = terraformOutput('users');
-  if (!username || !users.includes(username)) {
+  if (!username || !/^[a-z0-9_-]{1,64}$/.test(username)) {
     throw new Error(
-      `Usage: pnpm infra password <name>\n\nNames in this deployment: ${users.join(', ') || '(none)'}`,
+      'Usage: pnpm infra password <account>\n\n`pnpm infra directory show` lists the accounts.',
     );
   }
 
@@ -67,7 +66,9 @@ try {
     throw new Error(
       error.name === 'AbortError' || error.name === 'TimeoutError'
         ? 'No answer from AWS after 30 seconds. Check your network and credentials. The password may not have been changed.'
-        : `Cognito refused the change (${error.name}): ${error.message}`,
+        : error.name === 'UserNotFoundException'
+          ? `There is no user "${username}". \`pnpm infra directory show\` lists the accounts.`
+          : `Cognito refused the change (${error.name}): ${error.message}`,
     );
   }
   console.log(`Password set for ${username}.`);

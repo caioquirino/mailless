@@ -1,3 +1,4 @@
+import { InMemoryDirectory } from '@mailless/directory';
 import { InMemoryIdentityProvider } from '@mailless/identity';
 import { runAdminRoleCommand } from './admin-role-cli.js';
 import { UsageError } from './app-password-cli.js';
@@ -9,14 +10,16 @@ async function setup(roles = [ROLE]) {
   const identity = new InMemoryIdentityProvider({ roles });
   await identity.createUser('ann');
   await identity.createUser('bob');
+  const directory = new InMemoryDirectory();
   const lines: string[] = [];
   const run = (...args: string[]) =>
     runAdminRoleCommand(args, {
       identity,
+      directory,
       role: ROLE,
       print: (line) => lines.push(line),
     });
-  return { identity, lines, run, output: () => lines.join('\n') };
+  return { identity, directory, lines, run, output: () => lines.join('\n') };
 }
 
 describe('admin command', () => {
@@ -49,6 +52,26 @@ describe('admin command', () => {
     const token = identity.signIn('ann', PASSWORD) as string;
     await run('revoke', 'ann');
     await expect(identity.listOwnPasskeys(token)).rejects.toThrow();
+  });
+
+  it('makes the first account, with a user who may administer', async () => {
+    const { identity, directory, run, output } = await setup();
+    await run('create', 'root');
+    expect(await directory.account('root')).toMatchObject({
+      status: 'active',
+    });
+    expect((await identity.getUser('root'))?.roles).toEqual([ROLE]);
+    expect(output()).toContain('pnpm infra password root');
+
+    // Again, and for someone who exists already in part: nothing fails, nothing is made twice.
+    await run('create', 'root');
+    await run('create', 'ann');
+    expect(await directory.account('ann')).toBeDefined();
+    expect((await identity.getUser('ann'))?.roles).toEqual([ROLE]);
+
+    await expect(run('create', 'Not Valid')).rejects.toThrow(UsageError);
+    await expect(run('create')).rejects.toThrow(UsageError);
+    expect(await directory.account('Not Valid')).toBeUndefined();
   });
 
   it('explains what is wrong', async () => {

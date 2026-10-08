@@ -50,6 +50,8 @@ try {
         USER_POOL_ID:
           process.env.USER_POOL_ID ?? terraformOutput('user_pool_id'),
         ADMIN_ROLE: process.env.ADMIN_ROLE ?? terraformOutput('admin_role'),
+        DIRECTORY_TABLE:
+          process.env.DIRECTORY_TABLE ?? terraformOutput('directory_table'),
       },
     },
   );

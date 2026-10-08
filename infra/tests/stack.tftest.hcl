@@ -159,7 +159,6 @@ mock_provider "aws" {
 variables {
   region                    = "eu-west-1"
   domain                    = "example.com"
-  mailboxes                 = { "me@example.com" = "me", "*@example.com" = "catchall" }
   activate_receipt_rule_set = false
   ingest_bundle             = "tests/fixture-bundle.mjs"
   api_bundle                = "tests/fixture-bundle.mjs"
@@ -179,10 +178,7 @@ variables {
   dmarc_policy         = "quarantine"
   alarm_email          = null
 
-  allow_password_sign_in = true
-  account_names          = { me = "Me Myself" }
-  shared_accounts        = {}
-  account_quota_bytes    = null
+  account_quota_bytes = null
 
   auth_hostname             = null
   admin_extra_callback_urls = []
@@ -296,7 +292,6 @@ run "defaults" {
       aws_lambda_function.ingest.runtime == "nodejs24.x" &&
       aws_lambda_function.ingest.architectures == tolist(["arm64"]) &&
       aws_lambda_function.ingest.handler == "ingest.handler" &&
-      aws_lambda_function.ingest.environment[0].variables["MAILBOXES"] == jsonencode(var.mailboxes) &&
       aws_lambda_function.ingest.environment[0].variables["INBOUND_PREFIX"] == "inbound/" &&
       aws_lambda_function.ingest.environment[0].variables["BLOB_PREFIX"] == "blobs/"
     )
@@ -332,10 +327,7 @@ run "defaults" {
   }
 
   assert {
-    condition = (
-      aws_lambda_function.ingest.environment[0].variables["CONFIGURATION_SET"] == "mailless" &&
-      jsondecode(aws_lambda_function.ingest.environment[0].variables["ACCOUNT_NAMES"]) != null
-    )
+    condition     = aws_lambda_function.ingest.environment[0].variables["CONFIGURATION_SET"] == "mailless"
     error_message = "Automatic replies must go through the configuration set, which suppresses bounced addresses."
   }
 
@@ -352,11 +344,6 @@ run "defaults" {
 
 run "api_and_sign_in" {
   command = plan
-
-  assert {
-    condition     = tolist(output.users) == tolist(["catchall", "me"])
-    error_message = "There must be one user per distinct account id."
-  }
 
   # The API checks tokens by what the identity module says about them, not by knowing the provider.
   assert {
@@ -450,19 +437,14 @@ run "api_and_sign_in" {
     error_message = "Sending must go through this stack's configuration set."
   }
 
+  # Who has a mailbox is in the directory and nowhere else, and the account's own password is not the API's to check.
   assert {
-    condition     = aws_lambda_function.api.environment[0].variables["ACCOUNT_NAMES"] == jsonencode({ me = "Me Myself" })
-    error_message = "The API needs the display names to put a sender name on outgoing mail."
-  }
-
-  assert {
-    condition     = aws_lambda_function.api.environment[0].variables["ALLOW_PASSWORD_SIGN_IN"] == "true"
-    error_message = "Account passwords are accepted unless turned off."
-  }
-
-  assert {
-    condition     = aws_lambda_function.api.environment[0].variables["MAILBOXES"] == jsonencode(var.mailboxes)
-    error_message = "The API needs the mailbox map to decide who may send from which address."
+    condition = alltrue([
+      for name in ["MAILBOXES", "ACCOUNT_NAMES", "ACCOUNT_SHARES", "ALLOW_PASSWORD_SIGN_IN", "USER_POOL_ID", "USER_POOL_CLIENT_ID"] :
+      !contains(keys(aws_lambda_function.api.environment[0].variables), name) &&
+      !contains(keys(aws_lambda_function.ingest.environment[0].variables), name)
+    ])
+    error_message = "Accounts must not be configured through the functions' environment, and the API must not sign anyone in with the pool."
   }
 
   # The API reads and writes mailbox content but has no business in the inbound queue.
@@ -529,19 +511,6 @@ run "api_hostname_can_be_chosen" {
   assert {
     condition     = output.jmap_session_url == "https://jmap.example.com/.well-known/jmap"
     error_message = "A chosen hostname must be used throughout."
-  }
-}
-
-run "password_sign_in_can_be_turned_off" {
-  command = plan
-
-  variables {
-    allow_password_sign_in = false
-  }
-
-  assert {
-    condition     = aws_lambda_function.api.environment[0].variables["ALLOW_PASSWORD_SIGN_IN"] == "false"
-    error_message = "The API must be told not to accept account passwords."
   }
 }
 
@@ -916,41 +885,6 @@ run "rejects_a_tiny_quota" {
   expect_failures = [var.account_quota_bytes]
 }
 
-run "accounts_can_be_shared" {
-  command = plan
-
-  variables {
-    shared_accounts = { catchall = { members = ["me"] } }
-  }
-
-  assert {
-    condition = jsondecode(aws_lambda_function.api.environment[0].variables["ACCOUNT_SHARES"]) == {
-      catchall = { members = ["me"], readers = [] }
-    }
-    error_message = "The API must be told which accounts are shared, and with whom."
-  }
-}
-
-run "rejects_sharing_with_unknown_accounts" {
-  command = plan
-
-  variables {
-    shared_accounts = { catchall = { members = ["nobody"] } }
-  }
-
-  expect_failures = [var.shared_accounts]
-}
-
-run "rejects_sharing_an_unknown_account" {
-  command = plan
-
-  variables {
-    shared_accounts = { elsewhere = { readers = ["me"] } }
-  }
-
-  expect_failures = [var.shared_accounts]
-}
-
 run "alarms_can_email_someone" {
   command = plan
 
@@ -1079,14 +1013,8 @@ run "identity_closed_sign_up_with_passkeys" {
 
   variables {
     account_id     = "123456789012"
-    users          = ["catchall", "me"]
     auth_hostname  = "auth.example.com"
     admin_base_url = "https://abc123.execute-api.eu-west-1.amazonaws.com"
-  }
-
-  assert {
-    condition     = toset(keys(aws_cognito_user.account)) == toset(["catchall", "me"])
-    error_message = "There must be one user per account asked for."
   }
 
   assert {
@@ -1187,7 +1115,6 @@ run "identity_on_a_hostname_of_our_own" {
 
   variables {
     account_id                = "123456789012"
-    users                     = ["me"]
     route53_zone_id           = "Z0123456789ABCDEFGHIJ"
     auth_hostname             = "auth.example.com"
     admin_base_url            = "https://mail.example.com"
@@ -1252,7 +1179,6 @@ run "identity_sign_in_hostname_on_another_domain" {
 
   variables {
     account_id      = "123456789012"
-    users           = ["me"]
     route53_zone_id = "Z0123456789ABCDEFGHIJ"
     auth_hostname   = "auth.example.org"
     admin_base_url  = "https://mail.example.com"
@@ -1304,16 +1230,6 @@ run "rejects_upper_case_domain" {
   expect_failures = [var.domain]
 }
 
-run "rejects_malformed_mailboxes" {
-  command = plan
-
-  variables {
-    mailboxes = { "not-an-address" = "me" }
-  }
-
-  expect_failures = [var.mailboxes]
-}
-
 run "the_directory_is_read_by_the_functions_that_handle_mail" {
   command = plan
 
@@ -1349,28 +1265,8 @@ run "the_directory_is_read_by_the_functions_that_handle_mail" {
 
   assert {
     condition     = output.directory_table == "mailless-directory"
-    error_message = "The directory table must be an output, for the seed command."
+    error_message = "The directory table must be an output, for the commands that read it."
   }
-}
-
-run "rejects_account_ids_with_capitals" {
-  command = plan
-
-  variables {
-    mailboxes = { "me@example.com" = "Me" }
-  }
-
-  expect_failures = [var.mailboxes]
-}
-
-run "rejects_unsafe_account_ids" {
-  command = plan
-
-  variables {
-    mailboxes = { "me@example.com" = "../other" }
-  }
-
-  expect_failures = [var.mailboxes]
 }
 
 run "purging_closed_accounts" {

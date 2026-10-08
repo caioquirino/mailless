@@ -18,11 +18,6 @@ variable "domain" {
   type        = string
 }
 
-variable "users" {
-  description = "Sign-in names to create, one per account."
-  type        = set(string)
-}
-
 variable "route53_zone_id" {
   description = "Hosted zone of the domain. When set, the sign-in pages get a hostname of our own; otherwise one Cognito provides."
   type        = string

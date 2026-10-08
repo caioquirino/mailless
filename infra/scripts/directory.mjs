@@ -1,5 +1,5 @@
 // Runs the directory command of the admin tool against this deployment:
-// `pnpm infra directory <seed|show>`. Needs AWS credentials.
+// `pnpm infra directory show`. Needs AWS credentials.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -32,27 +32,6 @@ function terraformOutput(name) {
   }
 }
 
-/** The accounts as terraform.tfvars has them, read by Terraform itself so that nothing parses HCL twice. */
-function configuredAccounts() {
-  const expression =
-    'jsonencode({ mailboxes = var.mailboxes, names = var.account_names, shares = var.shared_accounts })';
-  let printed;
-  try {
-    printed = execFileSync('terraform', ['console'], {
-      cwd: infraDir,
-      encoding: 'utf8',
-      input: `${expression}\n`,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-  } catch {
-    throw new Error(
-      'Could not read the accounts from terraform.tfvars. Run `pnpm infra init` first.',
-    );
-  }
-  // The console prints the JSON text as a quoted string.
-  return JSON.parse(JSON.parse(printed.trim()));
-}
-
 try {
   if (!existsSync(admin)) {
     throw new Error(
@@ -60,7 +39,6 @@ try {
     );
   }
   const { region } = readSettings(join(infraDir, 'terraform.tfvars'));
-  const accounts = configuredAccounts();
   const result = spawnSync(
     process.execPath,
     [admin, 'directory', ...process.argv.slice(2)],
@@ -71,9 +49,6 @@ try {
         AWS_REGION: process.env.AWS_REGION ?? region,
         DIRECTORY_TABLE:
           process.env.DIRECTORY_TABLE ?? terraformOutput('directory_table'),
-        MAILBOXES: JSON.stringify(accounts.mailboxes),
-        ACCOUNT_NAMES: JSON.stringify(accounts.names),
-        ACCOUNT_SHARES: JSON.stringify(accounts.shares),
       },
     },
   );

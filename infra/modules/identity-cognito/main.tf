@@ -78,8 +78,9 @@ resource "aws_cognito_user_pool_client" "jmap" {
 
   generate_secret = false
 
-  # USER_PASSWORD_AUTH lets the API check a username and password on behalf of
-  # mail clients that only speak HTTP Basic authentication.
+  # USER_PASSWORD_AUTH lets a program trade a username and password for a
+  # token directly with the pool. The API itself never does: mail clients that
+  # only speak HTTP Basic authentication use app passwords.
   explicit_auth_flows = [
     "ALLOW_USER_PASSWORD_AUTH",
     "ALLOW_REFRESH_TOKEN_AUTH",
@@ -99,13 +100,15 @@ resource "aws_cognito_user_pool_client" "jmap" {
   }
 }
 
-resource "aws_cognito_user" "account" {
-  for_each = var.users
+# Users were once made here, one per account in the configuration. They are
+# made in the admin interface now. Those that exist stay as they are: this
+# only stops Terraform from keeping track of them.
+removed {
+  from = aws_cognito_user.account
 
-  user_pool_id = aws_cognito_user_pool.main.id
-  # The username is the account id: the API uses it to pick the mailbox.
-  username       = each.key
-  message_action = "SUPPRESS"
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ------------------------------------------------------------- admin interface

@@ -20,9 +20,6 @@ module "identity" {
   account_id = local.account_id
   domain     = var.domain
 
-  # One user per account id used in var.mailboxes.
-  users = toset(values(var.mailboxes))
-
   route53_zone_id           = var.route53_zone_id
   auth_hostname             = coalesce(var.auth_hostname, "auth.${var.domain}")
   admin_base_url            = local.admin_base_url
@@ -30,7 +27,7 @@ module "identity" {
 }
 
 # These were in this file before identity became a module. They are the same
-# user pool, client and users: nothing is made again.
+# user pool and client: nothing is made again.
 moved {
   from = aws_cognito_user_pool.main
   to   = module.identity.aws_cognito_user_pool.main
@@ -39,9 +36,4 @@ moved {
 moved {
   from = aws_cognito_user_pool_client.jmap
   to   = module.identity.aws_cognito_user_pool_client.jmap
-}
-
-moved {
-  from = aws_cognito_user.account
-  to   = module.identity.aws_cognito_user.account
 }

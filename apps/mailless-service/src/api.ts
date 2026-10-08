@@ -1,7 +1,3 @@
-import {
-  CognitoIdentityProviderClient,
-  InitiateAuthCommand,
-} from '@aws-sdk/client-cognito-identity-provider';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   GetObjectCommand,
@@ -23,7 +19,6 @@ import { createFetchHandler, jmapUrls } from '@mailless/jmap-server/http';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import { S3BlobStore } from '@mailless/storage-s3';
 import { SesMailTransport } from '@mailless/transport-ses';
-import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { createAuthenticator } from './api/authenticator.js';
 import { identitiesFor } from './api/identities.js';
 import { createLambdaHttpHandler } from './api/lambda-http.js';
@@ -38,8 +33,6 @@ function required(name: string): string {
 }
 
 const bucket = required('BUCKET');
-const userPoolId = required('USER_POOL_ID');
-const clientId = required('USER_POOL_CLIENT_ID');
 const downloadPrefix = process.env['DOWNLOAD_PREFIX'] ?? 'downloads/';
 const DOWNLOAD_URL_SECONDS = 300;
 const configurationSetName = process.env['CONFIGURATION_SET'];
@@ -66,36 +59,13 @@ const storage = {
   }),
 };
 // Who has a mailbox, which addresses deliver to it and who else may use it.
-const directory = directoryFromEnvironment(process.env, dynamodb, (question) =>
-  // Says that the table does not have everything yet. The question only, never whom it was about.
-  console.log(JSON.stringify({ event: 'directory-fallback', question })),
-);
+const directory = directoryFromEnvironment(process.env, dynamodb);
 
-const cognito = new CognitoIdentityProviderClient({});
-// Whose token it is. Any OpenID Connect provider will do: which claim says what is
-// configuration. Without that configuration the pool is asked the way it always was.
+// Whose token it is. Any OpenID Connect provider will do: which claim says
+// what is configuration, and nothing here knows which provider it is.
 const oidc = tokenVerifierOptionsFromEnvironment(process.env);
-const verifyToken = oidc
-  ? createTokenVerifier(oidc)
-  : (() => {
-      const verifier = CognitoJwtVerifier.create({
-        userPoolId,
-        tokenUse: 'access',
-        clientId,
-      });
-      return async (token: string) => ({
-        username: (await verifier.verify(token)).username,
-      });
-    })();
-
-/** Errors that mean "these credentials are not accepted", as opposed to a failure on our side. */
-const REFUSALS = new Set([
-  'NotAuthorizedException',
-  'UserNotFoundException',
-  'UserNotConfirmedException',
-  'PasswordResetRequiredException',
-  'InvalidParameterException',
-]);
+if (!oidc) throw new Error('Missing environment variable OIDC_ISSUER');
+const verifyToken = createTokenVerifier(oidc);
 
 // Holding a message to send it later needs something to wake up for it. Without
 // these settings, messages simply go at once.
@@ -121,7 +91,6 @@ const authenticate = createAuthenticator({
   isAppPassword,
   appPasswordLogin: async (username, password) =>
     (await appPasswords.verify(username, password)) ? username : null,
-  allowPasswordLogin: process.env['ALLOW_PASSWORD_SIGN_IN'] !== 'false',
   // Mail clients ask for an email address. Sign in as the account that address delivers to.
   resolveUsername: async (username) =>
     username.includes('@')
@@ -130,22 +99,6 @@ const authenticate = createAuthenticator({
   onFailure: (failure) =>
     console.log(JSON.stringify({ event: 'sign-in-failed', ...failure })),
   verifyAccessToken: async (token) => (await verifyToken(token)).username,
-  passwordLogin: async (username, password) => {
-    try {
-      const result = await cognito.send(
-        new InitiateAuthCommand({
-          AuthFlow: 'USER_PASSWORD_AUTH',
-          ClientId: clientId,
-          AuthParameters: { USERNAME: username, PASSWORD: password },
-        }),
-      );
-      // A challenge (new password required, MFA) cannot be answered over Basic authentication.
-      return result.AuthenticationResult?.AccessToken ?? null;
-    } catch (error) {
-      if (REFUSALS.has((error as { name?: string }).name ?? '')) return null;
-      throw error;
-    }
-  },
 });
 
 export const handler = createLambdaHttpHandler({

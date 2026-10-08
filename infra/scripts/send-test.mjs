@@ -34,11 +34,16 @@ try {
   const { domain } = readSettings(join(infraDir, 'terraform.tfvars'));
   // MAILLESS_API_URL and MAILLESS_USER let this run against something other than the deployment.
   const apiUrl = process.env.MAILLESS_API_URL ?? terraformOutput('api_url');
-  const username = process.env.MAILLESS_USER ?? terraformOutput('users')[0];
-  if (!username) throw new Error('The deployment has no users.');
+  const username = process.env.MAILLESS_USER;
+  if (!username) {
+    throw new Error(
+      'Say which account sends the test: MAILLESS_USER=<account> pnpm infra send-test\n' +
+        '`pnpm infra directory show` lists the accounts.',
+    );
+  }
   const recipient = process.argv[2] ?? `mailless-test@${domain}`;
 
-  const password = await readSecret(`Password for ${username}: `);
+  const password = await readSecret(`App password for ${username}: `);
   const authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
 
   const jmap = async (methodCalls) => {
@@ -49,7 +54,9 @@ try {
       signal: AbortSignal.timeout(30_000),
     });
     if (response.status === 401)
-      throw new Error('Sign-in was refused. Check the password.');
+      throw new Error(
+        'Sign-in was refused. It takes an app password: make one in the admin interface.',
+      );
     const body = await response.json();
     if (!response.ok) {
       throw new Error(

@@ -3,23 +3,12 @@
 region = "eu-west-1"
 domain = "example.com"
 
-mailboxes = {
-  "me@example.com" = "me"
-  # "*@example.com" = "me"   # everything else at the domain
-}
-
-# The name shown as the sender of each account's mail.
-account_names = {
-  me = "Your Name"
-}
+# Accounts, their addresses and who shares what are not set here: the first
+# account is made with `pnpm infra admin create <account>`, the rest in the
+# admin interface.
 
 # How much mail an account may hold, in bytes. Leave out for no limit.
 # account_quota_bytes = 5368709120
-
-# Accounts other users may use besides their own, such as a shared mailbox.
-# shared_accounts = {
-#   team = { members = ["me"], readers = [] }
-# }
 
 # true replaces whatever SES receipt rule set is active in this region today.
 activate_receipt_rule_set = false

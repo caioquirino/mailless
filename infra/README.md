@@ -21,7 +21,7 @@ through SES.
 | Ingest Lambda (`nodejs24.x`, arm64)                      | Imports each message into the recipients' accounts.                                                                                                                               |
 | SQS dead-letter queue                                    | Catches deliveries that still fail after two retries.                                                                                                                             |
 | KMS key (optional, on by default)                        | Customer-managed encryption for the bucket and table.                                                                                                                             |
-| Cognito user pool                                        | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed. A password or, once enrolled, a passkey.                                                              |
+| Cognito user pool                                        | Who may sign in: one user per account, made in the admin interface. Sign-up is closed. A password or, once enrolled, a passkey.                                                   |
 | Sign-in pages, admin client and `MAILLESS_ADMIN` group   | Cognito's own pages for signing in and enrolling a passkey, on `auth.<domain>` with Route53, for the admin interface and those who may manage accounts.                           |
 | API Lambda and HTTP API                                  | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                                                                                              |
 | Admin Lambda and its routes                              | The admin interface under `/admin/` and its API under `/admin/api`: accounts, addresses and shares, and each user's own credentials. It can change accounts and cannot read mail. |
@@ -39,8 +39,8 @@ Set `use_customer_kms_key = false` to use the free AWS-managed encryption.
 
 ## Sending
 
-Each account may send from the addresses that deliver to it. With a
-`*@<domain>` entry in `mailboxes`, that is any address at the domain.
+Each account may send from the addresses that deliver to it. An account with
+a whole-domain address (`*@<domain>`) may send from any address at the domain.
 
 - **Sandbox.** A new SES account can only send to verified addresses, 200
   messages a day. Your own domain is verified, so mail to any address at it
@@ -75,7 +75,7 @@ Each account may send from the addresses that deliver to it. With a
   account. `activate_receipt_rule_set = true` replaces whichever is active
   now. Leave it `false` for the first apply if the account already receives
   mail through SES, and check first.
-- **Recipients**: only addresses listed in `mailboxes` are delivered. Mail to
+- **Recipients**: only addresses given to an account are delivered. Mail to
   any other address at the domain is accepted and then dropped, without a
   bounce.
 - **Deletion**: the bucket and the table have `prevent_destroy`, and the table
@@ -88,7 +88,7 @@ Tool versions come from `mise.toml` at the repository root (`mise install`).
 You need AWS credentials in the environment.
 
 ```sh
-cp infra/terraform.tfvars.example infra/terraform.tfvars   # region, domain, mailboxes
+cp infra/terraform.tfvars.example infra/terraform.tfvars   # region, domain
 pnpm infra plan     # show what would change
 pnpm infra apply    # deploy; Terraform shows the plan and waits for "yes"
 ```
@@ -104,6 +104,18 @@ dependencies, so each run does the following, skipping what is already done:
 | `infra:plan` / `infra:apply`          | The Terraform command itself.                                  |
 
 `pnpm infra` on its own lists the available tasks.
+
+A new deployment has no accounts. Make the first one, whose user may
+administer the rest, and give it a password:
+
+```sh
+pnpm infra admin create <account>   # small letters, digits, - and _
+pnpm infra password <account>
+```
+
+Then sign in to the admin interface (`terraform output admin_url`) and add
+the addresses that deliver to the account. Every other account, address and
+share is made there too.
 
 ### Terraform state
 
@@ -132,58 +144,43 @@ and mail starts arriving once the MX record does and the rule set is active.
 
 ## Signing in and connecting a mail client
 
-Each account id in `mailboxes` gets a sign-in of the same name (the `users`
-output lists them). Set its password once:
+Every account has a user of the same name. Its password opens the admin
+interface, where the user manages their own password, passkeys and app
+passwords. An administrator sets a new user's first password there;
+`pnpm infra password <account>` does the same from the command line, for the
+first account or for an administrator who is locked out. The password is
+typed at a hidden prompt and goes straight to Cognito; it is never an
+argument, and never in Terraform state. It must be at least 14 characters.
 
-```sh
-pnpm infra password <name>
-```
-
-The password is typed at a hidden prompt and goes straight to Cognito; it is
-never an argument, and never in Terraform state. It must be at least 14
-characters.
-
-Then point a JMAP client at the `api_url` output (`https://mail.<domain>` with
-Route53), or, where the client supports discovery, just give it an address at
-the domain. Sign in with the name and password.
-
-```sh
-curl -u <name> https://mail.example.com/.well-known/jmap
-```
-
-You can type either the name or any email address that delivers to the
-account; an address is mapped to its account.
+A mail client never gets that password. It signs in with an app password.
 
 ### App passwords
 
-Rather than giving a mail client your real password, give each one its own:
+Each mail client gets a password of its own, made in the admin interface
+under "My account", or from the command line:
 
 ```sh
-pnpm infra app-password create "Mailtemi on phone"
+pnpm infra app-password create "Mailtemi on phone" [--account <account>]
 pnpm infra app-password list
 pnpm infra app-password revoke <id>
 ```
 
-`create` prints a long random password once. Enter it in the client, with your
-email address, in place of your real password. Only a hash is stored, so it
-cannot be shown again; make a new one if it is lost. `list` shows each
-password's label, when it was created and when it was last used (to the hour).
-Revoking one signs that client out within a minute and affects nothing else.
+The long random password is shown once. Enter it in the client, with your
+email address or account name. Only a hash is stored, so it cannot be shown
+again; make a new one if it is lost. The list shows each password's label,
+when it was created and when it was last used (to the hour). Revoking one
+signs that client out within a minute and affects nothing else.
 
-Once every client uses an app password, set this in `terraform.tfvars` and
-apply:
+Point the client at the `api_url` output (`https://mail.<domain>` with
+Route53), or, where the client supports discovery, just give it an address at
+the domain.
 
-```hcl
-allow_password_sign_in = false
+```sh
+curl -u <account> https://mail.example.com/.well-known/jmap   # asks for an app password
 ```
 
-Mail clients can then no longer sign in with the account password at all, so a
-lost or compromised device never holds it. The account password remains what
-`pnpm infra password` sets, and is still what issues bearer tokens.
-
-These commands need your AWS credentials: app passwords are created from the
-command line, not through the API, so nothing reachable from the internet can
-mint one.
+The account's own password is not accepted here, whatever is configured: a
+lost or compromised device never holds it.
 
 ### Sign-in pages and passkeys
 
@@ -201,10 +198,12 @@ and used. `terraform output auth` gives their addresses.
   every passkey has to be enrolled again.
 
 Members of the `MAILLESS_ADMIN` group may manage accounts in the admin
-interface. The first administrator is made from here:
+interface. The first administrator is made from here, and so is anyone who
+has to be let back in when no administrator can sign in:
 
 ```sh
-pnpm infra admin grant <account>
+pnpm infra admin create <account>   # a new account whose user may administer
+pnpm infra admin grant <account>    # the same for an account that exists
 pnpm infra admin list
 pnpm infra admin revoke <account>   # also ends that user's sessions
 ```
@@ -222,7 +221,7 @@ password, passkeys and app passwords, are managed in a web interface at
 `terraform output admin_url` (`<API address>/admin/`). Anyone with an account
 can sign in to it for their own credentials. Managing accounts needs the
 `MAILLESS_ADMIN` role, and the first administrator is made with
-`pnpm infra admin grant <account>`.
+`pnpm infra admin create <account>`.
 
 The pages themselves are public, as the files of any web application are.
 Everything they do goes through an API at `terraform output admin_api_url`
@@ -266,25 +265,22 @@ The pages then come from your machine and everything else from the stack.
 ### The accounts directory
 
 Who has a mailbox, which addresses deliver to it and who it is shared with is
-kept in a table of its own, which the functions that handle mail may read and
-nothing more. Today it is filled from `terraform.tfvars`:
+kept in a table of its own. The admin interface changes it; the functions
+that handle mail may read it and nothing more, and remember what it said for
+a minute, so a change takes that long to reach them.
 
 ```sh
-pnpm infra directory seed   # copy mailboxes, account_names and shared_accounts into the table
-pnpm infra directory show   # list what the table holds
+pnpm infra directory show   # list the accounts, their addresses and who they are shared with
 ```
-
-`seed` only adds, so it can be run as often as you like. It then checks that
-every configured address delivers to the same account in the table, and says
-so where the two differ instead of replacing anything. Run it after each
-`pnpm infra apply` that changed the accounts.
-
-What the table does not have is still taken from `terraform.tfvars`, so mail
-keeps arriving whether or not the table has been filled. A log line
-`directory-fallback` says when that happened.
 
 Account ids are small letters, digits, `-` and `_`. A user whose account is
 `disabled` in the directory cannot sign in; mail for it still arrives.
+
+Deployments made before the admin interface kept accounts in
+`terraform.tfvars` (`mailboxes`, `account_names`, `shared_accounts`,
+`allow_password_sign_in`). Those settings no longer exist: remove them from
+the file, or Terraform warns about each. The users they made stay as they
+are; Terraform only stops keeping track of them.
 
 ### Push notifications
 
@@ -308,16 +304,12 @@ fetches what changed.
 ### Shared accounts
 
 An account can be used by more than its own user, which is how a shared
-mailbox works. In `terraform.tfvars`:
-
-```hcl
-mailboxes       = { "ann@example.com" = "ann", "bob@example.com" = "bob", "team@example.com" = "team" }
-shared_accounts = { team = { members = ["ann", "bob"] } }
-```
+mailbox works. In the admin interface, make an account `team`, give it its
+address, and share it with `ann` and `bob`.
 
 Ann and Bob each sign in as themselves and see the team mailbox next to their
-own in a mail app that supports several accounts. `members` may read, file,
-delete and send as the team's addresses; `readers` may only read. Mail can be
+own in a mail app that supports several accounts. Members may read, file,
+delete and send as the team's addresses; readers may only read. Mail can be
 copied or moved between a user's own account and a shared one. New mail in a
 shared account does not trigger push notifications for its members.
 
@@ -382,17 +374,17 @@ you.
 
 ### What is accepted
 
-- **Email address or name, with an app password** (HTTP Basic). The
-  recommended way for mail clients.
-- **Email address or name, with the account password** (HTTP Basic), unless
-  `allow_password_sign_in` is false.
-- **Bearer token**: a Cognito access token for this user pool.
+- **Email address or name, with an app password** (HTTP Basic). The way for
+  mail clients.
+- **Bearer token**: an access token from the identity provider, issued for
+  the mail client of this user pool.
+
+The account's own password over HTTP Basic is refused.
 
 Things to know:
 
-- **No multi-factor authentication yet.** With `allow_password_sign_in =
-false` and app passwords in clients, the account password is only used to
-  obtain tokens, which is what makes adding it possible later.
+- **No multi-factor authentication yet.** The account password opens only
+  the sign-in pages, where a passkey can be used instead.
 - **Sizes.** A request body can be at most 5 MB and an upload 4 MB, because of
   Lambda's limits. Downloads have no such limit: large ones are redirected to
   a private, signed S3 link that is valid for five minutes.

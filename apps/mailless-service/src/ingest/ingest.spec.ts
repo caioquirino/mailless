@@ -4,7 +4,6 @@ import { InMemoryStorageAdapter } from '@mailless/jmap-server/memory';
 import { buildMessage } from '@mailless/jmap-server/testing';
 import type { SESEvent } from 'aws-lambda';
 import { ingest, type InboundStore } from './ingest.js';
-import { parseMailboxMap } from './recipients.js';
 
 const USING = ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'];
 const URL = 'https://jmap.example.com';
@@ -199,14 +198,5 @@ describe('ingest', () => {
     expect(await emails('acc-me')).toHaveLength(1);
     expect(await emails('acc-team')).toHaveLength(1);
     expect(objects.size).toBe(0);
-  });
-});
-
-describe('parseMailboxMap', () => {
-  it('rejects malformed configuration', () => {
-    expect(() => parseMailboxMap('[]')).toThrow();
-    expect(() => parseMailboxMap('{"a@x.org":""}')).toThrow();
-    expect(parseMailboxMap(undefined)).toEqual({});
-    expect(parseMailboxMap('{"A@X.org":"one"}')).toEqual({ 'a@x.org': 'one' });
   });
 });

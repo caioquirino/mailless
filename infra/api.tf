@@ -125,12 +125,10 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = merge(
       {
-        TABLE_NAME          = aws_dynamodb_table.metadata.name
-        BUCKET              = aws_s3_bucket.mail.id
-        BLOB_PREFIX         = local.blob_prefix
-        DOWNLOAD_PREFIX     = local.download_prefix
-        USER_POOL_ID        = module.identity.provider.user_pool_id
-        USER_POOL_CLIENT_ID = module.identity.jmap_client_id
+        TABLE_NAME      = aws_dynamodb_table.metadata.name
+        BUCKET          = aws_s3_bucket.mail.id
+        BLOB_PREFIX     = local.blob_prefix
+        DOWNLOAD_PREFIX = local.download_prefix
         # How a token is checked, whichever identity provider issued it.
         OIDC_ISSUER          = module.identity.oidc.issuer
         OIDC_JWKS_URI        = module.identity.oidc.jwks_uri
@@ -139,15 +137,9 @@ resource "aws_lambda_function" "api" {
         OIDC_USERNAME_CLAIM  = module.identity.oidc.username_claim
         OIDC_ROLES_CLAIM     = module.identity.oidc.roles_claim
         OIDC_REQUIRED_CLAIMS = jsonencode(module.identity.oidc.required_claims)
-        # Decides which addresses each account may send from.
-        # Who has a mailbox. What the table does not have yet is taken from the three below.
+        # Who has a mailbox, which addresses each account may send from and who shares what.
         DIRECTORY_TABLE   = aws_dynamodb_table.directory.name
-        MAILBOXES         = jsonencode(var.mailboxes)
-        ACCOUNT_NAMES     = jsonencode(var.account_names)
-        ACCOUNT_SHARES    = jsonencode(var.shared_accounts)
         CONFIGURATION_SET = aws_sesv2_configuration_set.main.configuration_set_name
-        # "false" makes mail clients use app passwords; the account password then only works for tokens.
-        ALLOW_PASSWORD_SIGN_IN = tostring(var.allow_password_sign_in)
         # What it takes to hold a message and have it sent later.
         SEND_QUEUE_URL             = aws_sqs_queue.send.url
         SCHEDULE_GROUP             = aws_scheduler_schedule_group.send.name

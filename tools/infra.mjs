@@ -8,10 +8,10 @@ if (!task || task.startsWith('-')) {
     'Usage: pnpm infra <task>\n\n' +
       '  plan      show what would change\n' +
       '  apply     deploy (Terraform asks before changing anything)\n' +
-      '  password  set the sign-in password of a mailbox user: pnpm infra password <name>\n' +
+      '  password  set the sign-in password of a user: pnpm infra password <account>\n' +
       '  app-password  create, list or revoke per-client passwords\n' +
-      '  admin     say who may administer the deployment: pnpm infra admin <grant|revoke|list>\n' +
-      '  directory seed or show the accounts directory: pnpm infra directory <seed|show>\n' +
+      '  admin     make the first account, and say who may administer: pnpm infra admin <create|grant|revoke|list>\n' +
+      '  directory list the accounts and their addresses: pnpm infra directory show\n' +
       '  send-test send a test message and wait for it to arrive: pnpm infra send-test [recipient]\n' +
       '  init      create the state bucket if needed and initialise Terraform\n' +
       '  validate  check the configuration\n' +

@@ -7,11 +7,10 @@ const request = (authorization?: string) =>
     headers: authorization === undefined ? {} : { authorization },
   });
 
-function setup(options: { allowPasswordLogin?: boolean } = {}) {
+function setup() {
   const appLogins: Array<[string, string]> = [];
   const revoked = new Set<string>();
   let time = 1_000_000;
-  const logins: Array<[string, string]> = [];
   const verified: string[] = [];
   const failures: AuthFailure[] = [];
   const authenticate = createAuthenticator({
@@ -27,23 +26,14 @@ function setup(options: { allowPasswordLogin?: boolean } = {}) {
     isAppPassword: (password) => password.startsWith('mlapp-'),
     appPasswordLogin: async (username, password) => {
       appLogins.push([username, password]);
-      return password === 'mlapp-good' && !revoked.has(password)
+      if (password === 'mlapp-boom') throw new Error('table unavailable');
+      return password.startsWith('mlapp-good') && !revoked.has(password)
         ? username
-        : null;
-    },
-    allowPasswordLogin: options.allowPasswordLogin ?? true,
-    passwordLogin: async (username, password) => {
-      logins.push([username, password]);
-      if (password === 'boom') throw new Error('identity provider unavailable');
-      // The provider accepts any spelling of the name and reports the canonical one.
-      return password === 'correct horse'
-        ? `token-for-${username.toLowerCase()}`
         : null;
     },
   });
   return {
     authenticate,
-    logins,
     verified,
     failures,
     appLogins,
@@ -54,13 +44,13 @@ function setup(options: { allowPasswordLogin?: boolean } = {}) {
 
 describe('createAuthenticator', () => {
   it('accepts a valid bearer token and uses its username as the account', async () => {
-    const { authenticate, logins } = setup();
+    const { authenticate, appLogins } = setup();
     expect(await authenticate(request('Bearer token-for-me'))).toEqual({
       accountId: 'me',
       username: 'me',
     });
     expect(await authenticate(request('bearer token-for-me'))).not.toBeNull();
-    expect(logins).toEqual([]);
+    expect(appLogins).toEqual([]);
   });
 
   it('rejects missing, malformed and invalid credentials', async () => {
@@ -87,83 +77,99 @@ describe('createAuthenticator', () => {
     const { authenticate } = setup();
     expect(await authenticate(request('Bearer token-for-../other'))).toBeNull();
     expect(await authenticate(request('Bearer token-for-a b'))).toBeNull();
+    expect(
+      await authenticate(request(basic('../other', 'mlapp-good'))),
+    ).toBeNull();
   });
 
-  it('checks a password once and remembers the answer for five minutes', async () => {
-    const { authenticate, logins, advance } = setup();
-    const header = basic('Me', 'correct horse');
+  it('refuses a password that is not an app password, without looking anything up', async () => {
+    const { authenticate, appLogins, failures } = setup();
+    expect(
+      await authenticate(request(basic('me', 'correct horse'))),
+    ).toBeNull();
+    expect(appLogins).toEqual([]);
+    expect(failures.at(-1)).toEqual({
+      scheme: 'basic',
+      reason: 'refused',
+      credentialKind: 'password',
+      usernameKind: 'name',
+    });
+  });
+
+  it('checks an app password once and remembers the answer for a minute', async () => {
+    const { authenticate, appLogins, advance } = setup();
+    const header = basic('me', 'mlapp-good');
 
     expect(await authenticate(request(header))).toEqual({
       accountId: 'me',
       username: 'me',
     });
     await authenticate(request(header));
-    advance(4 * 60_000);
+    advance(59_000);
     await authenticate(request(header));
-    expect(logins).toEqual([['Me', 'correct horse']]);
+    expect(appLogins).toEqual([['me', 'mlapp-good']]);
 
-    advance(2 * 60_000);
+    advance(2_000);
     await authenticate(request(header));
-    expect(logins).toHaveLength(2);
+    expect(appLogins).toHaveLength(2);
   });
 
   it('keeps passwords containing colons intact', async () => {
-    const { authenticate, logins } = setup();
-    await authenticate(request(basic('me', 'pa:ss:word')));
-    expect(logins).toEqual([['me', 'pa:ss:word']]);
+    const { authenticate, appLogins } = setup();
+    await authenticate(request(basic('me', 'mlapp-good:with:colons')));
+    expect(appLogins).toEqual([['me', 'mlapp-good:with:colons']]);
   });
 
   it('remembers a refusal only briefly', async () => {
-    const { authenticate, logins, advance } = setup();
-    const header = basic('me', 'wrong');
+    const { authenticate, appLogins, advance } = setup();
+    const header = basic('me', 'mlapp-wrong');
     expect(await authenticate(request(header))).toBeNull();
     expect(await authenticate(request(header))).toBeNull();
-    expect(logins).toHaveLength(1);
+    expect(appLogins).toHaveLength(1);
 
     advance(31_000);
     await authenticate(request(header));
-    expect(logins).toHaveLength(2);
+    expect(appLogins).toHaveLength(2);
   });
 
   it('does not let one password vouch for another', async () => {
     const { authenticate } = setup();
     expect(
-      await authenticate(request(basic('me', 'correct horse'))),
+      await authenticate(request(basic('me', 'mlapp-good'))),
     ).not.toBeNull();
-    expect(await authenticate(request(basic('me', 'wrong')))).toBeNull();
-    expect(await authenticate(request(basic('other', 'wrong')))).toBeNull();
+    expect(await authenticate(request(basic('me', 'mlapp-wrong')))).toBeNull();
+    expect(
+      await authenticate(request(basic('other', 'mlapp-wrong'))),
+    ).toBeNull();
   });
 
-  it('signs in once for simultaneous requests with the same credentials', async () => {
-    const { authenticate, logins } = setup();
-    const header = basic('me', 'correct horse');
+  it('looks up once for simultaneous requests with the same credentials', async () => {
+    const { authenticate, appLogins } = setup();
+    const header = basic('me', 'mlapp-good');
     const results = await Promise.all(
       Array.from({ length: 8 }, () => authenticate(request(header))),
     );
     expect(results.every((result) => result?.accountId === 'me')).toBe(true);
-    expect(logins).toHaveLength(1);
+    expect(appLogins).toHaveLength(1);
   });
 
   it('signs in with an email address as the account that owns it', async () => {
-    const { authenticate, logins } = setup();
+    const { authenticate, appLogins } = setup();
     expect(
-      await authenticate(
-        request(basic('Anything@Example.com', 'correct horse')),
-      ),
+      await authenticate(request(basic('Anything@Example.com', 'mlapp-good'))),
     ).toEqual({
       accountId: 'me',
       username: 'me',
     });
-    expect(logins).toEqual([['me', 'correct horse']]);
+    expect(appLogins).toEqual([['me', 'mlapp-good']]);
 
-    // An address nobody owns is tried as typed, and refused by the provider.
+    // An address nobody owns is tried as typed, and is no account.
     expect(
-      await authenticate(request(basic('x@elsewhere.org', 'wrong'))),
+      await authenticate(request(basic('x@elsewhere.org', 'mlapp-good'))),
     ).toBeNull();
-    expect(logins[1]).toEqual(['x@elsewhere.org', 'wrong']);
     // The address still needs the right password.
     expect(
-      await authenticate(request(basic('me@example.com', 'wrong'))),
+      await authenticate(request(basic('me@example.com', 'mlapp-wrong'))),
     ).toBeNull();
   });
 
@@ -172,9 +178,7 @@ describe('createAuthenticator', () => {
     await authenticate(request());
     await authenticate(request('Bearer forged-token-value'));
     await authenticate(request(basic('me', 'secret-wrong-password')));
-    await authenticate(
-      request(basic('me@example.com', 'secret-wrong-password')),
-    );
+    await authenticate(request(basic('me@example.com', 'mlapp-wrong-secret')));
     await authenticate(request('Basic !!!'));
     await authenticate(request('Digest abc'));
     await authenticate(request('SuperSecretScheme abc'));
@@ -191,7 +195,7 @@ describe('createAuthenticator', () => {
       {
         scheme: 'basic',
         reason: 'refused',
-        credentialKind: 'password',
+        credentialKind: 'app-password',
         usernameKind: 'address',
       },
       { scheme: 'basic', reason: 'malformed' },
@@ -203,6 +207,7 @@ describe('createAuthenticator', () => {
     for (const secret of [
       'forged-token-value',
       'secret-wrong-password',
+      'mlapp-wrong-secret',
       'SuperSecretScheme',
       'me@example.com',
     ]) {
@@ -210,24 +215,8 @@ describe('createAuthenticator', () => {
     }
 
     const before = failures.length;
-    await authenticate(request(basic('me', 'correct horse')));
+    await authenticate(request(basic('me', 'mlapp-good')));
     expect(failures).toHaveLength(before);
-  });
-
-  it('checks app passwords locally and never offers them to the identity provider', async () => {
-    const { authenticate, logins, appLogins } = setup();
-    expect(
-      await authenticate(request(basic('someone@example.com', 'mlapp-good'))),
-    ).toEqual({
-      accountId: 'me',
-      username: 'me',
-    });
-    expect(await authenticate(request(basic('me', 'mlapp-wrong')))).toBeNull();
-    expect(appLogins).toEqual([
-      ['me', 'mlapp-good'],
-      ['me', 'mlapp-wrong'],
-    ]);
-    expect(logins).toEqual([]);
   });
 
   it('stops accepting a revoked app password within a minute', async () => {
@@ -244,38 +233,11 @@ describe('createAuthenticator', () => {
     expect(await authenticate(request(header))).toBeNull();
   });
 
-  it('can refuse the account password while still accepting app passwords and tokens', async () => {
-    const { authenticate, logins, failures } = setup({
-      allowPasswordLogin: false,
-    });
-    expect(
-      await authenticate(request(basic('me', 'correct horse'))),
-    ).toBeNull();
-    expect(logins).toEqual([]);
-    expect(failures.at(-1)).toEqual({
-      scheme: 'basic',
-      reason: 'password-sign-in-disabled',
-      credentialKind: 'password',
-      usernameKind: 'name',
-    });
-
-    expect(
-      await authenticate(request(basic('me', 'mlapp-good'))),
-    ).not.toBeNull();
-    expect(await authenticate(request('Bearer token-for-me'))).not.toBeNull();
-
-    await authenticate(request(basic('me', 'mlapp-wrong')));
-    expect(failures.at(-1)).toMatchObject({
-      reason: 'refused',
-      credentialKind: 'app-password',
-    });
-  });
-
-  it('surfaces provider failures and does not cache them', async () => {
-    const { authenticate, logins } = setup();
-    const header = basic('me', 'boom');
+  it('surfaces failures of the lookup and does not cache them', async () => {
+    const { authenticate, appLogins } = setup();
+    const header = basic('me', 'mlapp-boom');
     await expect(authenticate(request(header))).rejects.toThrow('unavailable');
     await expect(authenticate(request(header))).rejects.toThrow('unavailable');
-    expect(logins).toHaveLength(2);
+    expect(appLogins).toHaveLength(2);
   });
 });

@@ -3,8 +3,6 @@ import type { AuthContext } from '@mailless/jmap-server';
 export interface AuthenticatorOptions {
   /** Verifies an access token and returns the username it was issued to. Throws when invalid. */
   verifyAccessToken(token: string): Promise<string>;
-  /** Signs in with a password and returns an access token, or null when the credentials are refused. */
-  passwordLogin(username: string, password: string): Promise<string | null>;
   /**
    * Maps what was typed as the username to the sign-in name. Mail clients ask
    * for an email address, so this is where an address becomes its account.
@@ -12,15 +10,11 @@ export interface AuthenticatorOptions {
   resolveUsername?(username: string): string | Promise<string>;
   /**
    * Checks an app password for a sign-in name and returns that name when it
-   * is valid. Passwords are routed here when `isAppPassword` says so.
+   * is valid. Only what `isAppPassword` takes for one is offered to it: an
+   * account's own password is refused unseen, and never leaves this function.
    */
-  appPasswordLogin?(username: string, password: string): Promise<string | null>;
-  isAppPassword?(password: string): boolean;
-  /**
-   * Whether the account's own password may be used over Basic authentication.
-   * Turn it off once every client uses an app password.
-   */
-  allowPasswordLogin?: boolean;
+  appPasswordLogin(username: string, password: string): Promise<string | null>;
+  isAppPassword(password: string): boolean;
   /** Told why a request was not authenticated. Never receives the credentials themselves. */
   onFailure?(reason: AuthFailure): void;
   now?(): number;
@@ -29,22 +23,16 @@ export interface AuthenticatorOptions {
 export interface AuthFailure {
   /** The Authorization scheme used, or "none" when the header was absent. */
   scheme: string;
-  reason:
-    | 'missing'
-    | 'malformed'
-    | 'unsupported-scheme'
-    | 'refused'
-    | 'password-sign-in-disabled';
-  /** For Basic: whether an app password or the account's own password was offered. */
+  reason: 'missing' | 'malformed' | 'unsupported-scheme' | 'refused';
+  /** For Basic: whether an app password or something else was offered. Only an app password can be accepted. */
   credentialKind?: 'app-password' | 'password';
   /** For Basic: whether the username was an email address or a plain name. */
   usernameKind?: 'address' | 'name';
 }
 
 const ACCOUNT_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const ACCEPTED_TTL_MS = 5 * 60_000;
-/** Shorter for app passwords, so that revoking one takes effect within a minute. */
-const APP_PASSWORD_TTL_MS = 60_000;
+/** Short, so that revoking an app password takes effect within a minute. */
+const ACCEPTED_TTL_MS = 60_000;
 const REFUSED_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 1000;
 
@@ -83,11 +71,14 @@ function parseBasic(
 }
 
 /**
- * Accepts `Authorization: Bearer <access token>` and `Authorization: Basic`.
- * Basic credentials are checked with the identity provider, and the outcome
- * is remembered for a few minutes so that a client making many requests does
- * not cause a sign-in each time. Passwords are never stored: the cache key is
- * a hash of the header.
+ * Accepts `Authorization: Bearer <access token>` and `Authorization: Basic`
+ * with an app password. The outcome of a Basic check is remembered for a
+ * minute, so that a client making many requests does not cause a lookup each
+ * time. Passwords are never stored: the cache key is a hash of the header.
+ *
+ * The password someone signs in with at the identity provider is not accepted
+ * here. A mail client that can only send a name and a password gets an app
+ * password, which opens the mailbox and nothing else.
  */
 export function createAuthenticator(
   options: AuthenticatorOptions,
@@ -95,10 +86,6 @@ export function createAuthenticator(
   const now = options.now ?? Date.now;
   const cache = new Map<string, CacheEntry>();
   const inFlight = new Map<string, Promise<AuthContext | null>>();
-
-  const isAppPassword = (password: string): boolean =>
-    options.appPasswordLogin !== undefined &&
-    (options.isAppPassword?.(password) ?? false);
 
   async function bearer(token: string): Promise<AuthContext | null> {
     try {
@@ -112,6 +99,9 @@ export function createAuthenticator(
     const credentials = parseBasic(encoded);
     if (!credentials) return null;
 
+    // Anything else is refused without a lookup, and without being remembered.
+    if (!options.isAppPassword(credentials.password)) return null;
+
     const key = await digest(encoded);
     const cached = cache.get(key);
     if (cached && cached.expires > now()) return cached.auth;
@@ -122,34 +112,18 @@ export function createAuthenticator(
         const username =
           (await options.resolveUsername?.(credentials.username)) ??
           credentials.username;
-        let auth: AuthContext | null;
-        let acceptedFor = ACCEPTED_TTL_MS;
-
-        if (isAppPassword(credentials.password)) {
-          // An app password is never offered to the identity provider.
-          const name = await options.appPasswordLogin?.(
-            username,
-            credentials.password,
-          );
-          auth = name ? toAuth(name) : null;
-          acceptedFor = APP_PASSWORD_TTL_MS;
-        } else if (options.allowPasswordLogin === false) {
-          auth = null;
-        } else {
-          const token = await options.passwordLogin(
-            username,
-            credentials.password,
-          );
-          // Verifying the token yields the canonical username, whatever spelling was typed.
-          auth = token === null ? null : await bearer(token);
-        }
+        const name = await options.appPasswordLogin(
+          username,
+          credentials.password,
+        );
+        const auth = name ? toAuth(name) : null;
 
         if (cache.size >= MAX_CACHE_ENTRIES) {
           cache.delete(cache.keys().next().value as string);
         }
         cache.set(key, {
           auth,
-          expires: now() + (auth ? acceptedFor : REFUSED_TTL_MS),
+          expires: now() + (auth ? ACCEPTED_TTL_MS : REFUSED_TTL_MS),
         });
         return auth;
       })().finally(() => inFlight.delete(key));
@@ -183,16 +157,14 @@ export function createAuthenticator(
     if (scheme === 'basic') {
       const credentials = parseBasic(value);
       if (!credentials) return fail({ scheme: reported, reason: 'malformed' });
-      const offeredAppPassword = isAppPassword(credentials.password);
       return (
         (await basic(value)) ??
         fail({
           scheme: reported,
-          reason:
-            !offeredAppPassword && options.allowPasswordLogin === false
-              ? 'password-sign-in-disabled'
-              : 'refused',
-          credentialKind: offeredAppPassword ? 'app-password' : 'password',
+          reason: 'refused',
+          credentialKind: options.isAppPassword(credentials.password)
+            ? 'app-password'
+            : 'password',
           usernameKind: credentials.username.includes('@') ? 'address' : 'name',
         })
       );

@@ -33,9 +33,7 @@ const s3 = new S3Client({
 });
 const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 // Who has a mailbox and which addresses deliver to it.
-const directory = directoryFromEnvironment(process.env, dynamodb, (question) =>
-  console.log(JSON.stringify({ event: 'directory-fallback', question })),
-);
+const directory = directoryFromEnvironment(process.env, dynamodb);
 
 const jmap = createJmapServer({
   storage: {
