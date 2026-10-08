@@ -7,6 +7,8 @@ locals {
   # What the admin interface may ask for. The second lets a user change their
   # own password and remove their own passkeys.
   admin_scopes = ["openid", "aws.cognito.signin.user.admin"]
+  # The webmail only reads and writes mail, which asks nothing of the pool.
+  webmail_scopes = ["openid"]
 
   # A hostname of our own needs a certificate, which is validated through DNS
   # records, so it is only set up when the domain's zone is in Route53.
@@ -160,6 +162,48 @@ resource "aws_cognito_user_pool_client" "admin" {
   }
 }
 
+# -------------------------------------------------------------------- webmail
+
+# The webmail runs in a browser too, and signs in the same way: through the
+# sign-in pages, with the authorization code flow and PKCE. It is a client of
+# its own so that a token for reading mail is not one for managing accounts,
+# and the other way round.
+resource "aws_cognito_user_pool_client" "webmail" {
+  name         = "${var.name}-webmail"
+  user_pool_id = aws_cognito_user_pool.main.id
+
+  generate_secret = false
+
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = local.webmail_scopes
+  supported_identity_providers         = ["COGNITO"]
+
+  callback_urls = concat(["${var.webmail_base_url}/mail/callback"], var.webmail_extra_callback_urls)
+  logout_urls   = ["${var.webmail_base_url}/mail/"]
+
+  # USER_AUTH is what lets the sign-in pages offer a passkey next to the password.
+  explicit_auth_flows = [
+    "ALLOW_USER_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH",
+  ]
+
+  prevent_user_existence_errors = "ENABLED"
+  enable_token_revocation       = true
+
+  # The page keeps its tokens for as long as its tab is open, and no longer;
+  # this is how long a tab left open goes on working without signing in again.
+  access_token_validity  = 60
+  id_token_validity      = 60
+  refresh_token_validity = 7
+
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
+  }
+}
+
 # ------------------------------------------------------------- sign-in pages
 
 # Cognito's own pages, where people sign in and enrol a passkey. Version 2
@@ -175,6 +219,14 @@ resource "aws_cognito_user_pool_domain" "main" {
 resource "aws_cognito_managed_login_branding" "admin" {
   user_pool_id                = aws_cognito_user_pool.main.id
   client_id                   = aws_cognito_user_pool_client.admin.id
+  use_cognito_provided_values = true
+
+  depends_on = [aws_cognito_user_pool_domain.main]
+}
+
+resource "aws_cognito_managed_login_branding" "webmail" {
+  user_pool_id                = aws_cognito_user_pool.main.id
+  client_id                   = aws_cognito_user_pool_client.webmail.id
   use_cognito_provided_values = true
 
   depends_on = [aws_cognito_user_pool_domain.main]

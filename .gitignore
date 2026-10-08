@@ -71,3 +71,4 @@ vite.config.*.timestamp*
 
 # The built admin interface, packed for the admin function by `nx run mailless-service:embed-admin-web`
 apps/mailless-service/src/admin/web-assets.gen.ts
+apps/mailless-service/src/webmail/web-assets.gen.ts

@@ -52,6 +52,13 @@ mock_provider "aws" {
     }
   }
 
+  override_resource {
+    target = aws_apigatewayv2_integration.webmail
+    values = {
+      id = "webmail-integration"
+    }
+  }
+
   # The DNS records a certificate asks for are only known to AWS; give the plan something to iterate.
   override_resource {
     target = aws_acm_certificate.api
@@ -167,6 +174,7 @@ variables {
   send_bundle               = "tests/fixture-bundle.mjs"
   admin_bundle              = "tests/fixture-bundle.mjs"
   purge_bundle              = "tests/fixture-bundle.mjs"
+  webmail_bundle            = "tests/fixture-bundle.mjs"
 
   # Every other variable is pinned too: Terraform loads a local terraform.tfvars
   # into tests, and these must not depend on whoever runs them.
@@ -182,6 +190,8 @@ variables {
 
   auth_hostname             = null
   admin_extra_callback_urls = []
+
+  webmail_extra_callback_urls = []
 }
 
 run "defaults" {
@@ -350,7 +360,7 @@ run "api_and_sign_in" {
     condition = (
       aws_lambda_function.api.environment[0].variables["OIDC_ISSUER"] == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_Example00" &&
       aws_lambda_function.api.environment[0].variables["OIDC_JWKS_URI"] == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_Example00/.well-known/jwks.json" &&
-      jsondecode(aws_lambda_function.api.environment[0].variables["OIDC_AUDIENCES"]) == ["exampleclientid"] &&
+      jsondecode(aws_lambda_function.api.environment[0].variables["OIDC_AUDIENCES"]) == ["exampleclientid", "exampleclientid"] &&
       aws_lambda_function.api.environment[0].variables["OIDC_AUDIENCE_CLAIM"] == "client_id" &&
       aws_lambda_function.api.environment[0].variables["OIDC_USERNAME_CLAIM"] == "username" &&
       aws_lambda_function.api.environment[0].variables["OIDC_ROLES_CLAIM"] == "cognito:groups" &&
@@ -494,7 +504,8 @@ run "api_on_its_own_hostname" {
   assert {
     condition = (
       output.admin_api_url == "https://mail.example.com/admin/api" &&
-      output.admin_url == "https://mail.example.com/admin/"
+      output.admin_url == "https://mail.example.com/admin/" &&
+      output.webmail_url == "https://mail.example.com/mail/"
     )
     error_message = "The admin interface and its API must be reached on the API's own hostname."
   }
@@ -780,7 +791,7 @@ run "admin_api" {
   assert {
     condition = (
       jsondecode(aws_lambda_function.admin.environment[0].variables["OIDC_AUDIENCES"]) == [module.identity.admin_client_id] &&
-      jsondecode(aws_lambda_function.api.environment[0].variables["OIDC_AUDIENCES"]) == [module.identity.jmap_client_id] &&
+      jsondecode(aws_lambda_function.api.environment[0].variables["OIDC_AUDIENCES"]) == [module.identity.jmap_client_id, module.identity.webmail_client_id] &&
       aws_lambda_function.admin.environment[0].variables["OIDC_ISSUER"] == module.identity.oidc.issuer &&
       aws_lambda_function.admin.environment[0].variables["OIDC_AUDIENCE_CLAIM"] == "client_id" &&
       aws_lambda_function.admin.environment[0].variables["OIDC_USERNAME_CLAIM"] == "username" &&
@@ -1029,9 +1040,10 @@ run "identity_closed_sign_up_with_passkeys" {
   }
 
   variables {
-    account_id     = "123456789012"
-    auth_hostname  = "auth.example.com"
-    admin_base_url = "https://abc123.execute-api.eu-west-1.amazonaws.com"
+    account_id       = "123456789012"
+    auth_hostname    = "auth.example.com"
+    admin_base_url   = "https://abc123.execute-api.eu-west-1.amazonaws.com"
+    webmail_base_url = "https://abc123.execute-api.eu-west-1.amazonaws.com"
   }
 
   assert {
@@ -1136,6 +1148,9 @@ run "identity_on_a_hostname_of_our_own" {
     auth_hostname             = "auth.example.com"
     admin_base_url            = "https://mail.example.com"
     admin_extra_callback_urls = ["http://localhost:5173/admin/callback"]
+
+    webmail_base_url            = "https://mail.example.com"
+    webmail_extra_callback_urls = ["http://localhost:5174/mail/callback"]
   }
 
   # Bound to the mail domain, a passkey outlives a change of the sign-in hostname.
@@ -1160,6 +1175,25 @@ run "identity_on_a_hostname_of_our_own" {
       "http://localhost:5173/admin/callback",
     ])
     error_message = "Sign-in must also be able to return to an admin interface run locally."
+  }
+
+  # The webmail signs in the same one way, as a client of its own that asks for less.
+  assert {
+    condition = (
+      !aws_cognito_user_pool_client.webmail.generate_secret &&
+      aws_cognito_user_pool_client.webmail.allowed_oauth_flows_user_pool_client &&
+      aws_cognito_user_pool_client.webmail.allowed_oauth_flows == toset(["code"]) &&
+      aws_cognito_user_pool_client.webmail.allowed_oauth_scopes == toset(["openid"]) &&
+      aws_cognito_user_pool_client.webmail.explicit_auth_flows == toset(["ALLOW_USER_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]) &&
+      aws_cognito_user_pool_client.webmail.prevent_user_existence_errors == "ENABLED" &&
+      aws_cognito_user_pool_client.webmail.enable_token_revocation &&
+      aws_cognito_user_pool_client.webmail.callback_urls == toset([
+        "https://mail.example.com/mail/callback",
+        "http://localhost:5174/mail/callback",
+      ]) &&
+      aws_cognito_user_pool_client.webmail.logout_urls == toset(["https://mail.example.com/mail/"])
+    )
+    error_message = "The webmail must sign in through the sign-in pages with a code, and return only to itself."
   }
 
   assert {
@@ -1195,10 +1229,11 @@ run "identity_sign_in_hostname_on_another_domain" {
   }
 
   variables {
-    account_id      = "123456789012"
-    route53_zone_id = "Z0123456789ABCDEFGHIJ"
-    auth_hostname   = "auth.example.org"
-    admin_base_url  = "https://mail.example.com"
+    account_id       = "123456789012"
+    route53_zone_id  = "Z0123456789ABCDEFGHIJ"
+    auth_hostname    = "auth.example.org"
+    admin_base_url   = "https://mail.example.com"
+    webmail_base_url = "https://mail.example.com"
   }
 
   # A passkey cannot be bound to a domain its sign-in page is not under.
@@ -1338,5 +1373,61 @@ run "purging_closed_accounts" {
       contains(keys(aws_lambda_function.purge.environment[0].variables), "DIRECTORY_TABLE")
     )
     error_message = "The admin function may only ask for a removal, and the purge function must be able to check the directory."
+  }
+}
+
+run "webmail" {
+  command = plan
+
+  # It hands out pages. It can reach no mail, no account and nothing else.
+  assert {
+    condition = (
+      [for statement in data.aws_iam_policy_document.webmail.statement : statement.sid] == ["Logs"] &&
+      toset(data.aws_iam_policy_document.webmail.statement[0].actions) == toset(["logs:CreateLogStream", "logs:PutLogEvents"])
+    )
+    error_message = "The webmail function must be able to write its own log and nothing else."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.webmail.handler == "webmail.handler" &&
+      toset(keys(aws_lambda_function.webmail.environment[0].variables)) == toset([
+        "WEBMAIL_CLIENT_ID", "AUTH_AUTHORIZE_URL", "AUTH_TOKEN_URL", "AUTH_LOGOUT_URL", "AUTH_SCOPES", "ACCOUNT_URL",
+      ]) &&
+      aws_lambda_function.webmail.environment[0].variables["WEBMAIL_CLIENT_ID"] == module.identity.webmail_client_id &&
+      jsondecode(aws_lambda_function.webmail.environment[0].variables["AUTH_SCOPES"]) == ["openid"] &&
+      aws_lambda_function.webmail.environment[0].variables["ACCOUNT_URL"] == "/admin/"
+    )
+    error_message = "The webmail function must know how to send someone to sign in, and nothing about where mail is kept."
+  }
+
+  # The pages are public, as the files of any web application are; the mail is behind the JMAP API.
+  assert {
+    condition = (
+      toset(keys(aws_apigatewayv2_route.webmail)) == toset(["GET /", "GET /mail", "GET /mail/{proxy+}"]) &&
+      alltrue([
+        for key, route in aws_apigatewayv2_route.webmail :
+        route.route_key == key && route.authorization_type == "NONE" && route.target == "integrations/webmail-integration"
+      ])
+    )
+    error_message = "The pages of the webmail must be readable without a token, only readable, and served by the webmail function."
+  }
+
+  assert {
+    condition = toset([for permission in aws_lambda_permission.api_gateway_invoke_webmail : permission.source_arn]) == toset([
+      "arn:aws:execute-api:eu-west-1:123456789012:mockapi/*/GET/mail/*",
+      "arn:aws:execute-api:eu-west-1:123456789012:mockapi/*/GET/mail",
+      "arn:aws:execute-api:eu-west-1:123456789012:mockapi/*/GET/",
+    ])
+    error_message = "The gateway may call the webmail function for /mail, what is under it and the site's own address, and for nothing else."
+  }
+
+  # It signs in as a client of its own, through the sign-in pages and no other way.
+  assert {
+    condition = (
+      module.identity.webmail_scopes == ["openid"] &&
+      output.webmail_url == "https://mockapi.execute-api.eu-west-1.amazonaws.com/mail/"
+    )
+    error_message = "The webmail must ask for no more than who the user is, and be on the API's own site."
   }
 }

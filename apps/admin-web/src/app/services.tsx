@@ -1,12 +1,15 @@
 import { createContext, useContext, useSyncExternalStore } from 'react';
 import type { Api } from '../lib/api';
 import type { AppConfig } from '../lib/config';
-import type { Session } from '../lib/session';
+import type { Theme } from '@mailless/ui';
+import type { Session } from '@mailless/web-session';
 
 /** What every screen works with: where things are, who is signed in, and the API. */
 export interface Services {
   config: AppConfig;
   session: Session;
+  /** Light or dark. Left out where there is no page to restyle. */
+  theme?: Theme;
   api: Api;
 }
 

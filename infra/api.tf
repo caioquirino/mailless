@@ -130,9 +130,10 @@ resource "aws_lambda_function" "api" {
         BLOB_PREFIX     = local.blob_prefix
         DOWNLOAD_PREFIX = local.download_prefix
         # How a token is checked, whichever identity provider issued it.
-        OIDC_ISSUER          = module.identity.oidc.issuer
-        OIDC_JWKS_URI        = module.identity.oidc.jwks_uri
-        OIDC_AUDIENCES       = jsonencode([module.identity.jmap_client_id])
+        OIDC_ISSUER   = module.identity.oidc.issuer
+        OIDC_JWKS_URI = module.identity.oidc.jwks_uri
+        # Mail apps and the webmail: both read and write mail, and neither manages accounts.
+        OIDC_AUDIENCES       = jsonencode([module.identity.jmap_client_id, module.identity.webmail_client_id])
         OIDC_AUDIENCE_CLAIM  = module.identity.oidc.audience_claim
         OIDC_USERNAME_CLAIM  = module.identity.oidc.username_claim
         OIDC_ROLES_CLAIM     = module.identity.oidc.roles_claim

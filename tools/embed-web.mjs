@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// Puts the built admin interface into a module the admin function is bundled
-// with, so that the function can serve the pages itself and stays one file.
+// Puts a built web application into a module that the function serving it is
+// bundled with, so that the function serves the pages itself and stays one file.
 //
-//   node tools/embed-admin-web.mjs <built site> <module to write>
+//   node tools/embed-web.mjs <built site> <module to write>
+//
+// The module is written next to a `web.ts` that says what `WebAssets` is.
 //
 // Text files are stored compressed; they are sent that way to browsers that
 // take it, which all of them do.
@@ -12,7 +14,7 @@ import { gzipSync } from 'node:zlib';
 
 const [source, target] = process.argv.slice(2);
 if (!source || !target) {
-  console.error('Usage: node tools/embed-admin-web.mjs <built site> <module>');
+  console.error('Usage: node tools/embed-web.mjs <built site> <module>');
   process.exit(1);
 }
 
@@ -58,14 +60,14 @@ for (const file of filesUnder(source).sort()) {
   };
 }
 if (!assets['index.html']) {
-  console.error(`${source} has no index.html. Build the interface first.`);
+  console.error(`${source} has no index.html. Build the application first.`);
   process.exit(1);
 }
 
 mkdirSync(dirname(target), { recursive: true });
 writeFileSync(
   target,
-  '// Written by tools/embed-admin-web.mjs from the built admin interface. Not committed.\n' +
+  `// Written by tools/embed-web.mjs from ${source}. Not committed.\n` +
     "import type { WebAssets } from './web.js';\n\n" +
     `export const assets: WebAssets = ${JSON.stringify(assets, null, 2)};\n`,
 );

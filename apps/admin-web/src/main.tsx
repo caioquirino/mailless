@@ -6,7 +6,8 @@ import { App } from './app/app';
 import { ServicesProvider, type Services } from './app/services';
 import { ApiFailure, createApi } from './lib/api';
 import { appBaseUrl, loadConfig } from './lib/config';
-import { Session } from './lib/session';
+import { browserTheme } from '@mailless/ui';
+import { Session } from '@mailless/web-session';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,6 +21,9 @@ const queryClient = new QueryClient({
   },
 });
 
+// Before anything is drawn, so that the page opens in the theme that was chosen.
+const theme = browserTheme();
+
 async function start(): Promise<Services> {
   const config = await loadConfig();
   const session = new Session(config, {
@@ -28,6 +32,7 @@ async function start(): Promise<Services> {
     navigate: (url) => window.location.assign(url),
     now: () => Date.now(),
     baseUrl: appBaseUrl(),
+    storageKey: 'mailless.admin',
   });
   // After a reload: pick up where this tab left off, before anything is shown.
   await session.restore();
@@ -39,7 +44,7 @@ async function start(): Promise<Services> {
     session,
     new URL(config.apiBaseUrl, window.location.origin).href.replace(/\/$/, ''),
   );
-  return { config, session, api };
+  return { config, session, api, theme };
 }
 
 function Root() {

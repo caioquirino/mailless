@@ -25,6 +25,7 @@ through SES.
 | Sign-in pages, admin client and `MAILLESS_ADMIN` group   | Cognito's own pages for signing in and enrolling a passkey, on `auth.<domain>` with Route53, for the admin interface and those who may manage accounts.                           |
 | API Lambda and HTTP API                                  | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                                                                                              |
 | Admin Lambda and its routes                              | The admin interface under `/admin/` and its API under `/admin/api`: accounts, addresses and shares, and each user's own credentials. It can change accounts and cannot read mail. |
+| Webmail Lambda, client and routes                        | The webmail under `/mail/`: mail in a browser. The function hands out the pages and can reach nothing else; the pages reach mail through the JMAP API.                            |
 | Certificate and `mail.<domain>` (with Route53)           | The API's own hostname, plus an SRV record so clients can find it from an address.                                                                                                |
 | MAIL FROM subdomain                                      | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                                                                                     |
 | SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message.                                          |
@@ -261,6 +262,32 @@ ADMIN_BACKEND=https://<API hostname> pnpm nx dev admin-web
 ```
 
 The pages then come from your machine and everything else from the stack.
+
+### The webmail
+
+Mail in a browser, at `terraform output webmail_url` (`<API address>/mail/`),
+for anyone with an account. The site's own address leads there.
+
+- It is a client of the JMAP API like any mail app: it has no API of its own
+  and nothing it can do that a mail app cannot.
+- Signing in is on the sign-in pages, as for the admin interface, with a
+  client of its own. The JMAP API accepts tokens issued for it; the admin API
+  does not, and a token of the admin interface does not open mail.
+- The function that serves it hands out the pages and may write its own log.
+  It has no access to the bucket, the tables, the pool or anything else.
+- A message written in HTML is shown in a frame where no script runs, and
+  pictures kept on other sites are not loaded until the reader asks: loading
+  one tells its sender that the message was opened, and from where.
+
+To work on it on your own machine against this stack:
+
+```hcl
+webmail_extra_callback_urls = ["http://localhost:5174/mail/callback"]
+```
+
+```sh
+MAIL_BACKEND=https://<API hostname> pnpm nx dev webmail
+```
 
 ### The accounts directory
 

@@ -9,3 +9,5 @@ pnpm-lock.yaml
 tools/compliance/baseline.json
 libs/admin/client/src/generated
 apps/mailless-service/src/admin/web-assets.gen.ts
+apps/mailless-service/src/webmail/web-assets.gen.ts
+libs/web/ui/src/styles/tokens.css

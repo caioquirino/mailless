@@ -1,0 +1,26 @@
+{
+  "name": "@mailless/webmail",
+  "version": "0.0.1",
+  "private": true,
+  "nx": {
+    "name": "webmail",
+    "tags": [
+      "type:app"
+    ]
+  },
+  "dependencies": {
+    "@mailless/jmap-client": "workspace:*",
+    "@mailless/jmap-core": "workspace:*",
+    "@mailless/ui": "workspace:*",
+    "@mailless/web-session": "workspace:*",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router": "^7.18.4"
+  },
+  "devDependencies": {
+    "@mailless/jmap-server": "workspace:*",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/user-event": "^14.6.7"
+  },
+  "type": "module"
+}

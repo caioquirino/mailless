@@ -49,6 +49,9 @@
       "path": "./apps/admin-web"
     },
     {
+      "path": "./apps/webmail"
+    },
+    {
       "path": "./libs/identity/app-passwords"
     },
     {
@@ -65,6 +68,12 @@
     },
     {
       "path": "./libs/jmap/client"
+    },
+    {
+      "path": "./libs/web/session"
+    },
+    {
+      "path": "./libs/web/ui"
     }
   ],
   "compilerOptions": {}

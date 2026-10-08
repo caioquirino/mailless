@@ -41,7 +41,8 @@
             "apps/mailless-service/src/send.ts",
             "apps/mailless-service/src/admin.ts",
             "apps/mailless-service/src/admin-api.ts",
-            "apps/mailless-service/src/purge.ts"
+            "apps/mailless-service/src/purge.ts",
+            "apps/mailless-service/src/webmail.ts"
           ]
         },
         "configurations": {
@@ -50,7 +51,8 @@
         },
         "dependsOn": [
           "^build",
-          "embed-admin-web"
+          "embed-admin-web",
+          "embed-webmail"
         ]
       },
       "test": {
@@ -58,6 +60,7 @@
           "^build",
           "build",
           "embed-admin-web",
+          "embed-webmail",
           {
             "target": "local-services",
             "projects": [
@@ -66,8 +69,21 @@
           }
         ]
       },
+      "typecheck": {
+        "dependsOn": [
+          "^typecheck",
+          "embed-admin-web",
+          "embed-webmail"
+        ]
+      },
+      "lint": {
+        "dependsOn": [
+          "embed-admin-web",
+          "embed-webmail"
+        ]
+      },
       "embed-admin-web": {
-        "command": "node tools/embed-admin-web.mjs apps/admin-web/dist apps/mailless-service/src/admin/web-assets.gen.ts",
+        "command": "node tools/embed-web.mjs apps/admin-web/dist apps/mailless-service/src/admin/web-assets.gen.ts",
         "options": {
           "cwd": "{workspaceRoot}"
         },
@@ -80,7 +96,7 @@
           }
         ],
         "inputs": [
-          "{workspaceRoot}/tools/embed-admin-web.mjs",
+          "{workspaceRoot}/tools/embed-web.mjs",
           {
             "dependentTasksOutputFiles": "**/*",
             "transitive": false
@@ -91,23 +107,38 @@
         ],
         "cache": true
       },
-      "typecheck": {
+      "embed-webmail": {
+        "command": "node tools/embed-web.mjs apps/webmail/dist apps/mailless-service/src/webmail/web-assets.gen.ts",
+        "options": {
+          "cwd": "{workspaceRoot}"
+        },
         "dependsOn": [
-          "^typecheck",
-          "embed-admin-web"
-        ]
-      },
-      "lint": {
-        "dependsOn": [
-          "embed-admin-web"
-        ]
+          {
+            "target": "build",
+            "projects": [
+              "webmail"
+            ]
+          }
+        ],
+        "inputs": [
+          "{workspaceRoot}/tools/embed-web.mjs",
+          {
+            "dependentTasksOutputFiles": "**/*",
+            "transitive": false
+          }
+        ],
+        "outputs": [
+          "{projectRoot}/src/webmail/web-assets.gen.ts"
+        ],
+        "cache": true
       }
     },
     "tags": [
       "type:app"
     ],
     "implicitDependencies": [
-      "admin-web"
+      "admin-web",
+      "webmail"
     ]
   },
   "dependencies": {

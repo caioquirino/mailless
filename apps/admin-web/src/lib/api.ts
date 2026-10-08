@@ -28,7 +28,7 @@ import {
   type ShareAccess,
   type UpdateAccount,
 } from '@mailless/admin-client';
-import type { Session } from './session';
+import type { Session } from '@mailless/web-session';
 
 /** A call the API refused, or that did not get through. `code` is the API's word for why. */
 export class ApiFailure extends Error {

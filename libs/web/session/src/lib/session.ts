@@ -1,5 +1,4 @@
-import type { AppConfig } from './config';
-import { challengeFor, randomToken, sameText } from './pkce';
+import { challengeFor, randomToken, sameText } from './pkce.js';
 
 /*
  * Who is signed in. Signing in happens on the identity provider's own pages
@@ -28,6 +27,17 @@ export class SignInError extends Error {
   }
 }
 
+/** The identity provider's addresses and the client this page signs in as. None of it is secret. */
+export interface SessionConfig {
+  clientId: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  logoutUrl: string;
+  scopes: string[];
+  /** The provider's page for adding a passkey, when it has one. */
+  passkeyEnrolmentUrl?: string | null;
+}
+
 export interface SessionDependencies {
   fetch: typeof fetch;
   /** Holds the verifier and state for the trip to the provider and back, and nothing else. */
@@ -35,15 +45,15 @@ export interface SessionDependencies {
   /** Sends the browser to another address. */
   navigate(url: string): void;
   now(): number;
-  /** `https://host/admin/`. */
+  /** Where the application is served, ending in "/": `https://host/admin/`. */
   baseUrl: string;
+  /**
+   * What the keys in `storage` start with, such as `mailless.admin`. Two
+   * applications on one site share its storage, and must not share a name.
+   */
+  storageKey: string;
 }
 
-const PENDING_KEY = 'mailless.admin.sign-in';
-/** The tokens, for as long as the tab is open. */
-const TOKENS_KEY = 'mailless.admin.tokens';
-/** Says only that this tab was signed in, so that it may sign in again by itself when the tokens have run out. */
-const RESUME_KEY = 'mailless.admin.was-signed-in';
 /** A token this close to running out is renewed rather than used. */
 const NEARLY_OVER_MS = 5_000;
 
@@ -90,11 +100,21 @@ export class Session {
   /** Tokens kept from before a reload that have run out, to renew in `restore`. */
   private lapsed: Tokens | null = null;
 
+  /** Holds the verifier and state for the trip to the provider and back. */
+  private readonly PENDING_KEY: string;
+  /** The tokens, for as long as the tab is open. */
+  private readonly TOKENS_KEY: string;
+  /** Says only that this tab was signed in, so that it may sign in again by itself when the tokens have run out. */
+  private readonly RESUME_KEY: string;
+
   constructor(
-    private readonly config: AppConfig,
+    private readonly config: SessionConfig,
     private readonly deps: SessionDependencies,
   ) {
-    const kept = storedTokens(deps.storage.getItem(TOKENS_KEY));
+    this.PENDING_KEY = `${deps.storageKey}.sign-in`;
+    this.TOKENS_KEY = `${deps.storageKey}.tokens`;
+    this.RESUME_KEY = `${deps.storageKey}.was-signed-in`;
+    const kept = storedTokens(deps.storage.getItem(this.TOKENS_KEY));
     if (!kept) return;
     if (kept.expiresAt - deps.now() > NEARLY_OVER_MS) this.adopt(kept);
     else this.lapsed = kept;
@@ -124,7 +144,7 @@ export class Session {
         refreshToken: tokens.refreshToken ?? lapsed.refreshToken,
       });
     } else {
-      this.deps.storage.removeItem(TOKENS_KEY);
+      this.deps.storage.removeItem(this.TOKENS_KEY);
     }
   }
 
@@ -158,8 +178,8 @@ export class Session {
    */
   takeResume(): boolean {
     if (this.isSignedIn) return false;
-    const resume = this.deps.storage.getItem(RESUME_KEY) !== null;
-    this.deps.storage.removeItem(RESUME_KEY);
+    const resume = this.deps.storage.getItem(this.RESUME_KEY) !== null;
+    this.deps.storage.removeItem(this.RESUME_KEY);
     return resume;
   }
 
@@ -178,7 +198,7 @@ export class Session {
     const state = randomToken();
     const verifier = randomToken();
     this.deps.storage.setItem(
-      PENDING_KEY,
+      this.PENDING_KEY,
       JSON.stringify({ state, verifier, returnTo: innerPath(returnTo) }),
     );
     const url = new URL(this.config.authorizeUrl);
@@ -212,7 +232,7 @@ export class Session {
   private async finish(params: URLSearchParams): Promise<boolean> {
     const refusal = params.get('error');
     if (refusal !== null) {
-      this.deps.storage.removeItem(PENDING_KEY);
+      this.deps.storage.removeItem(this.PENDING_KEY);
       throw new SignInError(
         refusal === 'access_denied'
           ? 'Sign-in was cancelled.'
@@ -222,9 +242,9 @@ export class Session {
     const code = params.get('code');
     if (code === null) return this.isSignedIn;
 
-    const stored = this.deps.storage.getItem(PENDING_KEY);
+    const stored = this.deps.storage.getItem(this.PENDING_KEY);
     // Used once, whatever comes of it.
-    this.deps.storage.removeItem(PENDING_KEY);
+    this.deps.storage.removeItem(this.PENDING_KEY);
     let pending: { state?: unknown; verifier?: unknown; returnTo?: unknown } =
       {};
     try {
@@ -294,8 +314,8 @@ export class Session {
 
   private adopt(tokens: Tokens): void {
     this.tokens = tokens;
-    this.deps.storage.setItem(TOKENS_KEY, JSON.stringify(tokens));
-    this.deps.storage.setItem(RESUME_KEY, '1');
+    this.deps.storage.setItem(this.TOKENS_KEY, JSON.stringify(tokens));
+    this.deps.storage.setItem(this.RESUME_KEY, '1');
     clearTimeout(this.renewTimer);
     if (tokens.refreshToken !== null) {
       const wait = Math.max(
@@ -340,7 +360,7 @@ export class Session {
     clearTimeout(this.renewTimer);
     this.exchange = undefined;
     this.lapsed = null;
-    this.deps.storage.removeItem(TOKENS_KEY);
+    this.deps.storage.removeItem(this.TOKENS_KEY);
     if (this.tokens === null) return;
     this.tokens = null;
     this.changed();
@@ -350,7 +370,7 @@ export class Session {
   signOut(): void {
     this.forget();
     // Signed out on purpose: a reload must not sign in again by itself.
-    this.deps.storage.removeItem(RESUME_KEY);
+    this.deps.storage.removeItem(this.RESUME_KEY);
     const url = new URL(this.config.logoutUrl);
     url.search = new URLSearchParams({
       client_id: this.config.clientId,
@@ -361,7 +381,7 @@ export class Session {
 
   /** Goes to the provider's page for adding a passkey, which sends the user back here. */
   addPasskey(): void {
-    if (this.config.passkeyEnrolmentUrl === null) return;
+    if (!this.config.passkeyEnrolmentUrl) return;
     const url = new URL(this.config.passkeyEnrolmentUrl);
     url.search = new URLSearchParams({
       client_id: this.config.clientId,

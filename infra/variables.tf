@@ -122,6 +122,24 @@ variable "admin_extra_callback_urls" {
   }
 }
 
+variable "webmail_extra_callback_urls" {
+  description = <<-EOT
+    Further addresses the webmail may be signed in to from, besides the
+    deployed one. For running it on your own machine, for example
+    ["http://localhost:5174/mail/callback"].
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for url in var.webmail_extra_callback_urls :
+      can(regex("^https://[^\\s]+$", url)) || can(regex("^http://localhost(:[0-9]+)?(/[^\\s]*)?$", url))
+    ])
+    error_message = "Each address must be https, or http://localhost for local development."
+  }
+}
+
 variable "api_throttle_rate" {
   description = "Sustained requests per second the API accepts, across all clients."
   type        = number
@@ -191,6 +209,12 @@ variable "admin_bundle" {
   description = "Path to the built admin API Lambda bundle. Build it with `pnpm nx build mailless-service`."
   type        = string
   default     = "../apps/mailless-service/dist/admin-api.mjs"
+}
+
+variable "webmail_bundle" {
+  description = "Path to the built webmail Lambda bundle. Build it with `pnpm nx build mailless-service`."
+  type        = string
+  default     = "../apps/mailless-service/dist/webmail.mjs"
 }
 
 variable "purge_bundle" {

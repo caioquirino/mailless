@@ -1,0 +1,67 @@
+{
+  "name": "@mailless/ui",
+  "version": "0.0.1",
+  "description": "The mailless design system: tokens in light and dark, base styles, a theme switch and React components shared by every mailless frontend",
+  "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/web/ui"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/web/ui#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
+  "keywords": [
+    "design-system",
+    "design-tokens",
+    "react",
+    "dark-mode",
+    "css"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@mailless/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./styles.css": "./src/styles/index.css",
+    "./tokens.css": "./src/styles/tokens.css",
+    "./tokens.json": "./tokens.json"
+  },
+  "files": [
+    "dist",
+    "src/styles",
+    "tokens.json",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "name": "ui",
+    "tags": [
+      "scope:web",
+      "type:lib"
+    ]
+  },
+  "dependencies": {
+    "@fontsource-variable/hanken-grotesk": "^5.3.0",
+    "tslib": "^2.3.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/user-event": "^14.6.7"
+  }
+}

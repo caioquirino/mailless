@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
-import { SignInError } from '../lib/session';
+import { SignInError } from '@mailless/web-session';
 import { useServices } from './services';
 
 export function SignInPage({ message }: { message?: string }) {

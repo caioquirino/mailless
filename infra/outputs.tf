@@ -87,6 +87,15 @@ output "auth" {
   value       = module.identity.hosted
 }
 
+output "webmail_url" {
+  description = "Where the webmail is: mail in a browser, for anyone with an account."
+  value       = "${local.admin_base_url}/mail/"
+}
+
+output "webmail_function" {
+  value = aws_lambda_function.webmail.function_name
+}
+
 output "admin_function" {
   value = aws_lambda_function.admin.function_name
 }

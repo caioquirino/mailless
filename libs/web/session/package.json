@@ -1,0 +1,53 @@
+{
+  "name": "@mailless/web-session",
+  "version": "0.0.1",
+  "description": "Sign-in for a web application that runs in a browser: OpenID Connect authorization code flow with PKCE, tokens kept for the tab and renewed",
+  "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/web/session"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/web/session#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
+  "keywords": [
+    "oidc",
+    "openid-connect",
+    "pkce",
+    "oauth2",
+    "sign-in",
+    "browser"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "@mailless/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!**/*.tsbuildinfo"
+  ],
+  "nx": {
+    "name": "web-session",
+    "tags": [
+      "scope:web",
+      "type:lib"
+    ]
+  },
+  "dependencies": {
+    "tslib": "^2.3.0"
+  }
+}

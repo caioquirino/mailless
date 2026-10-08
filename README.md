@@ -45,17 +45,23 @@ depending on them, so that only an app chooses a cloud.
 | [`@mailless/app-passwords`](libs/identity/app-passwords)  | A password of its own for each mail app: made once, stored as hashes, revocable one by one.                | Working |
 | [`@mailless/admin-api`](libs/admin/api)                   | The administration API: accounts for administrators, and each user's own credentials.                      | Working |
 | [`@mailless/admin-client`](libs/admin/client)             | Typed client for it, generated from its OpenAPI document.                                                  | Working |
-| [`@mailless/jmap-client`](libs/jmap/client)               | Typed JMAP client: session, batched calls with back-references, uploads and downloads.                     | Working |
+| [`@mailless/jmap-client`](libs/jmap/client)               | Typed JMAP client: session, batched calls with back-references, a local copy kept in step, blobs.          | Working |
+| [`@mailless/web-session`](libs/web/session)               | Sign-in for a web application in a browser: OpenID Connect with PKCE, tokens kept for the tab and renewed. | Working |
+| [`@mailless/ui`](libs/web/ui)                             | The design system: tokens in light and dark, base styles, a theme switch and React components.             | Working |
 
 Also in this repository:
 
 - [`apps/mailless-service`](apps/mailless-service): the Lambda functions: the
   SES ingest function, which imports inbound mail; the JMAP API; the function
   that records delivery, bounce and complaint reports; the function that
-  sends push notifications; and the function that sends held messages.
+  sends push notifications; the function that sends held messages; and the
+  ones that serve the admin interface and the webmail.
 - [`apps/admin-web`](apps/admin-web): the admin interface, a React app the
   admin function serves under `/admin/`. Users change their password and
   manage their passkeys and app passwords; administrators manage accounts.
+- [`apps/webmail`](apps/webmail): the webmail, a React app served under
+  `/mail/`. Reading, writing and filing mail in a browser, as a client of the
+  JMAP API like any other.
 - [`apps/dev-server`](apps/dev-server): a small local JMAP server over
   in-memory storage for trying things out.
 - [`infra/`](infra): Terraform for SES receiving, S3, DynamoDB and the ingest
@@ -160,7 +166,9 @@ wrapper around `handleRequest`.
 7. ~~`jmap-client`~~
 8. ~~Push notifications through push subscriptions, full-text search,
    `/queryChanges`~~; push over WebSocket, first npm release
-9. Self-hosted build with docker-compose
+9. ~~A webmail on the client library, with notifications~~; contacts, more
+   than one account
+10. Self-hosted build with docker-compose
 
 ## Releasing
 

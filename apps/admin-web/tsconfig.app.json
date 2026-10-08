@@ -39,6 +39,12 @@
   "include": ["src/**/*.js", "src/**/*.jsx", "src/**/*.ts", "src/**/*.tsx"],
   "references": [
     {
+      "path": "../../libs/web/session/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/web/ui/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/admin/client/tsconfig.lib.json"
     }
   ]

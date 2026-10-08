@@ -50,5 +50,5 @@ The browser then sees one origin, so the API needs no CORS.
 ## How it reaches people
 
 `pnpm nx build mailless-service` builds this app, packs the result into the
-admin function's bundle (`tools/embed-admin-web.mjs`) and so deploys it with
+admin function's bundle (`tools/embed-web.mjs`) and so deploys it with
 the function: there is no bucket or CDN to keep in step.

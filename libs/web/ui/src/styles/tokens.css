@@ -1,0 +1,97 @@
+/* Written by tools/build-tokens.mjs from tokens.json. Change that file, not this one. */
+
+:root {
+  color-scheme: light;
+
+  --page: #f3f5f8;
+  --surface: #ffffff;
+  --raised: #f8fafc;
+  --hover: #edf0f4;
+  --text: #18202b;
+  --muted: #5a6575;
+  --border: #dde2ea;
+  --line: #eef1f5;
+  --border-strong: #c3c9d4;
+  --accent: #2456c8;
+  --accent-text: #ffffff;
+  --accent-soft: #e8eefb;
+  --accent-soft-text: #1a3f94;
+  --danger: #b3261e;
+  --danger-text: #ffffff;
+  --danger-soft: #fbeceb;
+  --success: #1c6b3c;
+  --success-soft: #e6f4ea;
+  --warning: #7a5200;
+  --warning-soft: #fdf3d8;
+  --focus: #2456c8;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%);
+  --shadow-raised: 0 8px 30px rgb(16 24 40 / 25%);
+
+  --font-sans: 'Hanken Grotesk Variable', 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --page: #0f1318;
+    --surface: #171c23;
+    --raised: #1e242d;
+    --hover: #222933;
+    --text: #e6e9ef;
+    --muted: #a0a9b8;
+    --border: #2a313c;
+    --line: #222831;
+    --border-strong: #3d4654;
+    --accent: #8fb0ff;
+    --accent-text: #0e1626;
+    --accent-soft: #1d2a47;
+    --accent-soft-text: #c3d3ff;
+    --danger: #ff8a80;
+    --danger-text: #2a0d0b;
+    --danger-soft: #3a1c1a;
+    --success: #7fd6a0;
+    --success-soft: #16301f;
+    --warning: #f2c462;
+    --warning-soft: #33290f;
+    --focus: #8fb0ff;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --page: #0f1318;
+  --surface: #171c23;
+  --raised: #1e242d;
+  --hover: #222933;
+  --text: #e6e9ef;
+  --muted: #a0a9b8;
+  --border: #2a313c;
+  --line: #222831;
+  --border-strong: #3d4654;
+  --accent: #8fb0ff;
+  --accent-text: #0e1626;
+  --accent-soft: #1d2a47;
+  --accent-soft-text: #c3d3ff;
+  --danger: #ff8a80;
+  --danger-text: #2a0d0b;
+  --danger-soft: #3a1c1a;
+  --success: #7fd6a0;
+  --success-soft: #16301f;
+  --warning: #f2c462;
+  --warning-soft: #33290f;
+  --focus: #8fb0ff;
+}

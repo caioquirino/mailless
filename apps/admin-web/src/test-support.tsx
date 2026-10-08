@@ -11,7 +11,7 @@ import { App } from './app/app';
 import { ServicesProvider } from './app/services';
 import { createApi } from './lib/api';
 import type { AppConfig } from './lib/config';
-import { Session } from './lib/session';
+import { Session } from '@mailless/web-session';
 
 export const CONFIG: AppConfig = {
   apiBaseUrl: '/admin/api',
@@ -265,6 +265,7 @@ export function testSession(backend: FakeBackend) {
     navigate: (url) => visited.push(url),
     now: () => Date.now(),
     baseUrl: `${ORIGIN}/admin/`,
+    storageKey: 'mailless.admin',
   });
   return { session, visited };
 }

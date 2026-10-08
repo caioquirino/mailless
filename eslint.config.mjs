@@ -96,6 +96,8 @@ export default [
               sourceTag: 'scope:identity',
               onlyDependOnLibsWithTags: ['scope:identity'],
             },
+            // What a page in a browser needs, whatever it then talks to.
+            { sourceTag: 'scope:web', onlyDependOnLibsWithTags: [] },
             // The client is generated from the admin API, and tested against it.
             {
               sourceTag: 'scope:admin-client',

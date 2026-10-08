@@ -7,6 +7,8 @@
 #   jmap_client_id   the client mail apps sign in to
 #   admin_client_id  the client the admin interface signs in to
 #   admin_scopes     the scopes the admin interface asks for when it signs someone in
+#   webmail_client_id  the client the webmail signs in to
+#   webmail_scopes     the scopes the webmail asks for when it signs someone in
 #   hosted           the provider's own pages: sign-in, sign-out, passkey enrolment
 #   provider         what the admin API needs to manage users with this provider
 #   admin_role       the role whose members may manage accounts
@@ -33,6 +35,14 @@ output "admin_client_id" {
 
 output "admin_scopes" {
   value = local.admin_scopes
+}
+
+output "webmail_client_id" {
+  value = aws_cognito_user_pool_client.webmail.id
+}
+
+output "webmail_scopes" {
+  value = local.webmail_scopes
 }
 
 output "hosted" {

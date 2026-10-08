@@ -403,6 +403,84 @@ describe.skipIf(!reachable)('admin API Lambda bundle', () => {
   });
 });
 
+describe('webmail Lambda bundle', () => {
+  it('hands out the pages under /mail and what they need to sign someone in', async () => {
+    Object.assign(process.env, {
+      WEBMAIL_CLIENT_ID: 'webmail-client',
+      AUTH_AUTHORIZE_URL: 'https://auth.example.com/oauth2/authorize',
+      AUTH_TOKEN_URL: 'https://auth.example.com/oauth2/token',
+      AUTH_LOGOUT_URL: 'https://auth.example.com/logout',
+      AUTH_SCOPES: JSON.stringify(['openid']),
+      ACCOUNT_URL: '/admin/',
+    });
+    const bundle = new URL('../dist/webmail.mjs', import.meta.url).href;
+    const { handler } = (await import(
+      /* @vite-ignore */ bundle
+    )) as typeof import('./webmail.js');
+    const raw = async (path: string) =>
+      (await handler(
+        {
+          version: '2.0',
+          routeKey: 'GET /mail/{proxy+}',
+          rawPath: path,
+          rawQueryString: '',
+          headers: { host: 'mail.example.com' },
+          isBase64Encoded: false,
+          requestContext: {
+            domainName: 'mail.example.com',
+            http: { method: 'GET', path },
+          },
+        } as unknown as Parameters<typeof handler>[0],
+        {} as Parameters<typeof handler>[1],
+      )) as {
+        statusCode: number;
+        body: string;
+        headers: Record<string, string>;
+      };
+
+    for (const path of ['/mail', '/mail/', '/mail/box/abc/t1']) {
+      const page = await raw(path);
+      expect(page.statusCode, path).toBe(200);
+      expect(page.headers['content-type']).toContain('text/html');
+      expect(page.headers['content-security-policy']).toContain(
+        "script-src 'self'",
+      );
+      expect(page.body).toContain('<div id="root">');
+      // Every script and style the page asks for is one this function serves.
+      for (const [, file] of page.body.matchAll(
+        /(?:src|href)="\/mail\/([^"]+)"/g,
+      )) {
+        expect((await raw(`/mail/${file}`)).statusCode, file).toBe(200);
+      }
+    }
+    expect(JSON.parse((await raw('/mail/config.json')).body)).toEqual({
+      sessionUrl: '/.well-known/jmap',
+      clientId: 'webmail-client',
+      authorizeUrl: 'https://auth.example.com/oauth2/authorize',
+      tokenUrl: 'https://auth.example.com/oauth2/token',
+      logoutUrl: 'https://auth.example.com/logout',
+      scopes: ['openid'],
+      accountUrl: '/admin/',
+    });
+    expect((await raw('/mail/assets/nothing-here.js')).statusCode).toBe(404);
+
+    // The worker that shows notifications: always asked for again, so a new one is taken up at once.
+    const worker = await raw('/mail/sw.js');
+    expect(worker.statusCode).toBe(200);
+    expect(worker.headers['content-type']).toContain('text/javascript');
+    expect(worker.headers['cache-control']).toBe('no-cache');
+    expect(
+      (await raw('/mail/manifest.webmanifest')).headers['content-type'],
+    ).toContain('application/manifest+json');
+
+    // Someone who asks for the site itself is shown the way.
+    const root = await raw('/');
+    expect(root.statusCode).toBe(302);
+    expect(root.headers['location']).toBe('/mail/');
+    expect((await raw('/elsewhere')).statusCode).toBe(404);
+  });
+});
+
 describe.skipIf(!reachable)('delivery events Lambda bundle', () => {
   it('loads and skips events it cannot use', async () => {
     Object.assign(process.env, {

@@ -40,6 +40,17 @@ variable "admin_extra_callback_urls" {
   default     = []
 }
 
+variable "webmail_base_url" {
+  description = "Where the webmail is served, without a trailing slash. Sign-in returns to /mail/callback under it."
+  type        = string
+}
+
+variable "webmail_extra_callback_urls" {
+  description = "Further addresses sign-in may return to, for running the webmail locally."
+  type        = list(string)
+  default     = []
+}
+
 variable "admin_role" {
   description = "The role whose members may manage accounts."
   type        = string

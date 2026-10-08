@@ -24,6 +24,10 @@ module "identity" {
   auth_hostname             = coalesce(var.auth_hostname, "auth.${var.domain}")
   admin_base_url            = local.admin_base_url
   admin_extra_callback_urls = var.admin_extra_callback_urls
+
+  # The webmail is on the same site as the admin interface and the JMAP API.
+  webmail_base_url            = local.admin_base_url
+  webmail_extra_callback_urls = var.webmail_extra_callback_urls
 }
 
 # These were in this file before identity became a module. They are the same

@@ -1,4 +1,4 @@
-import { base64Url, challengeFor, randomToken, sameText } from './pkce';
+import { base64Url, challengeFor, randomToken, sameText } from './pkce.js';
 
 describe('PKCE helpers', () => {
   it('derives the challenge of a verifier as RFC 7636 says', async () => {

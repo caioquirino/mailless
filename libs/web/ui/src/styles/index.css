@@ -1,0 +1,4 @@
+/* Everything a page of mailless starts from. Import this once, before the page's own styles. */
+@import '@fontsource-variable/hanken-grotesk';
+@import './tokens.css';
+@import './base.css';

@@ -23,3 +23,6 @@ activate_receipt_rule_set = false
 
 # For running the admin interface on your own machine against this stack.
 # admin_extra_callback_urls = ["http://localhost:5173/admin/callback"]
+
+# For running the webmail on your own machine against this stack.
+# webmail_extra_callback_urls = ["http://localhost:5174/mail/callback"]

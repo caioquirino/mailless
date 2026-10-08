@@ -5,8 +5,8 @@ import {
   signIn,
   testSession,
 } from '../test-support';
-import { challengeFor } from './pkce';
-import { SignInError } from './session';
+import { challengeFor } from '@mailless/web-session';
+import { SignInError } from '@mailless/web-session';
 
 describe('Session', () => {
   it('sends the browser to the provider with a challenge, keeping the verifier for the way back', async () => {

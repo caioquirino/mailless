@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { NavLink, Route, Routes, useLocation } from 'react-router';
 import type { Me } from '@mailless/admin-client';
+import { ThemeSwitch } from '@mailless/ui';
 import { AccountDetailPage } from './account-detail';
 import { AccountsPage } from './accounts';
 import { LoadError, Loading } from './components';
@@ -21,7 +22,7 @@ export function App() {
 }
 
 function SignedIn() {
-  const { api, session } = useServices();
+  const { api, session, theme } = useServices();
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
 
   return (
@@ -36,6 +37,7 @@ function SignedIn() {
         </nav>
         <div className="topbar-user">
           {me.data ? <span className="muted">{me.data.username}</span> : null}
+          {theme ? <ThemeSwitch theme={theme} /> : null}
           <button
             type="button"
             className="button button-small"
