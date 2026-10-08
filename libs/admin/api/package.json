@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "The mailless administration API: accounts, addresses, shares and each user's own credentials",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/admin/api"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/admin/api#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "email",
     "mail",

@@ -1,21 +1,23 @@
 {
-  "name": "@mailless/transport-ses",
+  "name": "@mailless/jmap-client",
   "version": "0.0.1",
-  "description": "Amazon SES mail transport for a mailless JMAP server",
+  "description": "JMAP client (RFC 8620/8621) for TypeScript: session discovery, batched calls with typed back-references, uploads and downloads",
   "license": "Apache-2.0",
   "author": "Caio Quirino",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/caioquirino/mailless.git",
-    "directory": "libs/transport/ses"
+    "directory": "libs/jmap/client"
   },
-  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/transport/ses#readme",
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/jmap/client#readme",
   "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "jmap",
     "email",
     "mail",
-    "ses"
+    "client",
+    "rfc8620",
+    "rfc8621"
   ],
   "engines": {
     "node": ">=22.12"
@@ -42,16 +44,14 @@
     "!**/*.tsbuildinfo"
   ],
   "nx": {
-    "name": "transport-ses",
+    "name": "jmap-client",
     "tags": [
-      "scope:transport",
-      "type:lib",
-      "platform:aws"
+      "scope:jmap-client",
+      "type:lib"
     ]
   },
   "dependencies": {
-    "@aws-sdk/client-sesv2": "^3.1146.0",
-    "@mailless/jmap-mail": "workspace:*",
+    "@mailless/jmap-core": "workspace:*",
     "tslib": "^2.3.0"
   },
   "devDependencies": {

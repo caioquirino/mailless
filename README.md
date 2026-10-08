@@ -7,9 +7,9 @@ libraries.
 > **Status: early, but usable.** Receiving, reading and sending work on real
 > AWS and with a third-party JMAP client: mail for the domain is accepted by
 > SES, stored in S3 and DynamoDB, served over a JMAP API with Cognito sign-in,
-> and sent back out through SES with delivery and bounce reporting. Per-client
-> app passwords are written and tested locally but not yet tried on AWS. There
-> is no client library, and nothing has been published to npm.
+> and sent back out through SES with delivery and bounce reporting. Accounts
+> are managed in a web admin interface. Nothing has been published to npm
+> yet.
 
 ## Why JMAP
 
@@ -45,7 +45,7 @@ depending on them, so that only an app chooses a cloud.
 | [`@mailless/app-passwords`](libs/identity/app-passwords)  | A password of its own for each mail app: made once, stored as hashes, revocable one by one.                | Working |
 | [`@mailless/admin-api`](libs/admin/api)                   | The administration API: accounts for administrators, and each user's own credentials.                      | Working |
 | [`@mailless/admin-client`](libs/admin/client)             | Typed client for it, generated from its OpenAPI document.                                                  | Working |
-| `@mailless/jmap-client`                                   | Typed JMAP client.                                                                                         | Planned |
+| [`@mailless/jmap-client`](libs/jmap/client)               | Typed JMAP client: session, batched calls with back-references, uploads and downloads.                     | Working |
 
 Also in this repository:
 
@@ -155,11 +155,30 @@ wrapper around `handleRequest`.
 3. ~~JMAP API behind API Gateway with Cognito sign-in~~
 4. ~~Composing and sending through SES~~
 5. ~~Delivery, bounce and complaint reporting~~
-6. App passwords (written, being tried out); multi-factor sign-in
-7. `jmap-client`
+6. ~~App passwords, a web admin interface for accounts~~; multi-factor
+   sign-in
+7. ~~`jmap-client`~~
 8. ~~Push notifications through push subscriptions, full-text search,
    `/queryChanges`~~; push over WebSocket, first npm release
 9. Self-hosted build with docker-compose
+
+## Releasing
+
+The libraries are versioned one by one, from the commit messages
+(conventional commits), and published to npm from CI.
+
+```sh
+pnpm release --dry-run   # what would change: versions, changelogs, tags
+pnpm release             # do it: builds from nothing, commits and tags
+git push --follow-tags
+```
+
+Then start the "Publish" workflow on GitHub. It builds from nothing and
+publishes the versions that are in the repository, with provenance, leaving
+alone any that npm already has. It is a dry run unless told otherwise, and
+needs an `NPM_TOKEN` secret that may publish to the `@mailless` scope. For
+the very first release, add `--first-release` to `pnpm release` and tick the
+box of the same name in the workflow.
 
 ## License
 

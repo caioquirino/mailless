@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "Amazon Cognito identity provider for @mailless/identity",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/identity/cognito"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/identity/cognito#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "identity",
     "oidc",

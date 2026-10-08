@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "S3 blob store for a mailless JMAP server",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/storage/s3"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/storage/s3#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "jmap",
     "email",

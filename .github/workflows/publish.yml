@@ -1,0 +1,60 @@
+name: Publish
+
+# Publishes the libraries to npm, at the versions that are in the repository.
+# Versions, changelogs and tags are made on a developer's machine with
+# `pnpm release` and pushed first; this only builds and publishes what is
+# there. A version npm already has is left alone, so running it twice is safe.
+#
+# Started by hand, and a dry run unless told otherwise.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Show what would be published, and publish nothing
+        type: boolean
+        default: true
+      first_release:
+        description: Some of the packages have never been published
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # For npm provenance: lets npm record which commit and workflow built a package.
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Only what is on main, which CI has checked, is published.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # From nothing, and not from the cache: what is published is what this run built.
+      - run: node tools/clean-dist.mjs
+      - run: pnpm nx run-many -t build --projects='libs/*/*' --skip-nx-cache
+
+      - run: >-
+          pnpm nx release publish
+          ${{ inputs.dry_run && '--dry-run' || '' }}
+          ${{ inputs.first_release && '--first-release' || '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'

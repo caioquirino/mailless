@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "Sharing for a JMAP server (RFC 9670): principals and share notifications",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/jmap/sharing"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/jmap/sharing#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "jmap",
     "email",

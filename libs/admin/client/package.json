@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "Typed client for the mailless administration API, generated from its OpenAPI document",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/admin/client"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/admin/client#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "email",
     "mail",
@@ -67,6 +75,18 @@
         "dependsOn": [
           "generate",
           "^build"
+        ],
+        "inputs": [
+          "{projectRoot}/package.json",
+          "{workspaceRoot}/tsconfig.base.json",
+          "{projectRoot}/tsconfig.lib.json",
+          "{projectRoot}/src/**/*.ts",
+          "!{projectRoot}/src/**/*.spec.ts",
+          "{workspaceRoot}/libs/admin/api/openapi.json",
+          {
+            "dependentTasksOutputFiles": "**/*.{d.ts,d.cts,d.mts,tsbuildinfo}",
+            "transitive": true
+          }
         ]
       },
       "typecheck": {
@@ -74,6 +94,20 @@
           "generate",
           "^typecheck",
           "build"
+        ],
+        "inputs": [
+          "{projectRoot}/package.json",
+          "{workspaceRoot}/tsconfig.base.json",
+          "{projectRoot}/tsconfig.lib.json",
+          "{projectRoot}/tsconfig.json",
+          "{projectRoot}/tsconfig.spec.json",
+          "{projectRoot}/vitest.config.mts",
+          "{projectRoot}/src/**/*.ts",
+          "{workspaceRoot}/libs/admin/api/openapi.json",
+          {
+            "dependentTasksOutputFiles": "**/*.{d.ts,d.cts,d.mts,tsbuildinfo}",
+            "transitive": true
+          }
         ]
       },
       "lint": {

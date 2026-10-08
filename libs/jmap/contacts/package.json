@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "Contacts for a JMAP server (RFC 9610): address books and JSContact cards",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/jmap/contacts"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/jmap/contacts#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "jmap",
     "email",

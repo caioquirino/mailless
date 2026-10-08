@@ -63,7 +63,7 @@
       "pattern": "{projectName}@{version}"
     },
     "version": {
-      "preVersionCommand": "pnpm nx run-many -t build --projects=libs/*/*",
+      "preVersionCommand": "node tools/clean-dist.mjs && pnpm nx run-many -t build --projects=libs/*/* --skip-nx-cache",
       "conventionalCommits": true
     },
     "changelog": {

@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "Who may sign in: the identity provider behind an interface, and verification of the tokens it issues",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/identity/core"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/identity/core#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "identity",
     "oidc",

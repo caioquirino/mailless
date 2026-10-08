@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "The JMAP engine (RFC 8620): requests, sessions, accounts, blobs, push and the standard methods, with the storage contract. Knows no kind of data; those come as modules",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/jmap/engine"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/jmap/engine#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "jmap",
     "email",

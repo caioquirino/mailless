@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "JMAP (RFC 8620/8621) protocol types, validators and pure helpers for TypeScript",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/jmap/core"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/jmap/core#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "jmap",
     "email",

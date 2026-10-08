@@ -62,6 +62,9 @@
     },
     {
       "path": "./libs/jmap/mail"
+    },
+    {
+      "path": "./libs/jmap/client"
     }
   ],
   "compilerOptions": {}

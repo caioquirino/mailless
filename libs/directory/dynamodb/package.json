@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "DynamoDB directory for @mailless/directory",
   "license": "Apache-2.0",
+  "author": "Caio Quirino",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caioquirino/mailless.git",
+    "directory": "libs/directory/dynamodb"
+  },
+  "homepage": "https://github.com/caioquirino/mailless/tree/main/libs/directory/dynamodb#readme",
+  "bugs": "https://github.com/caioquirino/mailless/issues",
   "keywords": [
     "email",
     "mail",

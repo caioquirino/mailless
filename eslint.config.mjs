@@ -58,9 +58,14 @@ export default [
                 'scope:jmap-sharing',
               ],
             },
+            // The client is written against the protocol alone, and tested
+            // against the whole server.
             {
               sourceTag: 'scope:jmap-client',
-              onlyDependOnLibsWithTags: ['scope:jmap-core'],
+              onlyDependOnLibsWithTags: [
+                'scope:jmap-core',
+                'scope:jmap-server',
+              ],
             },
             // A transport and a store are written against the part they plug into,
             // and tested against the whole server.
