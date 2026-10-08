@@ -143,6 +143,7 @@ variables {
   events_bundle             = "tests/fixture-bundle.mjs"
   push_bundle               = "tests/fixture-bundle.mjs"
   send_bundle               = "tests/fixture-bundle.mjs"
+  admin_bundle              = "tests/fixture-bundle.mjs"
 
   # Every other variable is pinned too: Terraform loads a local terraform.tfvars
   # into tests, and these must not depend on whoever runs them.
@@ -483,6 +484,11 @@ run "api_on_its_own_hostname" {
     )
     error_message = "The hostname and the JMAP discovery record must be published."
   }
+
+  assert {
+    condition     = output.admin_api_url == "https://mail.example.com/admin/api"
+    error_message = "The admin API must be reached on the API's own hostname."
+  }
 }
 
 run "api_hostname_can_be_chosen" {
@@ -666,6 +672,119 @@ run "sending_later" {
       contains(keys(aws_lambda_function.api.environment[0].variables), "SEND_QUEUE_URL")
     )
     error_message = "The API must know where to arrange a later send."
+  }
+}
+
+run "admin_api" {
+  command = plan
+
+  assert {
+    condition = toset([
+      for statement in data.aws_iam_policy_document.admin.statement : statement.sid
+    ]) == toset(["Logs", "Directory", "AppPasswords", "ManageUsers", "Encryption"])
+    error_message = "Unexpected statements in the admin role policy."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.admin.statement :
+      !contains(statement.resources, "*") && alltrue([for action in statement.actions : !endswith(action, ":*") && action != "*"])
+    ])
+    error_message = "The admin role must not use wildcard actions or resources."
+  }
+
+  # It changes who has a mailbox. It must not be able to read what is in one, or send as anyone.
+  assert {
+    condition = alltrue(flatten([
+      for statement in data.aws_iam_policy_document.admin.statement : [
+        for action in statement.actions : !startswith(action, "s3:") && !startswith(action, "ses:")
+      ]
+    ]))
+    error_message = "The admin role must have no access to stored mail or to sending."
+  }
+
+  # In the table that also holds mail, only app passwords and the state counters can be reached.
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.admin.statement :
+      one(statement.condition).test == "ForAllValues:StringLike" &&
+      one(statement.condition).variable == "dynamodb:LeadingKeys" &&
+      toset(one(statement.condition).values) == toset(["R#*#AppPassword", "L#*#AppPassword", "S#*"]) &&
+      !contains(statement.actions, "dynamodb:Scan")
+      if statement.sid == "AppPasswords"
+    ])
+    error_message = "The admin role must reach only app-password partitions of the metadata table, and never scan it."
+  }
+
+  assert {
+    condition = toset(flatten([
+      for statement in data.aws_iam_policy_document.admin.statement : statement.resources
+      if length(statement.condition) > 0
+    ])) == toset([aws_dynamodb_table.metadata.arn])
+    error_message = "Every statement of the admin role on the metadata table must be limited by key."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in data.aws_iam_policy_document.admin.statement :
+      statement.resources == toset([module.identity.provider.user_pool_arn]) &&
+      alltrue([for action in statement.actions : startswith(action, "cognito-idp:")])
+      if statement.sid == "ManageUsers"
+    ])
+    error_message = "Users may be managed in this stack's pool only."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.admin.handler == "admin-api.handler" &&
+      aws_lambda_function.admin.environment[0].variables["DIRECTORY_TABLE"] == "mailless-directory" &&
+      aws_lambda_function.admin.environment[0].variables["TABLE_NAME"] == "mailless-metadata" &&
+      aws_lambda_function.admin.environment[0].variables["USER_POOL_ID"] == module.identity.provider.user_pool_id &&
+      aws_lambda_function.admin.environment[0].variables["ADMIN_ROLE"] == "MAILLESS_ADMIN" &&
+      endswith(aws_lambda_function.admin.environment[0].variables["PASSKEY_ENROLMENT_URL"], "/passkeys/add")
+    )
+    error_message = "The admin function must know the directory, where app passwords are, the pool, the role and the passkey page."
+  }
+
+  # A token issued for a mail client is not one for the admin API, and the other way round.
+  assert {
+    condition = (
+      jsondecode(aws_lambda_function.admin.environment[0].variables["OIDC_AUDIENCES"]) == [module.identity.admin_client_id] &&
+      jsondecode(aws_lambda_function.api.environment[0].variables["OIDC_AUDIENCES"]) == [module.identity.jmap_client_id] &&
+      aws_lambda_function.admin.environment[0].variables["OIDC_ISSUER"] == module.identity.oidc.issuer &&
+      aws_lambda_function.admin.environment[0].variables["OIDC_AUDIENCE_CLAIM"] == "client_id" &&
+      aws_lambda_function.admin.environment[0].variables["OIDC_USERNAME_CLAIM"] == "username" &&
+      aws_lambda_function.admin.environment[0].variables["OIDC_ROLES_CLAIM"] == "cognito:groups" &&
+      jsondecode(aws_lambda_function.admin.environment[0].variables["OIDC_REQUIRED_CLAIMS"]) == { token_use = "access" }
+    )
+    error_message = "The admin function must accept only access tokens issued for the admin client."
+  }
+
+  assert {
+    condition = (
+      aws_apigatewayv2_route.admin.route_key == "ANY /admin/api/{proxy+}" &&
+      aws_apigatewayv2_route.admin.authorization_type == "JWT" &&
+      aws_apigatewayv2_authorizer.admin.authorizer_type == "JWT" &&
+      aws_apigatewayv2_authorizer.admin.identity_sources == toset(["$request.header.Authorization"]) &&
+      aws_apigatewayv2_authorizer.admin.jwt_configuration[0].issuer == module.identity.oidc.issuer &&
+      aws_apigatewayv2_authorizer.admin.jwt_configuration[0].audience == toset([module.identity.admin_client_id]) &&
+      aws_apigatewayv2_integration.admin.payload_format_version == "2.0"
+    )
+    error_message = "The admin API must be behind a JWT authorizer for the admin client."
+  }
+
+  # The mail endpoints stay as they were: named one by one, with no catch-all and no authorizer of the gateway's.
+  assert {
+    condition = (
+      toset(keys(aws_apigatewayv2_route.jmap)) == toset(["GET /.well-known/jmap", "POST /jmap/api", "POST /jmap/upload/{accountId}", "GET /jmap/download/{proxy+}"]) &&
+      alltrue([for route in aws_apigatewayv2_route.jmap : route.authorizer_id == null])
+    )
+    error_message = "The JMAP routes must not change."
+  }
+
+  assert {
+    condition     = output.admin_function == "mailless-admin"
+    error_message = "The admin function must be an output."
   }
 }
 

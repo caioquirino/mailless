@@ -228,6 +228,135 @@ describe.skipIf(!reachable)('API Lambda bundle', () => {
   });
 });
 
+describe.skipIf(!reachable)('admin API Lambda bundle', () => {
+  it('answers under /admin/api for a token issued to the admin interface, and no other', async () => {
+    Object.assign(process.env, {
+      AWS_REGION: 'us-east-1',
+      AWS_ACCESS_KEY_ID: credentials.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: credentials.secretAccessKey,
+      AWS_ENDPOINT_URL_DYNAMODB: dynamoEndpoint,
+      TABLE_NAME: tableName,
+      DIRECTORY_TABLE: directoryTable,
+      USER_POOL_ID: 'us-east-1_Example00',
+      ADMIN_ROLE: 'MAILLESS_ADMIN',
+      PASSKEY_ENROLMENT_URL: 'https://auth.example.com/passkeys/add',
+      OIDC_ISSUER: ISSUER,
+      OIDC_AUDIENCES: JSON.stringify(['admin-client']),
+      OIDC_AUDIENCE_CLAIM: 'client_id',
+      OIDC_USERNAME_CLAIM: 'username',
+      OIDC_ROLES_CLAIM: 'cognito:groups',
+      OIDC_REQUIRED_CLAIMS: JSON.stringify({ token_use: 'access' }),
+      OIDC_JWKS: JSON.stringify(providerKeys.jwks),
+    });
+    const bundle = new URL('../dist/admin-api.mjs', import.meta.url).href;
+    const { handler } = (await import(
+      /* @vite-ignore */ bundle
+    )) as typeof import('./admin-api.js');
+    const directory = new DynamoDbDirectory({
+      client: DynamoDBDocumentClient.from(dynamo),
+      tableName: directoryTable,
+    });
+    await directory.createAccount({ id: 'adm-1', name: 'Admin One' });
+    await directory.addAddress('adm-1', 'admin@example.com');
+
+    const call = async (
+      method: string,
+      path: string,
+      claims: Record<string, unknown> | null,
+      body?: unknown,
+    ) => {
+      const result = (await handler(
+        {
+          version: '2.0',
+          routeKey: 'ANY /admin/api/{proxy+}',
+          rawPath: path,
+          rawQueryString: '',
+          headers: {
+            host: 'mail.example.com',
+            ...(claims
+              ? {
+                  authorization: `Bearer ${issueTestToken(providerKeys, {
+                    iss: ISSUER,
+                    client_id: 'admin-client',
+                    token_use: 'access',
+                    username: 'adm-1',
+                    ...claims,
+                  })}`,
+                }
+              : {}),
+            ...(body === undefined
+              ? {}
+              : { 'content-type': 'application/json' }),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          isBase64Encoded: false,
+          requestContext: {
+            domainName: 'mail.example.com',
+            http: { method, path },
+          },
+        } as unknown as Parameters<typeof handler>[0],
+        {} as Parameters<typeof handler>[1],
+      )) as { statusCode: number; body: string };
+      return {
+        status: result.statusCode,
+        body: result.body ? JSON.parse(result.body) : null,
+      };
+    };
+
+    expect((await call('GET', '/admin/api/me', null)).status).toBe(401);
+    // A token issued to a mail client is not one for administering.
+    expect(
+      (await call('GET', '/admin/api/me', { client_id: 'mail-client' })).status,
+    ).toBe(401);
+
+    const me = await call('GET', '/admin/api/me', {});
+    expect(me.status).toBe(200);
+    expect(me.body).toMatchObject({
+      username: 'adm-1',
+      isAdmin: false,
+      account: { id: 'adm-1', name: 'Admin One', status: 'active' },
+      addresses: ['admin@example.com'],
+      passkeyEnrolmentUrl: 'https://auth.example.com/passkeys/add',
+    });
+
+    // Without the role, accounts are out of reach; with it, the directory table is read.
+    expect((await call('GET', '/admin/api/accounts', {})).status).toBe(403);
+    const admin = { 'cognito:groups': ['MAILLESS_ADMIN'] };
+    const accounts = await call('GET', '/admin/api/accounts', admin);
+    expect(accounts.status).toBe(200);
+    expect(
+      accounts.body.map((account: { id: string }) => account.id),
+    ).toContain('adm-1');
+    await call(
+      'PUT',
+      '/admin/api/accounts/adm-1/addresses/second%40example.com',
+      admin,
+    );
+    expect(await directory.resolveAddress('second@example.com')).toBe('adm-1');
+
+    // An app password made here opens the mailbox through the JMAP API's own store.
+    const made = await call(
+      'POST',
+      '/admin/api/me/app-passwords',
+      {},
+      {
+        label: 'Laptop',
+      },
+    );
+    expect(made.status).toBe(201);
+    const passwords = createAppPasswordStore(
+      new DynamoDbMetadataStore({
+        client: DynamoDBDocumentClient.from(dynamo),
+        tableName,
+      }),
+    );
+    expect((await passwords.verify('adm-1', made.body.secret))?.label).toBe(
+      'Laptop',
+    );
+    expect((await call('GET', '/elsewhere', admin)).status).toBe(404);
+  });
+});
+
 describe.skipIf(!reachable)('delivery events Lambda bundle', () => {
   it('loads and skips events it cannot use', async () => {
     Object.assign(process.env, {

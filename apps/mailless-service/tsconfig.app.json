@@ -53,6 +53,9 @@
     },
     {
       "path": "../../libs/directory/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/admin-api/tsconfig.lib.json"
     }
   ]
 }

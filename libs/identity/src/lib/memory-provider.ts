@@ -98,6 +98,15 @@ export class InMemoryIdentityProvider implements IdentityProvider {
     return token;
   }
 
+  /**
+   * Stands in for verifying a token: whose it is, or undefined when it is
+   * not one this provider stands behind any more.
+   */
+  whoIs(accessToken: string): IdentityUser | undefined {
+    const user = this.users.get(this.tokens.get(accessToken) ?? '');
+    return user?.enabled ? InMemoryIdentityProvider.describe(user) : undefined;
+  }
+
   /** Stands in for the provider's page where a signed-in user adds a passkey. */
   enrolPasskey(accessToken: string, name: string | null = null): Passkey {
     const user = this.fromToken(accessToken);

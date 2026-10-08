@@ -39,7 +39,8 @@
             "apps/mailless-service/src/events.ts",
             "apps/mailless-service/src/push.ts",
             "apps/mailless-service/src/send.ts",
-            "apps/mailless-service/src/admin.ts"
+            "apps/mailless-service/src/admin.ts",
+            "apps/mailless-service/src/admin-api.ts"
           ]
         },
         "configurations": {
@@ -73,6 +74,7 @@
     "@aws-sdk/client-sqs": "^3.1147.0",
     "@aws-sdk/lib-dynamodb": "^3.1146.0",
     "@aws-sdk/s3-request-presigner": "^3.1146.0",
+    "@mailless/admin-api": "workspace:*",
     "@mailless/directory": "workspace:*",
     "@mailless/directory-dynamodb": "workspace:*",
     "@mailless/identity": "workspace:*",
@@ -82,7 +84,8 @@
     "@mailless/storage-dynamodb": "workspace:*",
     "@mailless/storage-s3": "workspace:*",
     "@mailless/transport-ses": "workspace:*",
-    "aws-jwt-verify": "^5.2.1"
+    "aws-jwt-verify": "^5.2.1",
+    "hono": "^4.13.13"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.164"

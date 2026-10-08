@@ -24,6 +24,7 @@ through SES.
 | Cognito user pool                                        | Who may sign in: one user per account id in `mailboxes`. Sign-up is closed. A password or, once enrolled, a passkey.                                    |
 | Sign-in pages, admin client and `MAILLESS_ADMIN` group   | Cognito's own pages for signing in and enrolling a passkey, on `auth.<domain>` with Route53, for the admin interface and those who may manage accounts. |
 | API Lambda and HTTP API                                  | The JMAP endpoints, throttled, with access logs that hold no credentials or content.                                                                    |
+| Admin Lambda and its route                               | The admin API under `/admin/api`: accounts, addresses and shares, and each user's own credentials. It can change accounts and cannot read mail.         |
 | Certificate and `mail.<domain>` (with Route53)           | The API's own hostname, plus an SRV record so clients can find it from an address.                                                                      |
 | MAIL FROM subdomain                                      | `bounce.<domain>` as the envelope sender of outgoing mail, so SPF passes for your own domain.                                                           |
 | SES configuration set, SNS topic, delivery events Lambda | Every sent message reports back: delivered, bounced, delayed, rejected or complained about. The outcome is recorded on the sent message.                |
@@ -217,6 +218,23 @@ admin_extra_callback_urls = ["http://localhost:5173/admin/callback"]
 All of this is in `modules/identity-cognito`. The rest of the stack reads only
 that module's outputs, so signing in with another provider is another module
 with the same outputs.
+
+### The admin API
+
+Accounts, addresses and shares for administrators, and each user's own
+password, passkeys and app passwords, are managed through an API of its own
+at `terraform output admin_api_url` (`<API address>/admin/api`). What it
+offers is described in
+[`libs/admin-api/openapi.json`](../libs/admin-api/openapi.json).
+
+- Every call needs an access token from the sign-in pages, issued for the
+  admin client. The gateway checks it before anything runs, and the function
+  checks it again. A token a mail client holds is not accepted.
+- Everything under `/accounts` needs the `MAILLESS_ADMIN` role.
+- It runs as a function of its own. That function can change the directory,
+  the users of the pool and app passwords. It has no access to the bucket and
+  cannot send mail, and in the table that holds mail it can reach only the
+  app-password entries and the counters that record that something changed.
 
 ### The accounts directory
 

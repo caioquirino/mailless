@@ -38,6 +38,12 @@
     },
     {
       "path": "./libs/identity"
+    },
+    {
+      "path": "./libs/admin-api"
+    },
+    {
+      "path": "./libs/admin-client"
     }
   ],
   "compilerOptions": {}

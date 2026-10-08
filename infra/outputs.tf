@@ -86,3 +86,12 @@ output "auth" {
   description = "The identity provider's own pages: where people sign in, sign out and enrol a passkey."
   value       = module.identity.hosted
 }
+
+output "admin_function" {
+  value = aws_lambda_function.admin.function_name
+}
+
+output "admin_api_url" {
+  description = "Base URL of the admin API. Its OpenAPI document is libs/admin-api/openapi.json."
+  value       = "${local.admin_base_url}/admin/api"
+}

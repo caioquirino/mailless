@@ -36,6 +36,28 @@ export default [
                 'scope:jmap-server',
               ],
             },
+            // The client is generated from the admin API, and tested against it.
+            {
+              sourceTag: 'scope:admin-client',
+              onlyDependOnLibsWithTags: [
+                'scope:admin',
+                'scope:directory',
+                'scope:identity',
+                'scope:jmap-core',
+                'scope:jmap-server',
+              ],
+            },
+            // The admin API brings the directory, identity and app passwords together.
+            {
+              sourceTag: 'scope:admin',
+              onlyDependOnLibsWithTags: [
+                'scope:admin',
+                'scope:directory',
+                'scope:identity',
+                'scope:jmap-core',
+                'scope:jmap-server',
+              ],
+            },
             // Nor does identity: it says who someone is, whatever they then do.
             {
               sourceTag: 'scope:identity',

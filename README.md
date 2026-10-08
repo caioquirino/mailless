@@ -32,6 +32,8 @@ be served by functions that only run while a request is in flight.
 | [`@mailless/directory-dynamodb`](libs/directory-dynamodb) | The directory on DynamoDB (or DynamoDB Local).                                                                                        | Working |
 | [`@mailless/identity`](libs/identity)                     | Verifies the tokens of any OpenID Connect provider, and the interface for managing its users.                                         | Working |
 | [`@mailless/identity-cognito`](libs/identity-cognito)     | Amazon Cognito as the identity provider.                                                                                              | Working |
+| [`@mailless/admin-api`](libs/admin-api)                   | The administration API: accounts for administrators, and each user's own credentials.                                                 | Working |
+| [`@mailless/admin-client`](libs/admin-client)             | Typed client for it, generated from its OpenAPI document.                                                                             | Working |
 | `@mailless/jmap-client`                                   | Typed JMAP client.                                                                                                                    | Planned |
 
 Also in this repository:

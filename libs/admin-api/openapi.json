@@ -1,0 +1,1980 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "mailless administration API",
+    "version": "1",
+    "description": "Accounts, addresses and shares for administrators, and each user’s own password, passkeys and app passwords. Every call needs an access token of the identity provider as a bearer token."
+  },
+  "servers": [
+    {
+      "url": "/admin/api"
+    }
+  ],
+  "tags": [
+    {
+      "name": "me",
+      "description": "What a signed-in user does for themself."
+    },
+    {
+      "name": "accounts",
+      "description": "What an administrator does. Needs the administrator role."
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An access token of the identity provider."
+      }
+    },
+    "schemas": {
+      "Me": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "isAdmin": {
+            "type": "boolean"
+          },
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Account"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a user who has no mailbox."
+          },
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 320,
+              "description": "name@domain, or *@domain for a whole domain.",
+              "example": "ann@example.com"
+            }
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
+          "passkeyEnrolmentUrl": {
+            "type": ["string", "null"],
+            "description": "The page of the identity provider where a passkey is added, when it has one."
+          }
+        },
+        "required": [
+          "username",
+          "isAdmin",
+          "account",
+          "addresses",
+          "capabilities",
+          "passkeyEnrolmentUrl"
+        ]
+      },
+      "Account": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,64}$",
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "example": "ann"
+          },
+          "name": {
+            "type": ["string", "null"]
+          },
+          "status": {
+            "$ref": "#/components/schemas/AccountStatus"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "name", "status", "createdAt"]
+      },
+      "AccountStatus": {
+        "type": "string",
+        "enum": ["active", "disabled", "deleting"]
+      },
+      "Capabilities": {
+        "type": "object",
+        "properties": {
+          "changeOwnPassword": {
+            "type": "boolean"
+          },
+          "manageOwnPasskeys": {
+            "type": "boolean"
+          },
+          "removePasskeysOfOthers": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "changeOwnPassword",
+          "manageOwnPasskeys",
+          "removePasskeysOfOthers"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong, as a word a program can act on: invalid, unauthorized, forbidden, notFound, exists, addressTaken, invalidPassword, notAuthorized, rateLimited, unsupported."
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["error", "message"]
+      },
+      "ChangePassword": {
+        "type": "object",
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": ["currentPassword", "newPassword"]
+      },
+      "Passkey": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": ["string", "null"]
+          },
+          "createdAt": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["id", "name", "createdAt"]
+      },
+      "AppPassword": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["id", "label", "createdAt", "lastUsedAt"]
+      },
+      "NewAppPassword": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AppPassword"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "Shown this once. It cannot be read again."
+              }
+            },
+            "required": ["secret"]
+          }
+        ]
+      },
+      "NewLabel": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": ["label"]
+      },
+      "AccountDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Account"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "addresses": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 3,
+                  "maxLength": 320,
+                  "description": "name@domain, or *@domain for a whole domain.",
+                  "example": "ann@example.com"
+                }
+              },
+              "shares": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/ShareAccess"
+                },
+                "description": "Who else may use the account, by user."
+              },
+              "sharedWith": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/ShareAccess"
+                },
+                "description": "The other accounts this user may use, by account."
+              },
+              "canSignIn": {
+                "type": "boolean",
+                "description": "Whether the identity provider has an enabled user for it."
+              },
+              "isAdmin": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "addresses",
+              "shares",
+              "sharedWith",
+              "canSignIn",
+              "isAdmin"
+            ]
+          }
+        ]
+      },
+      "ShareAccess": {
+        "type": "string",
+        "enum": ["member", "reader"]
+      },
+      "CreateAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]{1,64}$",
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "example": "ann"
+          },
+          "name": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": ["id"]
+      },
+      "UpdateAccount": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "disabled"]
+          }
+        }
+      },
+      "SetPassword": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "temporary": {
+            "type": "boolean",
+            "default": true,
+            "description": "A temporary password must be replaced by the user when they first sign in."
+          }
+        },
+        "required": ["password"]
+      },
+      "SetShare": {
+        "type": "object",
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/ShareAccess"
+          }
+        },
+        "required": ["access"]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/me": {
+      "get": {
+        "operationId": "getMe",
+        "tags": ["me"],
+        "summary": "Who is signed in, and what they can do here",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The signed-in user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/password": {
+      "post": {
+        "operationId": "changeMyPassword",
+        "tags": ["me"],
+        "summary": "Change the password of the signed-in user",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePassword"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The new password does not meet the policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The identity provider cannot do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/passkeys": {
+      "get": {
+        "operationId": "listMyPasskeys",
+        "tags": ["me"],
+        "summary": "The passkeys of the signed-in user",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Their passkeys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Passkey"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The identity provider cannot do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/passkeys/{passkeyId}": {
+      "delete": {
+        "operationId": "removeMyPasskey",
+        "tags": ["me"],
+        "summary": "Remove a passkey of the signed-in user",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "passkeyId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The identity provider cannot do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/app-passwords": {
+      "get": {
+        "operationId": "listMyAppPasswords",
+        "tags": ["me"],
+        "summary": "The app passwords of the signed-in user, without their secrets",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Their app passwords.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AppPassword"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createMyAppPassword",
+        "tags": ["me"],
+        "summary": "Make a password for one mail app; it is shown once",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewLabel"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new password, with its secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewAppPassword"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/app-passwords/{appPasswordId}": {
+      "delete": {
+        "operationId": "revokeMyAppPassword",
+        "tags": ["me"],
+        "summary": "Revoke an app password of the signed-in user",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "appPasswordId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts": {
+      "get": {
+        "operationId": "listAccounts",
+        "tags": ["accounts"],
+        "summary": "Every account",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The accounts, by id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Account"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAccount",
+        "tags": ["accounts"],
+        "summary": "Make an account and its user, who cannot sign in until given a password",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccount"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The id is taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{id}": {
+      "get": {
+        "operationId": "getAccount",
+        "tags": ["accounts"],
+        "summary": "One account, with its addresses and who it is shared with",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateAccount",
+        "tags": ["accounts"],
+        "summary": "Rename an account, or switch it off and on",
+        "description": "A disabled account cannot be signed in to, by password, passkey or app password. Mail for it still arrives.",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccount"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The account as it is now.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAccount",
+        "tags": ["accounts"],
+        "summary": "Close an account for good",
+        "description": "The user can no longer sign in, the addresses stop delivering, the app passwords are revoked and the account is no longer shared. The account stays listed as \"deleting\", so that its id cannot be given to someone else while its mail still exists.",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{id}/password": {
+      "post": {
+        "operationId": "setAccountPassword",
+        "tags": ["accounts"],
+        "summary": "Give a user a password, for a new user or one who is locked out",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPassword"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The password does not meet the policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{id}/sign-out": {
+      "post": {
+        "operationId": "signOutAccount",
+        "tags": ["accounts"],
+        "summary": "End every session of a user, for when a device is lost",
+        "description": "App passwords are not sessions: revoke those separately.",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{id}/admin": {
+      "put": {
+        "operationId": "grantAdmin",
+        "tags": ["accounts"],
+        "summary": "Let a user manage accounts",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "revokeAdmin",
+        "tags": ["accounts"],
+        "summary": "Stop a user managing accounts, and end their sessions",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{id}/addresses/{address}": {
+      "put": {
+        "operationId": "addAddress",
+        "tags": ["accounts"],
+        "summary": "Deliver an address, or a whole domain, to an account",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 320,
+              "description": "name@domain, or *@domain for a whole domain.",
+              "example": "ann@example.com"
+            },
+            "required": true,
+            "description": "name@domain, or *@domain for a whole domain.",
+            "name": "address",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The address delivers to another account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeAddress",
+        "tags": ["accounts"],
+        "summary": "Stop delivering an address to an account",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 320,
+              "description": "name@domain, or *@domain for a whole domain.",
+              "example": "ann@example.com"
+            },
+            "required": true,
+            "description": "name@domain, or *@domain for a whole domain.",
+            "name": "address",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{id}/shares/{user}": {
+      "put": {
+        "operationId": "setShare",
+        "tags": ["accounts"],
+        "summary": "Let another user use an account, to change it or only to read it",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "user",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetShare"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeShare",
+        "tags": ["accounts"],
+        "summary": "Stop sharing an account with a user",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "user",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{id}/app-passwords": {
+      "get": {
+        "operationId": "listAccountAppPasswords",
+        "tags": ["accounts"],
+        "summary": "The app passwords of an account, without their secrets",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Its app passwords.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AppPassword"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{id}/app-passwords/{appPasswordId}": {
+      "delete": {
+        "operationId": "revokeAccountAppPassword",
+        "tags": ["accounts"],
+        "summary": "Revoke an app password of an account, for when a device is lost",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,64}$",
+              "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+              "example": "ann"
+            },
+            "required": true,
+            "description": "Small letters, digits, \"-\" and \"_\". Never changes.",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "appPasswordId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Done."
+          },
+          "400": {
+            "description": "The request is not valid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in, or the token is not accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but not allowed to do this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no such account or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}
