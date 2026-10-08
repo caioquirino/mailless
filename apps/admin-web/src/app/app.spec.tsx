@@ -356,6 +356,45 @@ describe('accounts', () => {
     ).toBeEnabled();
   });
 
+  it('gives an account a limit of its own, and takes it away again', async () => {
+    const backend = fakeBackend({ username: 'root', isAdmin: true });
+    await renderApp(backend, '/accounts/bob');
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText(/accounts without one have no limit/),
+    ).toBeInTheDocument();
+    const save = screen.getByRole('button', { name: 'Save limit' });
+    expect(save).toBeDisabled();
+
+    await user.type(screen.getByLabelText('Limit'), '2.5');
+    await user.click(save);
+    await waitFor(() =>
+      expect(backend.state.calls).toContainEqual(
+        expect.objectContaining({
+          method: 'PATCH',
+          path: '/accounts/bob',
+          body: { quotaOctets: 2.5 * 1024 * 1024 * 1024 },
+        }),
+      ),
+    );
+    expect(
+      await screen.findByText(/has a limit of its own: 2\.5 GB/),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole('button', { name: 'Remove its own limit' }),
+    );
+    await waitFor(() =>
+      expect(backend.state.calls).toContainEqual(
+        expect.objectContaining({
+          method: 'PATCH',
+          path: '/accounts/bob',
+          body: { quotaOctets: null },
+        }),
+      ),
+    );
+  });
+
   it('closes another account only once its id has been typed', async () => {
     const backend = fakeBackend({ username: 'root', isAdmin: true });
     await renderApp(backend, '/accounts/bob');

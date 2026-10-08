@@ -16,8 +16,8 @@ export interface MailContext {
   subscribeByDefault: boolean;
   /** Whether a reply must keep the subject to join the thread of what it answers. */
   threadsRequireSameSubject: boolean;
-  /** The most octets of mail the account may hold, or null for no limit. */
-  quotaOctets: number | null;
+  /** The most octets of mail the account may hold, or null for no limit. Asked once per request. */
+  quotaOctets(): Promise<number | null>;
   /** The addresses the caller may send from. */
   identities(): Promise<ResolvedIdentity[]>;
   /** Told what became of the vacation response for a delivered message. */

@@ -6966,6 +6966,42 @@ export function describeJmapConformance(
       expect(await storedUsage(h.adapter.metadata, AUTH.accountId)).toBe(0);
     });
 
+    it('asks for the limit of each account, when it is not the same for all', async () => {
+      const asked: string[] = [];
+      const perAccount = createJmapServer({
+        storage: h.adapter,
+        urls: URLS,
+        quota: {
+          maxOctets: async (accountId) => {
+            asked.push(accountId);
+            return accountId === AUTH.accountId ? 5000 : null;
+          },
+        },
+      });
+      const quotas = async (auth: typeof AUTH) =>
+        (
+          (
+            await perAccount.handleRequest(
+              {
+                using: [CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_QUOTA],
+                methodCalls: [
+                  ['Quota/get', { accountId: auth.accountId }, 'a'],
+                  ['Quota/get', { accountId: auth.accountId }, 'b'],
+                ],
+              },
+              auth,
+            )
+          ).methodResponses[1]?.[1] as Json
+        ).list;
+      expect((await quotas(AUTH))[0]).toMatchObject({ hardLimit: 5000 });
+      // Once per request, however many calls it has.
+      expect(asked).toEqual([AUTH.accountId]);
+      // An account without a limit has no quota to show.
+      const other = { accountId: 'acc-unlimited', username: 'other' };
+      await perAccount.provisionAccount(other);
+      expect(await quotas(other)).toEqual([]);
+    });
+
     it('shows no quota without a limit, or to a client that did not ask about mail', async () => {
       // No limit set: nothing to show.
       expect((await h.call('Quota/get', {})).list).toEqual([]);

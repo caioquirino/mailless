@@ -94,6 +94,7 @@ describe('the generated client, against the API it was generated from', () => {
       id: 'bob',
       name: null,
       status: 'active',
+      quotaOctets: null,
       createdAt: expect.any(String),
       addresses: ['bob+news@example.com'],
       shares: { ann: 'reader' },

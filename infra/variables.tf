@@ -15,7 +15,8 @@ variable "domain" {
 
 variable "account_quota_bytes" {
   description = <<-EOT
-    How much mail an account may hold, in bytes, or null for no limit. With a
+    How much mail an account may hold, in bytes, when it has no limit of its
+    own (those are set in the admin interface), or null for no limit. With a
     limit, mail apps can show how full the mailbox is, and the user cannot add
     mail beyond it. Mail arriving from outside is always delivered.
   EOT

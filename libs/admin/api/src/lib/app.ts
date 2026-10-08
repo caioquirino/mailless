@@ -57,8 +57,9 @@ export interface AdminApiOptions {
   adminRole: string;
   /**
    * How full mailboxes are, when the host can tell: what an account's mail
-   * takes up (null when it has not been counted yet) and how much any
-   * account may hold (null for no limit). Without it, usage is unknown.
+   * takes up (null when it has not been counted yet) and how much an account
+   * without a limit of its own may hold (null for no limit). Without it,
+   * what a mailbox holds is unknown.
    */
   usage?: {
     usedOctets(accountId: string): Promise<number | null>;
@@ -250,9 +251,10 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
     }
   };
 
-  const usageOf = async (accountId: string) => ({
-    usedOctets: (await options.usage?.usedOctets(accountId)) ?? null,
-    limitOctets: options.usage?.limitOctets ?? null,
+  const usageOf = async (account: Account) => ({
+    usedOctets: (await options.usage?.usedOctets(account.id)) ?? null,
+    // The account's own limit, or else the one every account gets.
+    limitOctets: account.quotaOctets ?? options.usage?.limitOctets ?? null,
   });
 
   const detail = async (account: Account) => {
@@ -264,7 +266,7 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
       sharedWith: await directory.sharedWith(account.id),
       canSignIn: user?.enabled ?? false,
       isAdmin: user?.roles.includes(adminRole) ?? false,
-      usage: await usageOf(account.id),
+      usage: await usageOf(account),
     };
   };
 
@@ -289,7 +291,7 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
           isAdmin: caller.isAdmin,
           account,
           addresses: account ? await directory.addressesOf(account.id) : [],
-          usage: account ? await usageOf(account.id) : null,
+          usage: account ? await usageOf(account) : null,
           capabilities: identity.capabilities,
           passkeyEnrolmentUrl: options.passkeyEnrolmentUrl ?? null,
         },
@@ -518,7 +520,7 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
         await Promise.all(
           (await directory.listAccounts()).map(async (account) => ({
             ...account,
-            usage: await usageOf(account.id),
+            usage: await usageOf(account),
           })),
         ),
         200,
@@ -619,7 +621,16 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
       const updated = await directory.updateAccount(id, {
         ...(changes.name !== undefined ? { name: changes.name } : {}),
         ...(changes.status ? { status: changes.status } : {}),
+        ...(changes.quotaOctets !== undefined
+          ? { quotaOctets: changes.quotaOctets }
+          : {}),
       });
+      if (
+        changes.quotaOctets !== undefined &&
+        changes.quotaOctets !== account.quotaOctets
+      ) {
+        audit(caller, 'setQuota', id);
+      }
       if (changes.name !== undefined && changes.name !== account.name) {
         audit(caller, 'renameAccount', id);
       }

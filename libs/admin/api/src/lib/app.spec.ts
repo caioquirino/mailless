@@ -176,6 +176,7 @@ describe('admin API', () => {
           id: 'ann',
           name: null,
           status: 'active',
+          quotaOctets: null,
           createdAt: expect.any(String),
         },
         addresses: ['ann@example.com'],
@@ -299,6 +300,7 @@ describe('admin API', () => {
         id: 'bob',
         name: 'Bob B',
         status: 'active',
+        quotaOctets: null,
         createdAt: expect.any(String),
         addresses: [],
         shares: {},
@@ -375,6 +377,54 @@ describe('admin API', () => {
         limitOctets: 1_000_000,
       });
       expect((await t.call(ann, 'GET', '/accounts/root')).status).toBe(403);
+    });
+
+    it('gives an account a limit of its own, in place of the one every account gets', async () => {
+      const set = await t.call(admin, 'PATCH', '/accounts/ann', {
+        quotaOctets: 5_000_000,
+      });
+      expect([set.status, set.body.quotaOctets, set.body.usage]).toEqual([
+        200,
+        5_000_000,
+        { usedOctets: null, limitOctets: 5_000_000 },
+      ]);
+      expect((await t.directory.account('ann'))?.quotaOctets).toBe(5_000_000);
+      expect(t.audit.at(-1)).toMatchObject({
+        action: 'setQuota',
+        account: 'ann',
+      });
+      // The others keep the shared one, and the user sees their own.
+      const listed = (await t.call(admin, 'GET', '/accounts')).body;
+      expect(
+        listed.map((account: Json) => [account.id, account.usage.limitOctets]),
+      ).toEqual([
+        ['ann', 5_000_000],
+        ['root', 1_000_000],
+      ]);
+      expect((await t.call(ann, 'GET', '/me')).body.usage.limitOctets).toBe(
+        5_000_000,
+      );
+
+      for (const quotaOctets of [0, 1000, 1.5, -5, 'lots']) {
+        expect(
+          (await t.call(admin, 'PATCH', '/accounts/ann', { quotaOctets }))
+            .status,
+          String(quotaOctets),
+        ).toBe(400);
+      }
+      // Nobody sets their own, or anyone's, without the role.
+      expect(
+        (await t.call(ann, 'PATCH', '/accounts/ann', { quotaOctets: 9e9 }))
+          .status,
+      ).toBe(403);
+
+      const cleared = await t.call(admin, 'PATCH', '/accounts/ann', {
+        quotaOctets: null,
+      });
+      expect([
+        cleared.body.quotaOctets,
+        cleared.body.usage.limitOctets,
+      ]).toEqual([null, 1_000_000]);
     });
 
     it('renames an account and switches it off and on', async () => {

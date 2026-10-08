@@ -1031,12 +1031,11 @@ export async function importMessage(
 
   // Mail arriving from outside is never turned away for lack of room: the
   // sender could do nothing about it. What the user adds themself is.
-  if (
-    !options.delivery &&
-    ctx.mail.quotaOctets !== null &&
-    (await usedOctets(ctx)) + raw.length > ctx.mail.quotaOctets
-  ) {
-    throw new SetFailure('overQuota', 'The account has no room for this');
+  if (!options.delivery) {
+    const limit = await ctx.mail.quotaOctets();
+    if (limit !== null && (await usedOctets(ctx)) + raw.length > limit) {
+      throw new SetFailure('overQuota', 'The account has no room for this');
+    }
   }
 
   const threadId =

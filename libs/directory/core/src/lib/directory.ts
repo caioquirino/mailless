@@ -13,6 +13,11 @@ export interface Account {
   /** Shown as the sender of the account's mail. */
   name: string | null;
   status: AccountStatus;
+  /**
+   * The most mail the account may hold, in octets, when it has a limit of its
+   * own. Null leaves it to whatever the deployment gives every account.
+   */
+  quotaOctets: number | null;
   createdAt: string;
 }
 
@@ -42,7 +47,11 @@ export interface Directory extends DirectoryReader {
   }): Promise<Account>;
   updateAccount(
     id: string,
-    changes: { name?: string | null; status?: AccountStatus },
+    changes: {
+      name?: string | null;
+      status?: AccountStatus;
+      quotaOctets?: number | null;
+    },
   ): Promise<Account>;
   /** Removes the account with its addresses and every share to or from it. */
   deleteAccount(id: string): Promise<void>;
@@ -120,6 +129,20 @@ export function requireName(name: string | null | undefined): string | null {
     );
   }
   return trimmed;
+}
+
+/** The smallest limit an account may be given: less would not hold a message with a picture. */
+export const MIN_QUOTA_OCTETS = 1024 * 1024;
+
+export function requireQuota(octets: number | null | undefined): number | null {
+  if (octets === null || octets === undefined) return null;
+  if (!Number.isSafeInteger(octets) || octets < MIN_QUOTA_OCTETS) {
+    throw new DirectoryError(
+      'invalid',
+      `A quota is a whole number of octets, at least ${MIN_QUOTA_OCTETS}`,
+    );
+  }
+  return octets;
 }
 
 export function requireStatus(status: string): AccountStatus {

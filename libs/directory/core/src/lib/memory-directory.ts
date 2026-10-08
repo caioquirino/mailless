@@ -5,6 +5,7 @@ import {
   requireAccess,
   requireAccountId,
   requireName,
+  requireQuota,
   requireStatus,
   wildcardFor,
   type Account,
@@ -124,6 +125,7 @@ export class InMemoryDirectory implements Directory {
       id,
       name,
       status: 'active',
+      quotaOctets: null,
       createdAt: this.now().toISOString(),
     };
     this.accounts.set(id, account);
@@ -132,13 +134,20 @@ export class InMemoryDirectory implements Directory {
 
   async updateAccount(
     id: string,
-    changes: { name?: string | null; status?: Account['status'] },
+    changes: {
+      name?: string | null;
+      status?: Account['status'];
+      quotaOctets?: number | null;
+    },
   ): Promise<Account> {
     const account = this.require(id);
     const next = { ...account };
     if (changes.name !== undefined) next.name = requireName(changes.name);
     if (changes.status !== undefined) {
       next.status = requireStatus(changes.status);
+    }
+    if (changes.quotaOctets !== undefined) {
+      next.quotaOctets = requireQuota(changes.quotaOctets);
     }
     this.accounts.set(id, next);
     return { ...next };

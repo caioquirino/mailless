@@ -331,7 +331,12 @@ time to take it back, or until a date. Nothing runs while a message waits.
 
 ### Quota
 
-By default a mailbox has no limit. To give each account one:
+An administrator gives an account a limit of its own on the account's page
+in the admin interface, under "Mailbox size". It reaches the mail functions
+within a minute.
+
+An account without one gets what every account gets, which by default is no
+limit. To set that:
 
 ```hcl
 account_quota_bytes = 5368709120 # 5 GB

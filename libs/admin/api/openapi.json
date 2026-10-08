@@ -103,11 +103,17 @@
           "status": {
             "$ref": "#/components/schemas/AccountStatus"
           },
+          "quotaOctets": {
+            "type": ["integer", "null"],
+            "minimum": 1048576,
+            "maximum": 9007199254740991,
+            "description": "The limit this account was given, in bytes. Null when it has none of its own and gets what every account gets."
+          },
           "createdAt": {
             "type": "string"
           }
         },
-        "required": ["id", "name", "status", "createdAt"]
+        "required": ["id", "name", "status", "quotaOctets", "createdAt"]
       },
       "AccountStatus": {
         "type": "string",
@@ -124,7 +130,7 @@
           "limitOctets": {
             "type": ["integer", "null"],
             "exclusiveMinimum": 0,
-            "description": "How much it may hold, in bytes. Null when there is no limit."
+            "description": "How much it may hold, in bytes: the account's own limit, or else the one every account gets. Null when there is no limit."
           }
         },
         "required": ["usedOctets", "limitOctets"]
@@ -340,6 +346,12 @@
           "status": {
             "type": "string",
             "enum": ["active", "disabled"]
+          },
+          "quotaOctets": {
+            "type": ["integer", "null"],
+            "minimum": 1048576,
+            "maximum": 9007199254740991,
+            "description": "A limit of its own for this account, in bytes, or null to go back to what every account gets."
           }
         }
       },

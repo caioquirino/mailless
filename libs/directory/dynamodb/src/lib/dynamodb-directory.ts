@@ -16,6 +16,7 @@ import {
   requireAccess,
   requireAccountId,
   requireName,
+  requireQuota,
   requireStatus,
   wildcardFor,
   type Account,
@@ -91,6 +92,8 @@ function toAccount(item: Item): Account {
     id: (item['pk'] as string).slice(2),
     name: (item['name'] as string | null | undefined) ?? null,
     status: item['status'] as AccountStatus,
+    // Accounts made before there were quotas have no such attribute.
+    quotaOctets: (item['quotaOctets'] as number | null | undefined) ?? null,
     createdAt: item['createdAt'] as string,
   };
 }
@@ -257,7 +260,11 @@ export class DynamoDbDirectory implements Directory {
 
   async updateAccount(
     id: string,
-    changes: { name?: string | null; status?: AccountStatus },
+    changes: {
+      name?: string | null;
+      status?: AccountStatus;
+      quotaOctets?: number | null;
+    },
   ): Promise<Account> {
     const set: string[] = [];
     const names: Record<string, string> = {};
@@ -271,6 +278,11 @@ export class DynamoDbDirectory implements Directory {
       set.push('#status = :status');
       names['#status'] = 'status';
       values[':status'] = requireStatus(changes.status);
+    }
+    if (changes.quotaOctets !== undefined) {
+      set.push('#quota = :quota');
+      names['#quota'] = 'quotaOctets';
+      values[':quota'] = requireQuota(changes.quotaOctets);
     }
     const missing = new DirectoryError(
       'notFound',

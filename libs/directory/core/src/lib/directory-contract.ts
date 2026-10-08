@@ -40,6 +40,7 @@ export function describeDirectoryContract(
         id: 'ann',
         name: 'Ann A',
         status: 'active',
+        quotaOctets: null,
         createdAt: expect.stringMatching(/^\d{4}-.*Z$/),
       });
       await directory.createAccount({ id: 'bob' });
@@ -67,6 +68,24 @@ export function describeDirectoryContract(
         name: null,
         status: 'disabled',
       });
+
+      // A limit of its own, and back to whatever every account gets.
+      expect(
+        await directory.updateAccount('ann', { quotaOctets: 5_000_000 }),
+      ).toMatchObject({ quotaOctets: 5_000_000, status: 'disabled' });
+      expect((await directory.account('ann'))?.quotaOctets).toBe(5_000_000);
+      expect(
+        (await directory.listAccounts()).map(({ quotaOctets }) => quotaOctets),
+      ).toEqual([5_000_000, null]);
+      for (const quotaOctets of [0, 1000, 1.5e6 + 0.5, -1, Number.NaN]) {
+        expect(
+          await refusal(() => directory.updateAccount('ann', { quotaOctets })),
+          String(quotaOctets),
+        ).toBe('invalid');
+      }
+      expect(
+        await directory.updateAccount('ann', { quotaOctets: null }),
+      ).toMatchObject({ quotaOctets: null });
 
       await directory.deleteAccount('bob');
       expect(await directory.account('bob')).toBeUndefined();

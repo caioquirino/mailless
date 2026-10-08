@@ -158,15 +158,14 @@ export async function usageOps(
 
 /** The quotas a client may see: none without a limit, or when it did not ask about mail. */
 async function listQuotas(ctx: MethodContext): Promise<QuotaObject[]> {
-  if (ctx.mail.quotaOctets === null || !ctx.using.includes(CAPABILITY_MAIL)) {
-    return [];
-  }
+  const hardLimit = await ctx.mail.quotaOctets();
+  if (hardLimit === null || !ctx.using.includes(CAPABILITY_MAIL)) return [];
   return [
     {
       id: MAIL_QUOTA_ID,
       resourceType: 'octets',
       used: Math.max(0, await usedOctets(ctx)),
-      hardLimit: ctx.mail.quotaOctets,
+      hardLimit,
       warnLimit: null,
       softLimit: null,
       scope: 'account',

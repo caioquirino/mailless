@@ -299,7 +299,9 @@ send a message twice, never lose it.
 
 ### Quota
 
-With `quota: { maxOctets }`, each account has one quota: the octets its mail
+With `quota: { maxOctets }`, each account has one quota (`maxOctets` is a
+number for all accounts, or a function asked per account that answers null
+for an account without a limit): the octets its mail
 takes up, against that limit. The count is kept in a record of its own that
 moves in the same commit as the mail, so it is always right, and an account
 from before the count existed is counted the first time it is needed.

@@ -65,8 +65,14 @@ export interface MailModuleOptions {
    * A limit on how much mail an account may hold, in octets. With one, the
    * account has a quota that clients can show. Mail arriving from outside is
    * never refused for it; what the user adds themself is.
+   *
+   * One number is the limit of every account. A function is asked per
+   * account, and answers null for an account without a limit.
    */
-  quota?: { maxOctets: number };
+  quota?: {
+    maxOctets:
+      number | ((accountId: string) => number | null | Promise<number | null>);
+  };
   /**
    * What `isSubscribed` is on a mailbox created without saying, including the
    * standard ones. Default false, as other JMAP servers have it. Set it to
@@ -183,13 +189,19 @@ export function mailModule(options: MailModuleOptions = {}): JmapModule {
         : {}),
     },
     extendContext(ctx) {
+      let quotaOctets: Promise<number | null> | undefined;
       ctx.mail = {
         ...(options.transport ? { transport: options.transport } : {}),
         ...(options.scheduler ? { scheduler: options.scheduler } : {}),
         maxDelayedSend,
         subscribeByDefault: options.subscribeNewMailboxes === true,
         threadsRequireSameSubject: options.threadsRequireSameSubject === true,
-        quotaOctets: options.quota?.maxOctets ?? null,
+        quotaOctets: () =>
+          (quotaOctets ??= (async () => {
+            const max = options.quota?.maxOctets;
+            if (max === undefined) return null;
+            return typeof max === 'number' ? max : max(ctx.auth.accountId);
+          })()),
         ...(options.onAutoReply ? { onAutoReply: options.onAutoReply } : {}),
         identities: async (): Promise<ResolvedIdentity[]> => {
           const configured = (await options.identities?.(ctx.auth)) ?? [];

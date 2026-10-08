@@ -18,6 +18,7 @@ import {
   StatusBadge,
   Usage,
   formatDate,
+  formatSize,
 } from './components';
 import { useServices } from './services';
 
@@ -107,6 +108,7 @@ export function AccountDetailPage({ me }: { me: Me }) {
       {closed ? null : (
         <>
           <Rename account={data} />
+          <Quota account={data} />
           <Addresses account={data} />
           <Shares account={data} />
           <SignIn account={data} isSelf={isSelf} />
@@ -193,6 +195,102 @@ function Rename({ account }: { account: AccountDetail }) {
       <Notice
         error={rename.error}
         success={rename.isSuccess ? 'The name was saved.' : null}
+      />
+    </Section>
+  );
+}
+
+const MB = 1024 * 1024;
+const GB = 1024 * MB;
+
+/** How much mail the account may hold: a limit of its own, or what every account gets. */
+function Quota({ account }: { account: AccountDetail }) {
+  const { api } = useServices();
+  const own = account.quotaOctets;
+  // Shown in whole gigabytes when it is that, in megabytes otherwise.
+  const inGb = own !== null && own % GB === 0;
+  const [amount, setAmount] = useState(
+    own === null ? '' : String(inGb ? own / GB : Math.round(own / MB)),
+  );
+  const [unit, setUnit] = useState<'MB' | 'GB'>(
+    own === null || inGb ? 'GB' : 'MB',
+  );
+  const save = useAccountChange(account.id, (quotaOctets: number | null) =>
+    api.updateAccount(account.id, { quotaOctets }),
+  );
+  const octets = Math.round(Number(amount) * (unit === 'GB' ? GB : MB));
+  const valid = amount.trim() !== '' && Number.isFinite(octets) && octets >= MB;
+  // Without a limit of its own, what the account is held to is what all are.
+  const shared = account.usage.limitOctets;
+  return (
+    <Section
+      title="Mailbox size"
+      description="How much mail the account may hold. Mail arriving from outside is always delivered; what the user adds themself is refused once the mailbox is full."
+    >
+      <p>
+        {own === null
+          ? shared === null
+            ? 'This account has no limit of its own, and accounts without one have no limit.'
+            : `This account has no limit of its own, so it gets what every account gets: ${formatSize(shared)}.`
+          : `This account has a limit of its own: ${formatSize(own)}.`}
+      </p>
+      <form
+        className="form form-inline"
+        onSubmit={(event: FormEvent) => {
+          event.preventDefault();
+          if (valid) save.mutate(octets);
+        }}
+      >
+        <div className="field">
+          <label htmlFor="account-quota">Limit</label>
+          <input
+            id="account-quota"
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="any"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="account-quota-unit">Unit</label>
+          <select
+            id="account-quota-unit"
+            value={unit}
+            onChange={(event) => setUnit(event.target.value as 'MB' | 'GB')}
+          >
+            <option value="MB">MB</option>
+            <option value="GB">GB</option>
+          </select>
+        </div>
+        <button
+          type="submit"
+          className="button"
+          disabled={!valid || save.isPending}
+        >
+          Save limit
+        </button>
+        {own === null ? null : (
+          <button
+            type="button"
+            className="button"
+            disabled={save.isPending}
+            onClick={() => {
+              setAmount('');
+              save.mutate(null);
+            }}
+          >
+            Remove its own limit
+          </button>
+        )}
+      </form>
+      {amount.trim() !== '' && !valid ? (
+        <p className="hint">A limit is at least 1 MB.</p>
+      ) : null}
+      <Notice
+        error={save.error}
+        success={save.isSuccess ? 'The limit was saved.' : null}
       />
     </Section>
   );

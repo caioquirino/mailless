@@ -24,11 +24,22 @@ export const StatusSchema = z
 
 export const AccessSchema = z.enum(['member', 'reader']).openapi('ShareAccess');
 
+/** At least 1 MiB: less would not hold a message with a picture. */
+const QuotaSchema = z
+  .number()
+  .int()
+  .min(1_048_576)
+  .max(Number.MAX_SAFE_INTEGER);
+
 export const AccountSchema = z
   .object({
     id: AccountIdSchema,
     name: z.string().nullable(),
     status: StatusSchema,
+    quotaOctets: QuotaSchema.nullable().openapi({
+      description:
+        'The limit this account was given, in bytes. Null when it has none of its own and gets what every account gets.',
+    }),
     createdAt: z.string(),
   })
   .openapi('Account');
@@ -41,7 +52,7 @@ export const MailUsageSchema = z
     }),
     limitOctets: z.number().int().positive().nullable().openapi({
       description:
-        'How much it may hold, in bytes. Null when there is no limit.',
+        "How much it may hold, in bytes: the account's own limit, or else the one every account gets. Null when there is no limit.",
     }),
   })
   .openapi('MailUsage');
@@ -144,6 +155,10 @@ export const UpdateAccountSchema = z
   .object({
     name: z.string().min(1).max(200).nullable().optional(),
     status: z.enum(['active', 'disabled']).optional(),
+    quotaOctets: QuotaSchema.nullable().optional().openapi({
+      description:
+        'A limit of its own for this account, in bytes, or null to go back to what every account gets.',
+    }),
   })
   .openapi('UpdateAccount');
 

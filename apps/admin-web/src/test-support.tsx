@@ -40,6 +40,7 @@ const account = (
   id,
   name: null,
   status: 'active',
+  quotaOctets: null,
   createdAt: '2026-01-02T03:04:05.000Z',
   addresses: [],
   shares: {},
@@ -99,6 +100,7 @@ export function fakeBackend(
             id: own.id,
             name: own.name,
             status: own.status,
+            quotaOctets: own.quotaOctets,
             createdAt: own.createdAt,
           }
         : null,
@@ -170,10 +172,11 @@ export function fakeBackend(
         return json(
           200,
           [...state.accounts.values()].map(
-            ({ id, name, status, createdAt, usage }) => ({
+            ({ id, name, status, quotaOctets, createdAt, usage }) => ({
               id,
               name,
               status,
+              quotaOctets,
               createdAt,
               usage,
             }),
