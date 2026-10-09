@@ -764,6 +764,16 @@ describe('the webmail', () => {
     const inbox = await screen.findByRole('region', { name: 'Inbox' });
     await within(inbox).findByText('Three');
 
+    // With shift held, all from the last one pressed to this one.
+    const user = userEvent.setup();
+    await user.click(within(inbox).getByLabelText('Select One'));
+    await user.keyboard('{Shift>}');
+    await user.click(within(inbox).getByLabelText('Select Three'));
+    expect(within(inbox).getByText('3 selected')).toBeInTheDocument();
+    await user.click(within(inbox).getByLabelText('Select One'));
+    await user.keyboard('{/Shift}');
+    expect(within(inbox).queryByText(/selected/)).not.toBeInTheDocument();
+
     await userEvent.click(within(inbox).getByLabelText('Select One'));
     await userEvent.click(within(inbox).getByLabelText('Select Two'));
     expect(within(inbox).getByText('2 selected')).toBeInTheDocument();

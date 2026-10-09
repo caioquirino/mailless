@@ -1318,6 +1318,55 @@ a.icon-button {
   position: relative;
 }
 
+/* The box and the star are pressed over the whole height of the line, and all
+   the way from its edge to the face: a little to one side of either is still
+   it, and never the conversation opening instead. */
+.row-item .check {
+  align-self: stretch;
+  margin: 0 calc(-1 * var(--space-3)) 0 calc(-1 * var(--space-4));
+  padding: 0 var(--space-3) 0 var(--space-4);
+  cursor: pointer;
+  /* Shift held to take several: the words of the line are not what is being selected. */
+  user-select: none;
+}
+
+.row-item .check input {
+  cursor: pointer;
+}
+
+.row-item .row-star {
+  align-self: stretch;
+  width: calc(2rem + var(--space-3));
+  height: auto;
+  margin-right: calc(-1 * var(--space-3));
+  padding-right: var(--space-3);
+  border-radius: 0;
+}
+
+/* What shows under the pointer stays the round it was. */
+.row-item .row-star:hover {
+  background: transparent;
+}
+
+.row-item .row-star::before {
+  position: absolute;
+  top: 50%;
+  left: 1rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  content: '';
+  transform: translate(-50%, -50%);
+}
+
+.row-item .row-star:hover::before {
+  background: var(--hover);
+}
+
+.row-item .row-star .icon {
+  position: relative;
+}
+
 .row-text {
   display: grid;
   flex: 1;
@@ -3538,6 +3587,21 @@ a.button.write {
   .row-star {
     width: 2.75rem;
     height: 2.75rem;
+  }
+
+  .row-item .check {
+    margin: 0 calc(-1 * var(--space-1)) 0 calc(-1 * var(--space-2));
+    padding: 0 var(--space-1) 0 var(--space-2);
+  }
+
+  .row-item .row-star {
+    width: calc(2.75rem + var(--space-1));
+    margin-right: calc(-1 * var(--space-1));
+    padding-right: var(--space-1);
+  }
+
+  .row-item .row-star::before {
+    left: 1.375rem;
   }
 
   .tag-chip-remove {

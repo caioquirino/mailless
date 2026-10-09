@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { Email, Id, Mailbox } from '@mailless/jmap-core';
 import { Button, Icon, IconButton, Tag } from '@mailless/ui';
@@ -126,12 +126,15 @@ export function MessageList(props: MessageListProps) {
   useSynced(store.mailboxes);
   useSynced(store.held);
   const [selected, setSelected] = useState<ReadonlySet<Id>>(new Set());
+  /** The row last chosen or let go: with shift held, the next takes along all between the two. */
+  const anchor = useRef<Id | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     setSelected(new Set());
+    anchor.current = null;
     setConfirming(false);
     let current = true;
     setFailed(false);
@@ -393,9 +396,24 @@ export function MessageList(props: MessageListProps) {
                 <input
                   type="checkbox"
                   checked={selected.has(row.id)}
-                  onChange={() => {
+                  onChange={(event) => {
                     const next = new Set(selected);
-                    if (!next.delete(row.id)) next.add(row.id);
+                    const on = !selected.has(row.id);
+                    const from = rows.findIndex(
+                      (each) => each.id === anchor.current,
+                    );
+                    const to = rows.indexOf(row);
+                    const shift = (event.nativeEvent as MouseEvent).shiftKey;
+                    // With shift, all from the last one pressed to this one go the way this one goes.
+                    const span =
+                      shift && from >= 0
+                        ? rows.slice(Math.min(from, to), Math.max(from, to) + 1)
+                        : [row];
+                    for (const each of span) {
+                      if (on) next.add(each.id);
+                      else next.delete(each.id);
+                    }
+                    anchor.current = row.id;
                     setSelected(next);
                   }}
                 />
