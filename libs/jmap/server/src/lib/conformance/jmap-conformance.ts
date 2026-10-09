@@ -8720,7 +8720,28 @@ export function describeJmapConformance(
       expect(suggestion).toContain('DTSTART:20261013T080000Z');
       expect(suggestion).toContain('COMMENT:I am away on the 12th');
       expect(suggestion.match(/^ATTENDEE.*$/gm)).toHaveLength(1);
+      // As Outlook says it, which is the form other calendars read: a maybe, and the time being left.
+      expect(suggestion).toMatch(/^ATTENDEE.*PARTSTAT=TENTATIVE/m);
+      expect(suggestion).toContain('X-MS-OLK-ORIGINALSTART:20261012T110000Z');
+      expect(suggestion).toContain('X-MS-OLK-ORIGINALEND:20261012T123000Z');
       expect((await stored(theirs)).start).toBe('2026-10-12T13:00:00');
+      // Said on other clocks, it is the same moment on the event's own.
+      await h.call('CalendarProposal/send', {
+        eventId: theirs,
+        start: '2026-10-13T09:00:00',
+        timeZone: 'Europe/London',
+      });
+      const words =
+        /text\/plain[^\n]*\r\n[^\n]*\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/.exec(
+          h.sent[1]?.message ?? '',
+        );
+      expect(atob((words?.[1] ?? '').replace(/\s/g, ''))).toMatch(
+        /Suggested: .*10:00.*Europe\/Berlin/,
+      );
+      expect(carried(h.sent[1]?.message ?? '')).toContain(
+        'DTSTART:20261013T080000Z',
+      );
+      h.sent.length = 1;
 
       // One's own event: it is for the others to suggest, and for oneself to say no.
       const own = (

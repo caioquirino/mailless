@@ -82,3 +82,8 @@ export function zonedToUtc(local: string, zone: string | null): number {
   const guess = asUtc - offsetAt(asUtc, zone);
   return asUtc - offsetAt(guess, zone);
 }
+
+/** What the clocks of a zone show at an instant, as a local date and time. */
+export function utcToZoned(instant: number, zone: string): string {
+  return new Date(instant + offsetAt(instant, zone)).toISOString().slice(0, 19);
+}

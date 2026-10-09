@@ -291,7 +291,28 @@ export interface WriteOptions {
   attendee?: string;
   /** A word to go with it: why another time is suggested, say. */
   comment?: string;
+  /**
+   * For another time suggested: the event as it stands. Outlook says the
+   * time being left this way, and what reads Outlook's suggestions looks for it.
+   */
+  instead?: Event;
   now?: Date;
+}
+
+/** When an event is, start and end, as a line says it; null for one of whole days. */
+function span(event: Event): [string, string] | null {
+  if (event['showWithoutTime'] === true) return null;
+  const zone = (event['timeZone'] as string | null | undefined) ?? null;
+  const start = String(event['start']);
+  const length = durationMillis(String(event['duration'] ?? 'PT0S')) ?? 0;
+  if (zone !== null) {
+    const from = zonedToUtc(start, zone);
+    return [`:${utcStamp(from)}`, `:${utcStamp(from + length)}`];
+  }
+  const end = new Date(Date.parse(`${start}Z`) + length)
+    .toISOString()
+    .slice(0, 19);
+  return [`:${compact(start)}`, `:${compact(end)}`];
 }
 
 /** An event as an iCalendar object: what an invitation carries, or a file holds. */
@@ -312,6 +333,15 @@ export function toICalendar(event: Event, options: WriteOptions = {}): string {
       lines.length - 1,
       0,
       `COMMENT:${escape(options.comment.trim())}`,
+    );
+  }
+  const stood = options.instead ? span(options.instead) : null;
+  if (stood) {
+    lines.splice(
+      lines.length - 1,
+      0,
+      `X-MS-OLK-ORIGINALSTART${stood[0]}`,
+      `X-MS-OLK-ORIGINALEND${stood[1]}`,
     );
   }
   // What was changed for one of its times is an event of its own, that says which time it is.

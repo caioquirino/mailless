@@ -60,6 +60,7 @@ import {
   durationMillis,
   isTimeZone,
   LOCAL_DATE_TIME,
+  utcToZoned,
   zonedToUtc,
 } from './time.js';
 
@@ -1555,7 +1556,7 @@ const ProposalSendArgumentsSchema = z.strictObject({
   accountId: z.string(),
   /** The event the account was invited to. */
   eventId: z.string(),
-  /** When it would be instead: on the wall of `timeZone`, or of the event's own. */
+  /** When it would be instead: on the clocks of `timeZone`, or of the event's own. It is sent on the event's. */
   start: z.string().regex(LOCAL_DATE_TIME),
   duration: z.string().optional(),
   timeZone: z.string().nullish(),
@@ -1615,20 +1616,42 @@ export const proposalMethods: Record<string, MethodHandler> = {
         'Another time is suggested for an event one was invited to',
       );
     }
-    const zone =
-      args.timeZone === undefined
-        ? ((event['timeZone'] as string | null | undefined) ?? null)
-        : args.timeZone;
+    // The event keeps to its own clock: a time given on another is the same moment, said on the event's.
+    const zone = (event['timeZone'] as string | null | undefined) ?? null;
+    const given = args.timeZone ?? zone;
     if (
-      (zone !== null && !isTimeZone(zone)) ||
+      (given !== null && !isTimeZone(given)) ||
       (args.duration !== undefined && durationMillis(args.duration) === null)
     ) {
       throw new MethodError('invalidArguments', 'Not a time');
     }
+    const start =
+      zone !== null && given !== null && given !== zone
+        ? utcToZoned(zonedToUtc(args.start, given), zone)
+        : args.start;
+    // Whoever suggests another time has not said yes: where nothing was answered, it goes as a maybe, as Outlook sends it.
+    const asking = new Set<unknown>(
+      attendeesOf(event)
+        .filter((each) => mine.get(each.email) === me)
+        .map((each) => each.participant),
+    );
+    const participants = Object.fromEntries(
+      Object.entries(
+        (event['participants'] ?? {}) as Record<string, unknown>,
+      ).map(([id, each]) => [
+        id,
+        asking.has(each) &&
+        !ANSWERED.includes(
+          String((each as Record<string, unknown>)['participationStatus']),
+        )
+          ? { ...(each as object), participationStatus: 'tentative' }
+          : each,
+      ]),
+    );
     const suggested = {
       ...event,
-      start: args.start,
-      timeZone: zone,
+      participants,
+      start,
       ...(args.duration === undefined ? {} : { duration: args.duration }),
     };
     // Said of the event itself, whatever was changed for some of its times.
@@ -1651,6 +1674,7 @@ export const proposalMethods: Record<string, MethodHandler> = {
       calendar: toICalendar(suggested, {
         method: 'COUNTER',
         attendee: me.email,
+        instead: event,
         ...(args.comment ? { comment: args.comment } : {}),
       }),
     });
