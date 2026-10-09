@@ -308,9 +308,11 @@ describe('the webmail', () => {
       await within(list('Inbox')).findByText('There is nothing here.'),
     ).toBeInTheDocument();
     // Back to the list, which has the whole width again.
-    expect(
-      screen.queryByRole('region', { name: 'Conversation' }),
-    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('region', { name: 'Conversation' }),
+      ).not.toBeInTheDocument(),
+    );
 
     await userEvent.click(
       within(sidebar()).getByRole('link', { name: /Trash/ }),
