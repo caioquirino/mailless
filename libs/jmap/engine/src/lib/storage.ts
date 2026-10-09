@@ -125,8 +125,29 @@ export interface MetadataStore {
   purge(accountId: string, keepGoing?: KeepGoing): Promise<boolean>;
 }
 
+export interface PutBlobOptions {
+  /**
+   * Something uploaded that nothing relies on yet. A store may remove it by
+   * itself once it has been there a day or more, which a client is told to
+   * expect of an upload it never uses (RFC 8620 §6.1); it reads like any
+   * other blob until then. Left out, the blob is there until it is deleted.
+   */
+  temporary?: boolean;
+}
+
 export interface BlobStore {
-  put(accountId: string, blobId: string, data: Uint8Array): Promise<void>;
+  put(
+    accountId: string,
+    blobId: string,
+    data: Uint8Array,
+    options?: PutBlobOptions,
+  ): Promise<void>;
+  /**
+   * Makes a blob that was stored as temporary one that stays: something has
+   * come to rely on it. Does nothing to a blob that already stays, or that
+   * is not there.
+   */
+  keep(accountId: string, blobId: string): Promise<void>;
   get(accountId: string, blobId: string): Promise<Uint8Array | null>;
   delete(accountId: string, blobId: string): Promise<void>;
   /**

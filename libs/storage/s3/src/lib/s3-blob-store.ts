@@ -1,12 +1,24 @@
 import {
   DeleteObjectCommand,
+  DeleteObjectTaggingCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
-import type { BlobStore, KeepGoing } from '@mailless/jmap-engine';
+import type {
+  BlobStore,
+  KeepGoing,
+  PutBlobOptions,
+} from '@mailless/jmap-engine';
+
+/**
+ * The tag a temporary blob is stored with. Nothing here removes one: a
+ * lifecycle rule on the bucket that expires objects with this tag does, and
+ * without such a rule they simply stay.
+ */
+export const TEMPORARY_TAG = { key: 'mailless-temporary', value: 'true' };
 
 export interface S3BlobStoreOptions {
   client: S3Client;
@@ -52,6 +64,7 @@ export class S3BlobStore implements BlobStore {
     accountId: string,
     blobId: string,
     data: Uint8Array,
+    options: PutBlobOptions = {},
   ): Promise<void> {
     await this.client.send(
       new PutObjectCommand({
@@ -59,8 +72,25 @@ export class S3BlobStore implements BlobStore {
         Key: this.key(accountId, blobId),
         Body: data,
         ContentLength: data.length,
+        ...(options.temporary
+          ? { Tagging: `${TEMPORARY_TAG.key}=${TEMPORARY_TAG.value}` }
+          : {}),
       }),
     );
+  }
+
+  async keep(accountId: string, blobId: string): Promise<void> {
+    try {
+      // Without the tag, the rule that expires temporary blobs passes it by.
+      await this.client.send(
+        new DeleteObjectTaggingCommand({
+          Bucket: this.bucket,
+          Key: this.key(accountId, blobId),
+        }),
+      );
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
   }
 
   async get(accountId: string, blobId: string): Promise<Uint8Array | null> {

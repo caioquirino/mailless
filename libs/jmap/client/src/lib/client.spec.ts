@@ -254,4 +254,103 @@ describe('createJmapClient', () => {
     const { client } = await setup();
     await expect(client.batch().send()).rejects.toThrow(/no calls/);
   });
+
+  describe('uploading more than one upload holds', () => {
+    /** A server that takes 1000 bytes an upload, and joins up to 5000. */
+    async function small() {
+      const server = createJmapServer({
+        storage: new InMemoryStorageAdapter(),
+        urls: jmapUrls(BASE),
+        limits: { maxSizeUpload: 1000 },
+        maxSizeBlob: 5000,
+      });
+      await server.provisionAccount(AUTH);
+      const handler = createFetchHandler({
+        server,
+        authenticate: async () => AUTH,
+      });
+      const uploads: number[] = [];
+      const client = createJmapClient({
+        sessionUrl: `${BASE}/.well-known/jmap`,
+        authorization: 'Bearer good',
+        fetch: async (input, init) => {
+          const request = new Request(input, init);
+          if (new URL(request.url).pathname.includes('/upload/')) {
+            uploads.push((await request.clone().arrayBuffer()).byteLength);
+          }
+          return handler(request);
+        },
+      });
+      return { client, uploads };
+    }
+    const bytes = (length: number) =>
+      Uint8Array.from({ length }, (_, index) => index % 251);
+
+    it('sends it in pieces and has them joined, and answers as for one upload', async () => {
+      const { client, uploads } = await small();
+      const data = bytes(2500);
+      const uploaded = await client.upload(data, { type: 'application/pdf' });
+      expect(uploaded).toMatchObject({
+        accountId: 'ann',
+        type: 'application/pdf',
+        size: 2500,
+      });
+      expect([...uploads].sort((a, b) => a - b)).toEqual([500, 1000, 1000]);
+      // What comes back is what was sent, in order.
+      expect(await client.download(uploaded.blobId)).toEqual(data);
+
+      const blob = await client.upload(new Blob([bytes(1500)]), {
+        type: 'image/png',
+      });
+      expect(blob.size).toBe(1500);
+      expect(await client.download(blob.blobId)).toEqual(bytes(1500));
+    });
+
+    it('sends what fits in one upload as one upload', async () => {
+      const { client, uploads } = await small();
+      await client.upload(bytes(1000), { type: 'text/plain' });
+      expect(uploads).toEqual([1000]);
+    });
+
+    it('is told when what is attached to one message is more than it may carry', async () => {
+      const { client } = await small();
+      const first = await client.upload(bytes(3000), { type: 'image/png' });
+      const second = await client.upload(bytes(2500), { type: 'image/png' });
+      const inbox = (
+        await client.call('Mailbox/query', { filter: { role: 'inbox' } })
+      ).ids[0] as string;
+      const attach = (blobIds: string[]) =>
+        client.call('Email/set', {
+          create: {
+            draft: {
+              mailboxIds: { [inbox]: true },
+              subject: 'Pictures',
+              bodyValues: { text: { value: 'Attached.' } },
+              textBody: [{ partId: 'text', type: 'text/plain' }],
+              attachments: blobIds.map((blobId) => ({
+                blobId,
+                type: 'image/png',
+                name: 'picture.png',
+              })),
+            } as never,
+          },
+        });
+      // Each is within what may be joined; together they are more than a message may carry.
+      expect(
+        (await attach([first.blobId, second.blobId])).notCreated?.['draft']
+          ?.type,
+      ).toBe('tooLarge');
+      expect((await attach([first.blobId])).created?.['draft']?.id).toEqual(
+        expect.any(String),
+      );
+    });
+
+    it('refuses more than the server will join, before sending any of it', async () => {
+      const { client, uploads } = await small();
+      await expect(
+        client.upload(bytes(5001), { type: 'application/zip' }),
+      ).rejects.toMatchObject({ status: 413, limit: 'maxSizeBlobSet' });
+      expect(uploads).toEqual([]);
+    });
+  });
 });

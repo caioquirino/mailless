@@ -45,6 +45,9 @@ for (const email of result.get(emails).list) {
 - **Less to spell out.** A call that names no account is for the user's own.
   What a request must say it `using` is worked out from the methods called.
 - **Blobs.** `client.upload(data, { type })` and `client.download(blobId)`.
+  A file larger than the server takes in one upload is sent in pieces and
+  joined there (RFC 9404), where the server offers that; the answer is the
+  same either way.
 - **Sign-in.** `authorization` is the header to send. Give a function and it
   is asked before every request, which is where an expiring token is renewed.
 

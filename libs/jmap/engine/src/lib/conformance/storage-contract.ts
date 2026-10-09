@@ -454,6 +454,20 @@ export function describeStorageContract(
       );
     });
 
+    it('reads a temporary blob like any other, kept or not', async () => {
+      const data = encoder.encode('uploaded');
+      await adapter.blobs.put(ACCOUNT, 'up', data, { temporary: true });
+      expect(await adapter.blobs.get(ACCOUNT, 'up')).toEqual(data);
+      await adapter.blobs.keep(ACCOUNT, 'up');
+      expect(await adapter.blobs.get(ACCOUNT, 'up')).toEqual(data);
+      // Keeping what stays already, or what is not there, changes nothing.
+      await adapter.blobs.keep(ACCOUNT, 'up');
+      await expect(adapter.blobs.keep(ACCOUNT, 'missing')).resolves.toBe(
+        undefined,
+      );
+      expect(await adapter.blobs.get(ACCOUNT, 'missing')).toBeNull();
+    });
+
     it('returns null for unknown blobs and ignores deleting them', async () => {
       expect(await adapter.blobs.get(ACCOUNT, 'missing')).toBeNull();
       await expect(

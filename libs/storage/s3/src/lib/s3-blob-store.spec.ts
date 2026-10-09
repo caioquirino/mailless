@@ -1,5 +1,6 @@
 import {
   CreateBucketCommand,
+  GetObjectTaggingCommand,
   ListObjectsV2Command,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -8,7 +9,7 @@ import {
   describeJmapConformance,
   describeStorageContract,
 } from '@mailless/jmap-server/testing';
-import { S3BlobStore } from './s3-blob-store.js';
+import { S3BlobStore, TEMPORARY_TAG } from './s3-blob-store.js';
 
 // Needs an S3-compatible server: `docker compose up -d` at the workspace root.
 const endpoint = process.env['S3_ENDPOINT'] ?? 'http://127.0.0.1:9090';
@@ -51,5 +52,28 @@ describe.skipIf(!reachable)('S3BlobStore', () => {
     expect(store.key('acc/../x', 'blob id')).toBe(
       'layout/acc%2F..%2Fx/blob%20id',
     );
+  });
+
+  it('tags a temporary blob for the bucket to expire, until it is kept', async () => {
+    const store = new S3BlobStore({ client, bucket, keyPrefix: 'tags/' });
+    const tags = async (blobId: string) =>
+      (
+        await client.send(
+          new GetObjectTaggingCommand({
+            Bucket: bucket,
+            Key: store.key('a', blobId),
+          }),
+        )
+      ).TagSet;
+    await store.put('a', 'stays', new Uint8Array([1]));
+    await store.put('a', 'upload', new Uint8Array([2]), { temporary: true });
+    expect(await tags('stays')).toEqual([]);
+    expect(await tags('upload')).toEqual([
+      { Key: TEMPORARY_TAG.key, Value: TEMPORARY_TAG.value },
+    ]);
+
+    await store.keep('a', 'upload');
+    expect(await tags('upload')).toEqual([]);
+    expect(await store.get('a', 'upload')).toEqual(new Uint8Array([2]));
   });
 });

@@ -36,6 +36,14 @@ export class FsBlobStore implements BlobStore {
     await rename(temporary, target);
   }
 
+  /**
+   * Nothing is removed from a directory by itself, so a temporary blob is
+   * stored like any other and there is nothing to change to keep one.
+   */
+  async keep(): Promise<void> {
+    // Kept already.
+  }
+
   async get(accountId: string, blobId: string): Promise<Uint8Array | null> {
     try {
       return new Uint8Array(await readFile(this.path(accountId, blobId)));

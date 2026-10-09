@@ -106,6 +106,42 @@ describe('ObjectCache', () => {
     );
   });
 
+  it('lets go of what a record held whole no longer has', async () => {
+    const { client } = await setup();
+    interface Card {
+      id: string;
+      name?: { full?: string };
+      titles?: Record<string, { name: string }>;
+    }
+    const call = (method: string, args: Record<string, unknown>) =>
+      client.call(method as never, args as never) as Promise<
+        Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+      >;
+    const book = (await call('AddressBook/get', {}))['list'][0].id as string;
+    const made = await call('ContactCard/set', {
+      create: {
+        c: {
+          addressBookIds: { [book]: true },
+          name: { full: 'Marta' },
+          titles: { t: { name: 'Partner' } },
+        },
+      },
+    });
+    const id = made['created'].c.id as string;
+    const cards = new ObjectCache<Card>(client, {
+      type: 'ContactCard',
+      everything: true,
+    });
+    await cards.load();
+    expect(cards.get(id)?.titles).toEqual({ t: { name: 'Partner' } });
+
+    // Taken off the card, it is not on the copy held of it either.
+    await call('ContactCard/set', { update: { [id]: { titles: null } } });
+    await cards.sync();
+    expect(cards.get(id)?.name).toEqual({ full: 'Marta' });
+    expect(cards.get(id)?.titles).toBeUndefined();
+  });
+
   it('holds the records asked for, and asks again only for what can change', async () => {
     const { client, deliver, posts } = await setup();
     const first = await deliver('One');

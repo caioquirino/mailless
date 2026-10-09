@@ -479,6 +479,8 @@ async function checkMedia(
       throw invalid([path], 'A photo must be an image of a known type');
     }
     item['mediaType'] ??= type ?? 'application/octet-stream';
+    // The card relies on the file from now on: an upload that would have been let go stays.
+    await blobs.blobs.keep(blobs.auth.accountId, blobId as string);
   }
   card['media'] = media;
 }

@@ -131,6 +131,10 @@ export const handler = createLambdaHttpHandler({
         urls: jmapUrls(baseUrl),
         // A Lambda invocation carries at most 6 MB, and binary uploads arrive base64-encoded.
         limits: { maxSizeRequest: 5_000_000, maxSizeUpload: 4_000_000 },
+        // More than one upload holds is uploaded in pieces and joined (RFC 9404).
+        // SES carries 40 MB a message once attachments are encoded, which makes
+        // them a third larger: this much attached leaves room for the rest.
+        maxSizeBlob: 28_000_000,
         transport,
         ...(scheduler ? { scheduler } : {}),
         // An account's own limit is set in the admin interface and kept in the directory.

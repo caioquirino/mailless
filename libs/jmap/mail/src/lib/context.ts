@@ -12,6 +12,11 @@ export interface MailContext {
   scheduler?: SendScheduler;
   /** The longest a message may be held, in seconds; 0 when it cannot be. */
   maxDelayedSend: number;
+  /**
+   * The largest blob that may be put together from pieces, and the most
+   * that a message's attachments may weigh together, in octets.
+   */
+  maxSizeBlob: number;
   /** What `isSubscribed` is on a mailbox created without saying. */
   subscribeByDefault: boolean;
   /** Whether a reply must keep the subject to join the thread of what it answers. */

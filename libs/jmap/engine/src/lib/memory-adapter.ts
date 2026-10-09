@@ -2,6 +2,7 @@ import {
   ConflictError,
   StateMismatchError,
   type BlobStore,
+  type PutBlobOptions,
   type ChangeLogEntry,
   type CommitOptions,
   type IndexKeys,
@@ -215,6 +216,7 @@ export class InMemoryMetadataStore implements MetadataStore {
 
 export class InMemoryBlobStore implements BlobStore {
   private readonly blobs = new Map<string, Uint8Array>();
+  private readonly temporary = new Set<string>();
 
   private key(accountId: string, blobId: string): string {
     return `${accountId}\u0000${blobId}`;
@@ -224,8 +226,21 @@ export class InMemoryBlobStore implements BlobStore {
     accountId: string,
     blobId: string,
     data: Uint8Array,
+    options: PutBlobOptions = {},
   ): Promise<void> {
-    this.blobs.set(this.key(accountId, blobId), data.slice());
+    const key = this.key(accountId, blobId);
+    this.blobs.set(key, data.slice());
+    if (options.temporary) this.temporary.add(key);
+    else this.temporary.delete(key);
+  }
+
+  async keep(accountId: string, blobId: string): Promise<void> {
+    this.temporary.delete(this.key(accountId, blobId));
+  }
+
+  /** Whether a blob is one this store would be free to remove after a while. Nothing here ever does. */
+  isTemporary(accountId: string, blobId: string): boolean {
+    return this.temporary.has(this.key(accountId, blobId));
   }
 
   async get(accountId: string, blobId: string): Promise<Uint8Array | null> {
@@ -234,6 +249,7 @@ export class InMemoryBlobStore implements BlobStore {
 
   async delete(accountId: string, blobId: string): Promise<void> {
     this.blobs.delete(this.key(accountId, blobId));
+    this.temporary.delete(this.key(accountId, blobId));
   }
 
   async purge(accountId: string, keepGoing?: KeepGoing): Promise<boolean> {
@@ -242,6 +258,7 @@ export class InMemoryBlobStore implements BlobStore {
       if (!key.startsWith(prefix)) continue;
       if (keepGoing && !keepGoing()) return false;
       this.blobs.delete(key);
+      this.temporary.delete(key);
     }
     return true;
   }

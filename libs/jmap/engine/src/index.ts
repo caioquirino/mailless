@@ -27,6 +27,7 @@ export {
   ConflictError,
   StateMismatchError,
   type BlobStore,
+  type PutBlobOptions,
   type ChangeLogEntry,
   type CommitOptions,
   type IndexKeys,

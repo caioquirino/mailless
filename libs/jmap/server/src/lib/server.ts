@@ -73,6 +73,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     threadsRequireSameSubject,
     scheduler,
     maxDelayedSend,
+    maxSizeBlob,
     identities,
     onAutoReply,
     ...engineOptions
@@ -86,6 +87,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       : { threadsRequireSameSubject }),
     ...(scheduler ? { scheduler } : {}),
     ...(maxDelayedSend === undefined ? {} : { maxDelayedSend }),
+    ...(maxSizeBlob === undefined ? {} : { maxSizeBlob }),
     ...(identities ? { identities } : {}),
     ...(onAutoReply ? { onAutoReply } : {}),
   };

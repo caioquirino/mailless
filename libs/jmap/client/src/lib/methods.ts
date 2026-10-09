@@ -147,6 +147,17 @@ export interface MethodMap {
 
   'EmailSubmission/get': Standard<EmailSubmission, never>['get'];
   'EmailSubmission/changes': Standard<EmailSubmission, never>['changes'];
+  'EmailSubmission/query': {
+    args: QueryArguments<{
+      identityIds?: Id[];
+      emailIds?: Id[];
+      threadIds?: Id[];
+      undoStatus?: EmailSubmission['undoStatus'];
+      before?: string;
+      after?: string;
+    }>;
+    response: QueryResponse;
+  };
   'EmailSubmission/set': {
     args: SetArguments<EmailSubmission> & {
       onSuccessUpdateEmail?: Record<Id, Record<string, unknown>> | null;

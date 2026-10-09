@@ -205,10 +205,10 @@ export const blobMethods: Record<string, MethodHandler> = {
         for (const [index, source] of sources.entries()) {
           const piece = await readSource(ctx, source, `data/${index}`);
           size += piece.length;
-          if (size > ctx.limits.maxSizeUpload) {
+          if (size > ctx.mail.maxSizeBlob) {
             throw new SetFailure(
               'tooLarge',
-              `A blob may be at most ${ctx.limits.maxSizeUpload} octets`,
+              `A blob may be at most ${ctx.mail.maxSizeBlob} octets`,
             );
           }
           pieces.push(piece);
@@ -221,7 +221,7 @@ export const blobMethods: Record<string, MethodHandler> = {
         }
 
         const blobId = generateId('bu');
-        await ctx.blobs.put(accountId, blobId, data);
+        await ctx.blobs.put(accountId, blobId, data, { temporary: true });
         // What the upload endpoint would have answered, and the id under its usual name.
         created[creationId] = { id: blobId, accountId, blobId, type, size };
         ctx.createdIds.set(creationId, blobId);

@@ -96,6 +96,14 @@ export interface MailModuleOptions {
   /** The longest a message may be held, in seconds. Default 30 days. */
   maxDelayedSend?: number;
   /**
+   * The largest blob that may be put together from pieces with Blob/upload,
+   * and the most that a message's attachments may weigh together, in
+   * octets. Set it to what the transport will carry where that is more than
+   * one upload may hold: a client then uploads a large file in pieces and
+   * has them joined (RFC 9404). Defaults to the largest single upload.
+   */
+  maxSizeBlob?: number;
+  /**
    * The addresses a caller may send from. Identities are configuration, not
    * user data: clients can read them but not change them. Without this the
    * caller has no identities and cannot submit mail.
@@ -163,12 +171,12 @@ export function mailModule(options: MailModuleOptions = {}): JmapModule {
         maxMailboxesPerEmail: null,
         maxMailboxDepth: MAX_MAILBOX_DEPTH,
         maxSizeMailboxName: 255,
-        maxSizeAttachmentsPerEmail: limits.maxSizeUpload,
+        maxSizeAttachmentsPerEmail: options.maxSizeBlob ?? limits.maxSizeUpload,
         emailQuerySortOptions: EMAIL_SORT_OPTIONS,
         mayCreateTopLevelMailbox: true,
       } satisfies MailAccountCapability,
       [CAPABILITY_BLOB]: {
-        maxSizeBlobSet: limits.maxSizeUpload,
+        maxSizeBlobSet: options.maxSizeBlob ?? limits.maxSizeUpload,
         maxDataSources: MAX_DATA_SOURCES,
         supportedTypeNames: LOOKUP_TYPES,
         supportedDigestAlgorithms: DIGEST_ALGORITHMS,
@@ -194,6 +202,7 @@ export function mailModule(options: MailModuleOptions = {}): JmapModule {
         ...(options.transport ? { transport: options.transport } : {}),
         ...(options.scheduler ? { scheduler: options.scheduler } : {}),
         maxDelayedSend,
+        maxSizeBlob: options.maxSizeBlob ?? ctx.limits.maxSizeUpload,
         subscribeByDefault: options.subscribeNewMailboxes === true,
         threadsRequireSameSubject: options.threadsRequireSameSubject === true,
         quotaOctets: () =>

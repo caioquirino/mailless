@@ -817,7 +817,19 @@ async function createEmail(
   ctx: MethodContext,
   input: Record<string, unknown>,
 ): Promise<{ id: string } & Record<string, unknown>> {
-  const draft = await buildDraft(input, (blobId) => readBlob(ctx, blobId));
+  // What is attached is counted as it is read: more than a message may carry is refused before it is built.
+  let attached = 0;
+  const draft = await buildDraft(input, async (blobId) => {
+    const blob = await readBlob(ctx, blobId);
+    attached += blob?.length ?? 0;
+    if (attached > ctx.mail.maxSizeBlob) {
+      throw new SetFailure(
+        'tooLarge',
+        `What is attached to a message may be at most ${ctx.mail.maxSizeBlob} octets in all`,
+      );
+    }
+    return blob;
+  });
 
   if (draft.receivedAt !== undefined && draft.receivedAt !== null) {
     if (!UTCDateSchema.safeParse(draft.receivedAt).success) {

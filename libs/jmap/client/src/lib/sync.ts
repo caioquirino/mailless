@@ -378,7 +378,12 @@ export class ObjectCache<T extends { id: Id }> implements Synced {
           ? (result.get(created) as unknown as GetResponse<T>).list
           : []),
       ];
-      this.merge(fresh);
+      if (this.options.properties || this.options.changing) this.merge(fresh);
+      else {
+        // Asked for whole, a record is what the server says it is now: a
+        // property it no longer has is not one to go on holding.
+        for (const record of fresh) this.records.set(record.id, record);
+      }
       this.state = changed.newState;
       if (touched || fresh.length > 0) this.listeners.changed();
       return changed.hasMoreChanges;

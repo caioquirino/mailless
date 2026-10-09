@@ -410,6 +410,9 @@ export function createJmapEngine(options: JmapEngineOptions): JmapEngine {
     put: async () => {
       throw new MethodError('accountReadOnly');
     },
+    keep: async () => {
+      throw new MethodError('accountReadOnly');
+    },
     delete: async () => {
       throw new MethodError('accountReadOnly');
     },
@@ -494,7 +497,8 @@ export function createJmapEngine(options: JmapEngineOptions): JmapEngine {
           continue;
         }
         const copy = generateId('bu');
-        await to.blobs.put(accountId, copy, data);
+        // Like an upload: there for something to be made of it, not to stay.
+        await to.blobs.put(accountId, copy, data, { temporary: true });
         copied[blobId] = copy;
       }
       return {
@@ -686,7 +690,10 @@ export function createJmapEngine(options: JmapEngineOptions): JmapEngine {
         );
       }
       const blobId = generateId('bu');
-      await options.storage.blobs.put(accountId, blobId, data);
+      // Nothing relies on an upload until something is made of it: storage may let it go after a while.
+      await options.storage.blobs.put(accountId, blobId, data, {
+        temporary: true,
+      });
       return { accountId, blobId, type, size: data.length };
     },
 

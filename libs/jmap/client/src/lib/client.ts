@@ -1,4 +1,5 @@
 import {
+  CAPABILITY_BLOB,
   CAPABILITY_CORE,
   CAPABILITY_MAIL,
   type Id,
@@ -303,19 +304,124 @@ export class JmapClient {
     return (await batch.send()).get(call);
   }
 
-  /** Stores content on the server and returns the blob it became, to attach to a message or import. */
+  /**
+   * Stores content on the server and returns the blob it became, to attach
+   * to a message or import.
+   *
+   * Content larger than the server takes in one upload is sent in pieces
+   * and joined there (RFC 9404), where the server offers that: the answer is
+   * the same either way. Larger than the server will join, it is refused
+   * with a `JmapRequestError` of status 413 before anything is sent.
+   */
   async upload(
     data: Uint8Array | Blob | string,
     options: { type: string; accountId?: Id },
   ): Promise<UploadResponse> {
     const session = await this.session();
     const accountId = options.accountId ?? (await this.accountId());
+    const content =
+      typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const size = content instanceof Blob ? content.size : content.length;
+
+    const core = session.capabilities[CAPABILITY_CORE] as
+      { maxSizeUpload?: number; maxConcurrentUpload?: number } | undefined;
+    const most = core?.maxSizeUpload ?? 0;
+    const joining = session.accounts[accountId]?.accountCapabilities[
+      CAPABILITY_BLOB
+    ] as
+      { maxSizeBlobSet?: number | null; maxDataSources?: number } | undefined;
+    // Small enough for one upload, or nowhere to join pieces: sent whole, for the server to judge.
+    if (most <= 0 || size <= most || !joining) {
+      return this.uploadWhole(session, accountId, content, options.type);
+    }
+
+    const pieces = Math.ceil(size / most);
+    if (
+      (typeof joining.maxSizeBlobSet === 'number' &&
+        size > joining.maxSizeBlobSet) ||
+      pieces > (joining.maxDataSources ?? 64)
+    ) {
+      throw new JmapRequestError(
+        413,
+        'urn:ietf:params:jmap:error:limit',
+        `This is larger than the server takes: at most ${
+          joining.maxSizeBlobSet ?? most * (joining.maxDataSources ?? 64)
+        } bytes`,
+        'maxSizeBlobSet',
+      );
+    }
+
+    const ids = new Array<Id>(pieces);
+    let next = 0;
+    const worker = async () => {
+      for (let index = next++; index < pieces; index = next++) {
+        const piece =
+          content instanceof Blob
+            ? content.slice(index * most, (index + 1) * most)
+            : content.subarray(index * most, (index + 1) * most);
+        ids[index] = (
+          await this.uploadWhole(
+            session,
+            accountId,
+            piece,
+            'application/octet-stream',
+          )
+        ).blobId;
+      }
+    };
+    // A few at a time: as many as the server says it takes, and no more than is polite.
+    await Promise.all(
+      Array.from(
+        { length: Math.min(pieces, core?.maxConcurrentUpload ?? 2, 3) },
+        worker,
+      ),
+    );
+
+    const joined = (await this.call(
+      'Blob/upload',
+      {
+        accountId,
+        create: {
+          whole: {
+            data: ids.map((blobId) => ({ blobId })),
+            type: options.type,
+          },
+        },
+      },
+      { accountId },
+    )) as {
+      created?: Record<string, { blobId?: Id; size?: number }> | null;
+      notCreated?: Record<string, Record<string, unknown>> | null;
+    };
+    const whole = joined.created?.['whole'];
+    if (!whole?.blobId) {
+      const refused = joined.notCreated?.['whole'] ?? {};
+      throw new JmapMethodError(
+        'Blob/upload',
+        typeof refused['type'] === 'string' ? refused['type'] : 'serverFail',
+        refused,
+      );
+    }
+    return {
+      accountId,
+      blobId: whole.blobId,
+      type: options.type,
+      size: whole.size ?? size,
+    };
+  }
+
+  private async uploadWhole(
+    session: Session,
+    accountId: Id,
+    data: Uint8Array | Blob,
+    type: string,
+  ): Promise<UploadResponse> {
     const response = await this.fetch(
       expand(session.uploadUrl, { accountId }),
       {
         method: 'POST',
         headers: await this.headers({
-          'content-type': options.type,
+          'content-type': type,
           accept: 'application/json',
         }),
         body: data as RequestInit['body'],

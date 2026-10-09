@@ -11,6 +11,7 @@ export {
   StateMismatchError,
   type AuthContext,
   type BlobStore,
+  type PutBlobOptions,
   type ChangeLogEntry,
   type CommitOptions,
   type IndexKeys,
