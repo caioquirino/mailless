@@ -1,5 +1,10 @@
 import type { CoreCapability } from '@mailless/jmap-core';
-import { calendarsModule } from '@mailless/jmap-calendars';
+import {
+  calendarsModule,
+  nextCalendarAlert,
+  takeCalendarAlerts,
+  type CalendarAlert,
+} from '@mailless/jmap-calendars';
 import { contactsModule } from '@mailless/jmap-contacts';
 import {
   createJmapEngine,
@@ -66,6 +71,17 @@ export interface JmapServer extends Omit<JmapEngine, 'contextFor'> {
     auth: AuthContext,
     submissionId: string,
   ): Promise<ScheduledSendOutcome>;
+  /**
+   * The calendar reminders of an account that have come due and were not
+   * told of yet, and when to ask next. Asking marks them as told: it is for
+   * whoever tells the account's devices, at the moment it does.
+   */
+  takeCalendarAlerts(
+    auth: AuthContext,
+    now?: Date,
+  ): Promise<{ due: CalendarAlert[]; next: Date | null }>;
+  /** When an account next has a reminder due, without marking anything. Null with no events. */
+  nextCalendarAlert(auth: AuthContext, now?: Date): Promise<Date | null>;
 }
 
 export function createJmapServer(options: JmapServerOptions): JmapServer {
@@ -114,5 +130,9 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       recordDelivery(contextFor(auth), submissionId, updates),
     sendScheduled: (auth, submissionId) =>
       sendScheduled(contextFor(auth), submissionId),
+    takeCalendarAlerts: (auth, now = new Date()) =>
+      takeCalendarAlerts(contextFor(auth), now),
+    nextCalendarAlert: (auth, now = new Date()) =>
+      nextCalendarAlert(contextFor(auth), now),
   };
 }

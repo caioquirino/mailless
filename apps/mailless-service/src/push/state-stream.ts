@@ -10,6 +10,11 @@ export interface PushDependencies {
    * or failing, a push says only that something changed.
    */
   arrived?(accountId: string): Promise<Arrival[]>;
+  /**
+   * An account's calendar changed: when it is next to be reminded of
+   * something may have changed with it. Failing must not stop the push.
+   */
+  calendarChanged?(accountId: string): Promise<void>;
   log?(entry: Record<string, unknown>): void;
 }
 
@@ -58,5 +63,16 @@ export async function pushChanges(
     );
     // Type names and counts only: no account, no push service address, nothing of the mail.
     deps.log?.({ event: 'push', types: [...types].sort(), ...report });
+    if (
+      deps.calendarChanged &&
+      (types.has('Calendar') || types.has('CalendarEvent'))
+    ) {
+      const calendarChanged = deps.calendarChanged;
+      const outcome = await calendarChanged(accountId).then(
+        () => 'set',
+        (error: unknown) => (error as { name?: string }).name ?? 'Error',
+      );
+      deps.log?.({ event: 'calendar-alerts-rescheduled', outcome });
+    }
   }
 }

@@ -68,8 +68,8 @@ describe('Notifications', () => {
     ).toBe(65);
 
     const [made] = await subscriptions();
-    // Only when mail is delivered, and confirmed with the code the test push carried.
-    expect(made?.types).toEqual(['EmailDelivery']);
+    // When mail is delivered and when a reminder is due, and confirmed with the code the test push carried.
+    expect(made?.types).toEqual(['EmailDelivery', 'CalendarAlert']);
     expect(made?.verificationCode).toEqual(expect.any(String));
     expect(browser.pushes[0]?.['@type']).toBe('PushVerification');
     expect(
@@ -134,6 +134,20 @@ describe('Notifications', () => {
       before?.id,
     ]);
     expect(browser.state.asked).toBe(1);
+  });
+
+  it('is told of reminders too, when it was made before there were any', async () => {
+    const { store, make, subscriptions } = await setup();
+    await make().enable();
+    const [before] = await subscriptions();
+    await store.client.call('PushSubscription/set', {
+      update: { [before?.id as string]: { types: ['EmailDelivery'] } },
+    });
+
+    await make().start();
+    const [after] = await subscriptions();
+    expect(after?.id).toBe(before?.id);
+    expect(after?.types).toEqual(['EmailDelivery', 'CalendarAlert']);
   });
 
   it('makes it again when the server has let go of it', async () => {
@@ -362,6 +376,59 @@ describe('the service worker', () => {
       'mailless:arrived': [{ from: 'Bob', subject: 'Plans', preview: '' }],
     });
     expect(looking.shown).toEqual([]);
+  });
+
+  it('reminds of what is about to begin in the calendar, even to someone looking at their mail', async () => {
+    const soon = new Date(Date.now() + 30 * 60_000 + 5_000);
+    const later = new Date(soon.getTime() + 60 * 60_000);
+    const time = (date: Date) =>
+      date.toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    const looking = worker([
+      { url: 'https://mail.example.com/mail/', answer: { quiet: true } },
+    ]);
+    await looking.push({
+      '@type': 'StateChange',
+      changed: { ann: { CalendarAlert: '0' } },
+      'mailless:alerts': [
+        {
+          eventId: 'ev1',
+          title: 'Dentist',
+          utcStart: soon.toISOString(),
+          utcEnd: later.toISOString(),
+          showWithoutTime: false,
+          location: 'Dr. Holm',
+        },
+        {
+          eventId: 'ev2',
+          title: '',
+          utcStart: new Date(
+            new Date().getFullYear(),
+            new Date().getMonth(),
+            new Date().getDate() + 1,
+          ).toISOString(),
+          utcEnd: '',
+          showWithoutTime: true,
+        },
+        { eventId: 'ev3', title: 'No time at all', utcStart: 'sometime' },
+      ],
+    });
+    expect(looking.shown).toEqual([
+      {
+        title: 'Dentist · in 30 min',
+        body: `${time(soon)} – ${time(later)} · Dr. Holm`,
+        tag: `mailless-event-ev1-${soon.toISOString()}`,
+      },
+      {
+        title: 'An event · tomorrow',
+        body: '',
+        tag: expect.stringMatching(/^mailless-event-ev2-/),
+      },
+    ]);
+    // Nobody is asked what arrived: nothing did.
+    expect(looking.told).toEqual([]);
   });
 
   it('says what an open page tells it, and nothing when someone is looking', async () => {

@@ -4056,6 +4056,7 @@ export function describeJmapConformance(
         'AddressBook',
         'BlockedSender',
         'Calendar',
+        'CalendarAlert',
         'CalendarEvent',
         'ContactCard',
         'Email',
@@ -8144,6 +8145,8 @@ export function describeJmapConformance(
               start: '2026-10-05T09:00:00',
               duration: 'PT30M',
               timeZone: 'Europe/Lisbon',
+              // Reminded of as its calendar says: half an hour before.
+              useDefaultAlerts: true,
               recurrenceRules: [
                 {
                   '@type': 'RecurrenceRule',
@@ -8298,6 +8301,84 @@ export function describeJmapConformance(
         '2026-10-14T11:30:00',
       ]);
       expect(await expanded()).toEqual([`${seriesId}_20261012T113000`]);
+    });
+
+    it('say which reminders have come due, once, and when the next one will', async () => {
+      const at = (iso: string) => new Date(iso);
+      // The calendar's own: half an hour before each time it is on.
+      expect(
+        await h.server.nextCalendarAlert(AUTH, at('2026-10-12T06:00:00Z')),
+      ).toEqual(at('2026-10-12T07:30:00Z'));
+      // Not due yet.
+      const early = await h.server.takeCalendarAlerts(
+        AUTH,
+        at('2026-10-12T07:29:00Z'),
+      );
+      expect(early).toEqual({ due: [], next: at('2026-10-12T07:30:00Z') });
+
+      const taken = await h.server.takeCalendarAlerts(
+        AUTH,
+        at('2026-10-12T07:30:20Z'),
+      );
+      expect(taken.due).toEqual([
+        {
+          eventId: `${seriesId}_20261012T090000`,
+          title: 'Stand-up',
+          utcStart: '2026-10-12T08:00:00.000Z',
+          utcEnd: '2026-10-12T08:30:00.000Z',
+          showWithoutTime: false,
+          location: null,
+          at: '2026-10-12T07:30:00.000Z',
+        },
+      ]);
+      // The next is Wednesday's, and what was told is not told again.
+      expect(taken.next).toEqual(at('2026-10-14T07:30:00Z'));
+      expect(
+        (await h.server.takeCalendarAlerts(AUTH, at('2026-10-12T07:31:00Z')))
+          .due,
+      ).toEqual([]);
+
+      // An event with reminders of its own, one of them at the moment it starts.
+      await h.call('CalendarEvent/set', {
+        create: {
+          e: {
+            calendarIds: { [calendarId]: true },
+            title: 'Dentist',
+            start: '2026-10-12T15:00:00',
+            duration: 'PT1H',
+            timeZone: 'Europe/Lisbon',
+            locations: { '1': { '@type': 'Location', name: 'Dr. Holm' } },
+            useDefaultAlerts: false,
+            alerts: {
+              a: { trigger: { offset: '-PT2H' } },
+              b: { trigger: { offset: 'PT0S' } },
+            },
+          },
+        },
+      });
+      expect(
+        await h.server.nextCalendarAlert(AUTH, at('2026-10-12T08:00:00Z')),
+      ).toEqual(at('2026-10-12T12:00:00Z'));
+      const dentist = await h.server.takeCalendarAlerts(
+        AUTH,
+        at('2026-10-12T12:00:05Z'),
+      );
+      expect(dentist.due).toMatchObject([
+        {
+          title: 'Dentist',
+          location: 'Dr. Holm',
+          at: '2026-10-12T12:00:00.000Z',
+        },
+      ]);
+      expect(dentist.next).toEqual(at('2026-10-12T14:00:00Z'));
+
+      // Asked long after, what came due meanwhile is not told of late.
+      const late = await h.server.takeCalendarAlerts(
+        AUTH,
+        at('2026-10-13T00:00:00Z'),
+      );
+      expect(late.due).toEqual([]);
+      expect(late.next).toEqual(at('2026-10-14T07:30:00Z'));
     });
 
     it('take the time of whoever they are, for someone asking when they are free', async () => {

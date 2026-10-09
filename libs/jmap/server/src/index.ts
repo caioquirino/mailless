@@ -46,3 +46,4 @@ export {
   type ScheduledSendOutcome,
   type SendScheduler,
 } from '@mailless/jmap-mail';
+export type { CalendarAlert } from '@mailless/jmap-calendars';

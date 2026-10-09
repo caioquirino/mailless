@@ -653,6 +653,29 @@ run "push_notifications" {
     condition     = length(aws_lambda_function.push.vpc_config) == 0
     error_message = "The push function must stay outside any VPC: it calls push services named by clients and must not be able to reach private addresses."
   }
+
+  # Calendar reminders: the function sets the wake-ups that wake it, and no other schedule.
+  assert {
+    condition = (
+      aws_lambda_function.push.environment[0].variables["SCHEDULE_GROUP"] == "mailless" &&
+      aws_lambda_function.push.environment[0].variables["ALERTS_FUNCTION_ARN"] == "arn:aws:lambda:eu-west-1:123456789012:function:mailless-push" &&
+      alltrue([
+        for statement in data.aws_iam_policy_document.push.statement :
+        statement.resources == toset(["arn:aws:scheduler:eu-west-1:123456789012:schedule/mailless/alerts-*"])
+        if statement.sid == "ReminderWakeUps"
+      ]) &&
+      alltrue([
+        for statement in data.aws_iam_policy_document.push.statement :
+        one(statement.condition).values == tolist(["scheduler.amazonaws.com"])
+        if statement.sid == "HandOverTheSchedulerRole"
+      ]) &&
+      anytrue([
+        for statement in data.aws_iam_policy_document.scheduler.statement :
+        statement.sid == "WakeForReminders" && statement.resources == toset(["arn:aws:lambda:eu-west-1:123456789012:function:mailless-push"])
+      ])
+    )
+    error_message = "The push function may set reminder wake-ups in this stack's group and nothing else, and the scheduler may wake it for them."
+  }
 }
 
 run "sending_later" {
@@ -692,7 +715,7 @@ run "sending_later" {
       for statement in data.aws_iam_policy_document.scheduler.statement :
       !contains(statement.resources, "*") && contains(["lambda:InvokeFunction", "sqs:SendMessage"], one(statement.actions))
     ])
-    error_message = "A schedule may only wake the send function or leave a dead letter."
+    error_message = "A schedule may only wake a function of this stack or leave a dead letter."
   }
 
   assert {

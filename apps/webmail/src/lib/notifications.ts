@@ -72,6 +72,12 @@ interface Verification {
   verificationCode: string;
 }
 
+/**
+ * What this browser is told of: mail that is delivered, and calendar
+ * reminders that have come due. Nothing else is worth a notification.
+ */
+const TOLD_OF = ['EmailDelivery', 'CalendarAlert'];
+
 export class Notifications {
   private current: NotificationState = 'off';
   private readonly listeners = new Set<() => void>();
@@ -181,8 +187,10 @@ export class Notifications {
 
       const found = (await this.deps.client.call('PushSubscription/get', {
         ids: [kept.id],
-        properties: ['expires', 'verificationCode'],
-      })) as { list?: Array<{ expires?: string | null }> };
+        properties: ['expires', 'verificationCode', 'types'],
+      })) as {
+        list?: Array<{ expires?: string | null; types?: string[] | null }>;
+      };
       const held = found.list?.[0];
       if (!held || !browser || browser.endpoint !== kept.endpoint) {
         // Gone at one end or the other; the person asked for it, so make it again.
@@ -191,10 +199,19 @@ export class Notifications {
         return;
       }
       const expires = held.expires ? Date.parse(held.expires) : NaN;
-      if (!(expires - this.deps.now() > RENEW_WITHIN_MS)) {
+      const change = {
         // As long again as the server gives.
+        ...(expires - this.deps.now() > RENEW_WITHIN_MS
+          ? {}
+          : { expires: null }),
+        // Made when there was less to be told of: it is told of the rest from now on.
+        ...(held.types && TOLD_OF.some((type) => !held.types?.includes(type))
+          ? { types: TOLD_OF }
+          : {}),
+      };
+      if (Object.keys(change).length > 0) {
         await this.deps.client.call('PushSubscription/set', {
-          update: { [kept.id]: { expires: null } },
+          update: { [kept.id]: change },
         });
       }
       this.set('on');
@@ -269,8 +286,7 @@ export class Notifications {
             deviceClientId,
             url: browser.endpoint,
             keys: { p256dh: keys['p256dh'], auth: keys['auth'] },
-            // Only when mail is delivered: that is what there is to announce.
-            types: ['EmailDelivery'],
+            types: TOLD_OF,
           },
         },
       })) as {

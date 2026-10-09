@@ -28,6 +28,7 @@ export function calendarsModule(): JmapModule {
     provisionAccount: provisionCalendars,
     // An account older than its calendar gets one the first time it is used.
     prepareAccount: prepareCalendars,
-    pushedTypes: [CALENDAR, CALENDAR_EVENT],
+    // CalendarAlert is not data: a push of it is a reminder that has come due.
+    pushedTypes: [CALENDAR, CALENDAR_EVENT, 'CalendarAlert'],
   };
 }

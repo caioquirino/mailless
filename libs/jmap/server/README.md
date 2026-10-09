@@ -392,7 +392,12 @@ card must have and the client left out: `uid`, `created`, `updated`.
 - `CalendarEvent/copy` copies an event to another account the user may write
   to, and `Principal/getAvailability` says when someone is busy, and not with
   what.
-- Not there yet: sending invitations, and alerts that notify.
+- Reminders are for whoever hosts the server to tell of: `takeCalendarAlerts`
+  gives those that have come due and were not told of yet, and when to ask
+  next, and `nextCalendarAlert` says when that is without marking anything.
+  A host pushes them as a state change of the type `CalendarAlert`, which is
+  not data and has no methods: a subscription names it to be told.
+- Not there yet: sending invitations.
 
 ### Vacation response
 

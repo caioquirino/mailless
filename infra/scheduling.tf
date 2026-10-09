@@ -194,6 +194,19 @@ data "aws_iam_policy_document" "scheduler" {
     actions   = ["sqs:SendMessage"]
     resources = [aws_sqs_queue.send_dead_letters.arn]
   }
+
+  # Calendar reminders wake the function that tells an account's devices.
+  statement {
+    sid       = "WakeForReminders"
+    actions   = ["lambda:InvokeFunction"]
+    resources = [local.push_function_arn]
+  }
+
+  statement {
+    sid       = "ReminderDeadLetters"
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.push_dead_letters.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "scheduler" {

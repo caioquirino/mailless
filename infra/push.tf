@@ -3,6 +3,15 @@
 # function forwards it to each subscription's push service. A push says which
 # kinds of data changed and nothing about the mail itself.
 
+# The same function is what calendar reminders wake: each account that has
+# events has one schedule, set for its next reminder, which the function sets
+# again whenever the account's calendar changes and whenever it has fired.
+
+locals {
+  # Named before the function exists: it is told its own name, to be woken by.
+  push_function_arn = "arn:${local.partition}:lambda:${var.region}:${local.account_id}:function:${var.name}-push"
+}
+
 data "archive_file" "push" {
   type        = "zip"
   source_file = var.push_bundle
@@ -67,6 +76,27 @@ data "aws_iam_policy_document" "push" {
     resources = [aws_sqs_queue.push_dead_letters.arn]
   }
 
+  # Calendar reminders: each account has one wake-up, set for its next
+  # reminder, which this function sets, moves and removes. It can touch no
+  # other schedule, and can hand a schedule the scheduler role only.
+  statement {
+    sid       = "ReminderWakeUps"
+    actions   = ["scheduler:CreateSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"]
+    resources = ["${local.schedule_arn_prefix}alerts-*"]
+  }
+
+  statement {
+    sid       = "HandOverTheSchedulerRole"
+    actions   = ["iam:PassRole"]
+    resources = [aws_iam_role.scheduler.arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["scheduler.amazonaws.com"]
+    }
+  }
+
   # The key pushes are signed with. Read only: the API makes it.
   statement {
     sid       = "PushSigningKey"
@@ -111,6 +141,12 @@ resource "aws_lambda_function" "push" {
       BLOB_PREFIX     = local.blob_prefix
       VAPID_PARAMETER = local.vapid_parameter
       VAPID_SUBJECT   = local.vapid_subject
+
+      # For calendar reminders: where the wake-ups are kept, and what they wake, which is this function.
+      SCHEDULE_GROUP               = aws_scheduler_schedule_group.send.name
+      ALERTS_FUNCTION_ARN          = local.push_function_arn
+      SCHEDULER_ROLE_ARN           = aws_iam_role.scheduler.arn
+      ALERTS_DEAD_LETTER_QUEUE_ARN = aws_sqs_queue.push_dead_letters.arn
     }
   }
 

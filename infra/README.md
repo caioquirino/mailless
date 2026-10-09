@@ -408,6 +408,18 @@ fetches what changed.
   in `/aws/lambda/<name>-push`. `sent` staying at 0 means no app has a verified
   subscription.
 
+### Calendar reminders
+
+An event's reminders are told to the account's devices by the same function
+that tells them of new mail. Nothing runs while nothing is due: each account
+that has events has one schedule in EventBridge Scheduler, set for its next
+reminder. When it fires, the function pushes what is due and sets the
+schedule for the one after; whenever the account's calendar changes, it is
+set again. A reminder reaches the browsers and phones where notifications
+were turned on in the webmail, as a notification that names the event and
+says how soon it is. One that could not be told of within fifteen minutes is
+dropped: by then it would only confuse.
+
 ### Shared accounts
 
 An account can be used by more than its own user, which is how a shared
