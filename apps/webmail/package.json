@@ -9,10 +9,18 @@
     ]
   },
   "dependencies": {
+    "@lexical/html": "0.52.0",
+    "@lexical/link": "0.52.0",
+    "@lexical/list": "0.52.0",
+    "@lexical/react": "0.52.0",
+    "@lexical/rich-text": "0.52.0",
+    "@lexical/selection": "0.52.0",
+    "@lexical/utils": "0.52.0",
     "@mailless/jmap-client": "workspace:*",
     "@mailless/jmap-core": "workspace:*",
     "@mailless/ui": "workspace:*",
     "@mailless/web-session": "workspace:*",
+    "lexical": "0.52.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-router": "^7.18.4"

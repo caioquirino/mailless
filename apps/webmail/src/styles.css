@@ -34,6 +34,27 @@ input[type='checkbox'] {
   padding: var(--space-4);
 }
 
+/* A line of a form: what it asks, then where it is answered, side by side. */
+.field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.field > span {
+  width: 7rem;
+  flex: none;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.field > input,
+.field > select,
+.field > textarea {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ------------------------------------------------------------ layout */
 
 .shell {
@@ -77,14 +98,15 @@ input[type='checkbox'] {
 }
 
 .search {
+  position: relative;
   display: flex;
   flex: 1;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  max-width: 42rem;
+  max-width: 46rem;
   height: 2.75rem;
-  padding: 0 var(--space-4);
+  padding: 0 var(--space-1) 0 var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
@@ -96,12 +118,14 @@ input[type='checkbox'] {
   outline-offset: 1px;
 }
 
-.search input {
+/* Only the field the search is typed in: not the ones of the form under it. */
+.search-typing input {
   flex: 1;
   min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
+  box-shadow: none;
   color: var(--text);
   outline: none;
 }
@@ -987,6 +1011,87 @@ a.icon-button {
   cursor: pointer;
 }
 
+/* The line that names a message, and beside it what can be done with that one message. */
+.message-top {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.message-top > .message-head {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.message-tools {
+  display: flex;
+  flex: none;
+  padding-top: var(--space-2);
+}
+
+.more {
+  position: relative;
+  display: inline-flex;
+}
+
+.more-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-width: 15rem;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-raised);
+}
+
+.more-menu hr {
+  width: 100%;
+  margin: var(--space-1) 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.more-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.25rem;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.more-choice:hover,
+.more-choice:focus-visible {
+  background: var(--hover);
+}
+
+.more-choice .icon {
+  color: var(--muted);
+}
+
+/* A message being printed by itself: there, and taking no room. */
+.print-frame {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border: 0;
+}
+
 .message-head .avatar {
   grid-row: span 2;
   justify-self: center;
@@ -1094,72 +1199,626 @@ a.icon-button {
 
 /* ----------------------------------------------------------- compose */
 
-.compose {
+/* Where the messages being written stand: side by side along the bottom, the newest at the right. */
+.compose-dock {
   position: fixed;
-  right: var(--space-4);
+  right: var(--space-5);
   bottom: 0;
   z-index: 5;
   display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  max-width: calc(100vw - 2 * var(--space-5));
+  /* Only the windows take the pointer, not the gaps between them. */
+  pointer-events: none;
+}
+
+/* One window in three sizes: docked in the corner, down to its title, or over the whole page. */
+.compose {
+  position: relative;
+  flex: none;
+  pointer-events: auto;
+  display: flex;
   flex-direction: column;
-  width: min(40rem, calc(100vw - 2 * var(--space-4)));
-  max-height: min(46rem, calc(100dvh - var(--space-5)));
+  width: min(38rem, calc(100vw - 2 * var(--space-5)));
+  height: min(42rem, calc(100dvh - var(--space-6)));
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-bottom: 0;
-  border-radius: var(--radius) var(--radius) 0 0;
-  box-shadow: 0 8px 30px rgb(16 24 40 / 25%);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow-raised);
+}
+
+.compose-minimised {
+  flex: 0 1 22rem;
+  width: auto;
+  min-width: 9rem;
+  height: auto;
+}
+
+.compose-minimised .compose-form {
+  display: none;
+}
+
+.compose-full {
+  position: fixed;
+  z-index: 2;
+  inset: var(--space-6) max(var(--space-6), calc(50vw - 36rem));
+  width: auto;
+  height: auto;
+  border-bottom: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+
+.compose-full .compose-scroll > * {
+  width: 100%;
+  max-width: 46rem;
+  margin-inline: auto;
+}
+
+.compose-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: auto;
+  background: rgb(10 14 20 / 50%);
 }
 
 .compose-head {
   display: flex;
+  flex: none;
   align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-4);
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
+  background: var(--raised);
+  border-bottom: 1px solid var(--line);
 }
 
-.compose-head h2 {
+.compose-title {
+  flex: 1;
+  min-width: 0;
   margin: 0;
-  font-size: 1rem;
+  overflow: hidden;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compose-sizes {
+  display: flex;
+}
+
+.compose-head .icon-button {
+  width: 2.25rem;
+  height: 2.25rem;
 }
 
 .compose-form {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--space-2);
   min-height: 0;
-  padding: var(--space-3) var(--space-4);
+}
+
+.compose-form > .notice {
+  margin: 0 var(--space-3) var(--space-2);
+}
+
+.compose-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
   overflow-y: auto;
 }
 
-.field {
+.compose-row {
   display: flex;
+  flex: none;
   align-items: center;
   gap: var(--space-2);
+  min-height: 2.75rem;
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--line);
 }
 
-.field > span {
-  width: 4rem;
+.compose-row {
+  position: relative;
+}
+
+/* Who what is typed might be the start of, under the line it is typed on. */
+.suggestions {
+  position: absolute;
+  top: 100%;
+  left: 4.5rem;
+  z-index: 3;
+  width: min(24rem, calc(100% - 5.5rem));
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-raised);
+}
+
+.suggestion {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.suggestion[aria-selected='true'],
+.suggestion:hover {
+  background: var(--accent-soft);
+}
+
+.suggestion-who {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.suggestion-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compose-row:focus-within {
+  border-bottom-color: var(--accent);
+}
+
+.compose-row > label {
+  width: 3.5rem;
   flex: none;
   color: var(--muted);
   font-size: 0.875rem;
 }
 
-.field input,
-.field select {
+.compose-row input,
+.compose-row select {
   flex: 1;
+  min-width: 0;
+  padding: var(--space-1) 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  box-shadow: none;
 }
 
-.compose-text {
+.compose-subject {
+  font-weight: 600;
+}
+
+.chips {
+  display: flex;
   flex: 1;
-  min-height: 14rem;
-  resize: vertical;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  height: 1.75rem;
+  padding: 0 2px 0 3px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 0.875rem;
+}
+
+.chip .avatar {
+  width: 1.375rem;
+  height: 1.375rem;
+  font-size: 0.7rem;
+}
+
+.chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-remove {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chip-remove:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.chip-input {
+  display: flex;
+  flex: 1;
+  min-width: 8rem;
+}
+
+/* Where the words go, and what can be done to them. */
+.editor {
+  position: relative;
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-height: 11rem;
+}
+
+.editor-text {
+  flex: 1;
+  padding: var(--space-4) var(--space-4) var(--space-2);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  outline: none;
+  overflow-wrap: anywhere;
+}
+
+/* A line is a paragraph, as in the mail that is sent: the gap between two is an empty one. */
+.editor-text p {
+  margin: 0;
+}
+
+.editor-text h3 {
+  margin: var(--space-2) 0 var(--space-1);
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.editor-text ul,
+.editor-text ol {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.editor-text blockquote {
+  margin: 0 0 0 var(--space-1);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border-strong);
+  color: var(--muted);
+}
+
+.editor-text a {
+  color: var(--accent);
+}
+
+.editor-text .underlined {
+  text-decoration: underline;
+}
+
+.editor-tools {
+  position: sticky;
+  bottom: var(--space-1);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 0 var(--space-3);
+  padding: var(--space-1);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.editor-tool {
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-sm);
+}
+
+.editor-gap {
+  width: 1px;
+  height: 1.25rem;
+  margin: 0 var(--space-1);
+  background: var(--border);
+}
+
+/* A picture among the words: pressed, it shows what can be done with it. */
+.picture-box {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+  vertical-align: bottom;
+}
+
+.picture-box img {
+  max-width: 100%;
+  height: auto;
+  cursor: grab;
+}
+
+.picture-box.selected img {
+  outline: 2px solid var(--accent);
+}
+
+.picture-handle {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.picture-bar {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-raised);
+  font-size: 0.875rem;
   line-height: 1.5;
+  white-space: nowrap;
 }
 
-.compose-actions {
-  padding-top: var(--space-1);
+.picture-bar [aria-pressed='true'] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.picture-waiting {
+  padding: 0 var(--space-2);
+  background: var(--raised);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* What can be done with the link the cursor is in, shown under it. */
+.link-bar {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: calc(100% - var(--space-4));
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-raised);
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.link-bar a {
+  overflow: hidden;
+  color: var(--accent);
+  text-overflow: ellipsis;
+}
+
+.link-bar input {
+  width: 16rem;
+  max-width: 40vw;
+}
+
+.link-bar-action {
+  padding: var(--space-1);
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link-bar-action:hover {
+  text-decoration: underline;
+}
+
+.editor-link input {
+  flex: 1;
+  min-width: 10rem;
+}
+
+.compose-signature {
+  flex: none;
+  margin: var(--space-2) var(--space-4) 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.compose-quoted {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-2);
+}
+
+.compose-quote {
+  display: block;
+  width: 100%;
+  height: 16rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  /* A message is written for a white page, whatever this one looks like. */
+  background: #fff;
+}
+
+.compose-scroll > .attachments {
+  flex: none;
+  margin: var(--space-2) var(--space-4);
+}
+
+.attached .chip-remove {
+  margin-right: -2px;
+}
+
+.compose-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.compose-bar > .button-primary {
+  margin-right: var(--space-2);
+  padding-inline: var(--space-5);
+  border-radius: var(--radius-pill);
+}
+
+.compose-slot {
+  display: contents;
+}
+
+/* Emoji to put in the words, in a panel that opens above its button. */
+.emoji {
+  position: relative;
+  display: inline-flex;
+}
+
+.emoji-panel {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(21rem, calc(100vw - 2 * var(--space-4)));
+  max-height: min(22rem, 60dvh);
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-raised);
+}
+
+.emoji-groups {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.emoji-groups h3 {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.25rem, 1fr));
+}
+
+.emoji-choice {
+  height: 2.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.emoji-choice:hover,
+.emoji-choice:focus-visible {
+  background: var(--hover);
+}
+
+.compose-bar > .button-primary:has(+ .send-later) {
+  margin-right: 0;
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+
+/* Beside Send: the times it might go at instead of now. */
+.send-later {
+  position: relative;
+  display: inline-flex;
+  margin-right: var(--space-2);
+}
+
+.compose-bar .send-later-button {
+  margin-left: 1px;
+  padding-inline: var(--space-2);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+
+.send-later-menu {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + var(--space-1));
+  left: 0;
+  min-width: 19rem;
+}
+
+.send-later-menu .more-choice {
+  justify-content: space-between;
+}
+
+.send-later-own {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+}
+
+.send-later-own input {
+  flex: 1;
+  min-width: 0;
+}
+
+.send-later-problem {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-1);
+  color: var(--danger);
+}
+
+.held-notice {
+  margin-bottom: var(--space-3);
+}
+
+.compose-status {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
 }
 
 /* ------------------------------------------------------------- toast */
@@ -1179,6 +1838,10 @@ a.icon-button {
   color: var(--page);
   border-radius: var(--radius);
   box-shadow: 0 8px 30px rgb(16 24 40 / 25%);
+}
+
+.toast-action {
+  font-weight: 700;
 }
 
 .toast-error {
@@ -1405,12 +2068,30 @@ a.icon-button {
     padding-left: 0;
   }
 
-  .compose {
+  /* On a phone writing takes the screen, whichever size the window was. */
+  /* One at a time: the one in front, the others waiting behind it. */
+  .compose-back {
+    display: none;
+  }
+
+  .compose,
+  .compose-minimised,
+  .compose-full {
+    position: fixed;
     inset: 0;
     width: auto;
-    max-height: none;
+    height: auto;
     border: 0;
     border-radius: 0;
+  }
+
+  .compose-minimised .compose-form {
+    display: flex;
+  }
+
+  .compose-sizes,
+  .compose-scrim {
+    display: none;
   }
 }
 
@@ -1420,4 +2101,644 @@ a.icon-button {
       transform 160ms ease-out,
       visibility 160ms;
   }
+}
+
+/* ----------------------------------------------------------- contacts */
+
+.rail-item:not(.rail-soon):hover .rail-icon {
+  background: var(--hover);
+}
+
+.rail-current:hover .rail-icon {
+  background: var(--accent-soft);
+}
+
+a.button.write {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  text-decoration: none;
+}
+
+.side-heading {
+  margin: 0;
+  padding: 0 var(--space-4);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* The people beside the one being looked at. */
+.contacts-panes {
+  display: flex;
+  flex: 1;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+}
+
+.contacts-panes > .contacts-list {
+  flex: none;
+  width: 24.5rem;
+}
+
+.contacts-panes > .contact {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.contacts-search {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--muted);
+}
+
+.contacts-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.contacts-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.contacts-rows ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.contacts-letter {
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.contact-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 3.25rem;
+  padding: var(--space-1) var(--space-4);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.contact-row:hover {
+  background: var(--hover);
+}
+
+.contact-row.active {
+  background: var(--accent-soft);
+}
+
+.contact-row-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.contact-row-text > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-row-name {
+  font-weight: 500;
+}
+
+.contact-row.active .contact-row-name {
+  font-weight: 700;
+}
+
+.contact .toolbar .back {
+  display: none;
+}
+
+.contact-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 44rem;
+  padding: var(--space-5) var(--space-6);
+}
+
+.contact-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding-bottom: var(--space-2);
+}
+
+.contact-head .avatar,
+.contact-photo {
+  width: 5.5rem;
+  height: 5.5rem;
+  flex: none;
+  border-radius: 50%;
+  font-size: 2.25rem;
+}
+
+.contact-photo {
+  object-fit: cover;
+}
+
+.contact-names {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.contact-names h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.contact-detail {
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.contact-detail-icon {
+  width: 1.5rem;
+  flex: none;
+  padding-top: 2px;
+  color: var(--muted);
+}
+
+.contact-detail-values {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.contact-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.contact-value > span,
+.contact-detail-values > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.contact-value-text {
+  overflow-wrap: anywhere;
+}
+
+.contact-value .button {
+  flex: none;
+  text-decoration: none;
+}
+
+.contact-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.contact-mail {
+  padding-top: var(--space-3);
+}
+
+.contact-mail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-1);
+}
+
+.contact-mail-head h2 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.contact-mail ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.contact-mail-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.4rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.contact-mail-row:hover strong {
+  text-decoration: underline;
+}
+
+.contact-mail-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+}
+
+.contact-form .field > span,
+.contact-rows > legend {
+  width: 7rem;
+  flex: none;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.contact-form .field input,
+.contact-form .field select,
+.contact-form .field textarea {
+  flex: 1;
+  min-width: 0;
+}
+
+.contact-form .field .contact-date {
+  flex: none;
+  width: 12rem;
+}
+
+.field-top {
+  align-items: flex-start;
+}
+
+.contact-rows {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0 0 0 calc(7rem + var(--space-2));
+  border: 0;
+}
+
+.contact-rows > legend {
+  float: left;
+  width: 7rem;
+  margin-left: calc(-7rem - var(--space-2));
+  padding: var(--space-2) 0 0;
+}
+
+.contact-rows-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.contact-rows-row select {
+  flex: none;
+  width: 7rem;
+}
+
+.contact-rows-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.contact-rows > .button {
+  justify-self: start;
+}
+
+@media (max-width: 68rem) {
+  .contacts-panes > .contacts-list {
+    width: 18rem;
+  }
+}
+
+/* One thing at a time: the people, or the one chosen. */
+@media (max-width: 48rem) {
+  .contacts-panes {
+    gap: 0;
+  }
+
+  .contacts-panes > .contacts-list {
+    flex: 1;
+    width: auto;
+  }
+
+  .contacts-panes > .contact,
+  .contacts-open > .contacts-list {
+    display: none;
+  }
+
+  .contacts-open > .contact {
+    display: flex;
+  }
+
+  .contact .toolbar .back {
+    display: inline-grid;
+  }
+
+  .contact-body {
+    padding: var(--space-4);
+  }
+
+  .contact-head {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .contact-names {
+    align-items: center;
+  }
+
+  .contact-rows {
+    padding-left: 0;
+  }
+
+  .contact-rows > legend {
+    float: none;
+    margin-left: 0;
+  }
+
+  .contact-form .field {
+    flex-wrap: wrap;
+  }
+
+  .contact-form .field > span {
+    width: 100%;
+  }
+}
+
+/* The search has one way to empty it, the same everywhere. */
+.contacts-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.contacts-clear {
+  width: 2rem;
+  height: 2rem;
+}
+
+.contacts-within {
+  flex: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-4) 0;
+}
+
+.contacts-within .chip {
+  display: inline-flex;
+  padding-left: var(--space-3);
+}
+
+/* ------------------------------------------------------------- search */
+
+/* What narrows the search, then the words being typed: on one line, which scrolls when it is full. */
+.search-narrowed {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  list-style: none;
+  scrollbar-width: none;
+}
+
+.search-token {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: 1.75rem;
+  padding: 0 2px 0 var(--space-3);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  color: var(--accent-soft-text);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.search-token strong {
+  margin-right: 3px;
+}
+
+.search-token .chip-remove {
+  color: inherit;
+}
+
+.search-typing {
+  display: flex;
+  flex: 1;
+  min-width: 7rem;
+}
+
+.search input[type='search']::-webkit-search-cancel-button {
+  display: none;
+}
+
+.search-button {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+/* Under the bar: what can be typed, or the form that says the same. */
+.search-panel {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  left: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: calc(100dvh - 5rem);
+  padding: var(--space-2);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+  color: var(--text);
+}
+
+.search-people,
+.search-words {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-people {
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.search-heading {
+  margin: var(--space-1) 0 0;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.search-word {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-word:hover {
+  background: var(--hover);
+}
+
+.search-word code {
+  padding: 1px 6px;
+  background: var(--accent-soft);
+  border-radius: 5px;
+  color: var(--accent-soft-text);
+  font: inherit;
+  font-weight: 600;
+}
+
+.search-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-1);
+  padding: var(--space-2) var(--space-1) 0;
+  border-top: 1px solid var(--line);
+}
+
+.search-foot kbd {
+  padding: 1px 6px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.search-form {
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.search-form .field > span {
+  width: 7rem;
+  flex: none;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.search-form .field input,
+.search-form .field select {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-note {
+  margin: 0 0 var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--raised);
+  border-radius: var(--radius);
+}
+
+.search-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  padding: var(--space-1) 0 var(--space-1) calc(7rem + var(--space-2));
+}
+
+.search-checks label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2rem;
+}
+
+@media (max-width: 48rem) {
+  .search {
+    position: static;
+    padding-left: var(--space-3);
+  }
+
+  /* Across the page, under the bar the search is in. */
+  .search-panel {
+    position: fixed;
+    top: 3.75rem;
+    right: var(--space-2);
+    left: var(--space-2);
+  }
+
+  .search-checks {
+    padding-left: 0;
+  }
+
+  .search-form .field {
+    flex-wrap: wrap;
+  }
+
+  .search-form .field > span {
+    width: 100%;
+  }
+}
+
+/* In the settings a choice is as wide as what it says, not as the page. */
+.setting .field > select {
+  flex: none;
+}
+
+/* A picture where an initial would be: the same circle, filled by it. */
+.avatar-photo {
+  display: block;
+  object-fit: cover;
 }

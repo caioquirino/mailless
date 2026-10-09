@@ -8,7 +8,7 @@ import type { JmapClient } from '@mailless/jmap-client';
 import type { Theme } from '@mailless/ui';
 import type { Session } from '@mailless/web-session';
 import type { AppConfig } from '../lib/config';
-import type { Draft, MailStore } from '../lib/mail';
+import type { Draft, Held, MailStore } from '../lib/mail';
 import type {
   Notifications,
   NotificationsDependencies,
@@ -41,6 +41,12 @@ export function useSignedIn(session: Session): boolean {
 }
 
 /** What the screens of someone signed in work with. */
+export interface SayOptions {
+  action?: { label: string; act(): void };
+  /** How long it stays, in seconds. A few, when nothing is said. */
+  seconds?: number;
+}
+
 export interface Mail {
   store: MailStore;
   /** Opens a message to write. */
@@ -50,8 +56,13 @@ export interface Mail {
    * whether it worked.
    */
   act(action: () => Promise<unknown>): Promise<boolean>;
-  /** Says something in passing: what was just done. */
-  say(message: string): void;
+  /**
+   * Says something in passing: what was just done. With something to press
+   * beside it when that can be taken back, for as long as it can.
+   */
+  say(message: string, options?: SayOptions): void;
+  /** Takes back a message that is being held, and opens it to go on writing. */
+  unsend(held: Pick<Held, 'submissionId' | 'emailId'>): Promise<void>;
   /** Telling the person of new mail when they are not looking. */
   notifications: Notifications;
 }

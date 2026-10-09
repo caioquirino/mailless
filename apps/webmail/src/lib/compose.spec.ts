@@ -1,11 +1,18 @@
 import type { Email, Identity } from '@mailless/jmap-core';
 import {
+  bodiesOf,
+  laterChoices,
   emptyDraft,
   forwardDraft,
+  linkAddress,
+  listedAttachments,
+  mailHtml,
+  mentionsAttachment,
+  plainOf,
   replyDraft,
   resumeDraft,
-  swapSignature,
   textOf,
+  wordsHtml,
 } from './compose';
 
 const identities = [
@@ -37,6 +44,9 @@ const email = (changes: Partial<Email> = {}): Email =>
     ...changes,
   }) as unknown as Email;
 
+/** An address that would run something, which no link may be. */
+const SCRIPT = ['java', 'script:alert(1)'].join('');
+
 describe('replyDraft', () => {
   it('answers the sender, as whoever the message was written to', () => {
     const draft = replyDraft(email(), identities, false);
@@ -46,7 +56,12 @@ describe('replyDraft', () => {
     expect(draft.subject).toBe('Re: Lunch');
     expect(draft.inReplyTo).toEqual(['m1@example.com']);
     expect(draft.references).toEqual(['m0@example.com', 'm1@example.com']);
-    expect(draft.text).toContain('Bob wrote:\n> Thursday?\n>> Earlier');
+    expect(draft.html).toBe('');
+    expect(draft.quote?.text).toMatch(
+      /^On .* Bob wrote:\n> Thursday\?\n>> Earlier/,
+    );
+    expect(draft.quote?.html).toContain('<blockquote type="cite"');
+    expect(draft.quote?.html).toContain('Thursday?');
     expect(draft.answers).toEqual({ emailId: 'e1', keyword: '$answered' });
     expect(draft.attachments).toEqual([]);
   });
@@ -89,9 +104,10 @@ describe('forwardDraft', () => {
     const draft = forwardDraft(email(), identities);
     expect(draft.to).toEqual([]);
     expect(draft.subject).toBe('Fwd: Lunch');
-    expect(draft.text).toContain('Forwarded message');
-    expect(draft.text).toContain('From: Bob <bob@example.com>');
-    expect(draft.text).toContain('Thursday?');
+    expect(draft.quote?.text).toContain('Forwarded message');
+    expect(draft.quote?.text).toContain('From: Bob <bob@example.com>');
+    expect(draft.quote?.text).toContain('Thursday?');
+    expect(draft.quote?.html).toContain('From: Bob &lt;bob@example.com&gt;');
     expect(draft.attachments).toEqual([
       { blobId: 'b1', name: 'menu.pdf', type: 'application/pdf', size: 10 },
     ]);
@@ -116,10 +132,109 @@ describe('resumeDraft', () => {
       to: [{ name: 'Bob', email: 'bob@example.com' }],
       cc: [],
       subject: 'Lunch',
-      text: 'Thursday?\n> Earlier',
+      html: '<p>Thursday?</p><p>&gt; Earlier</p>',
+      unsigned: true,
       replaces: 'e1',
       inReplyTo: ['m0@example.com'],
     });
+  });
+
+  it('takes a draft of its own apart again: the words, and what they answer', () => {
+    const sales = { ...identities[1], textSignature: 'The sales team' };
+    const reply = {
+      ...replyDraft(email(), identities, false),
+      html: '<p>Yes, <b>Thursday</b>.</p>',
+    };
+    const bodies = bodiesOf(reply, sales as Identity);
+    const draft = resumeDraft(
+      email({
+        from: [{ name: 'Sales', email: 'sales@example.com' }],
+        textBody: [{ partId: '1', type: 'text/plain' }],
+        htmlBody: [{ partId: '2', type: 'text/html' }],
+        bodyValues: {
+          '1': { value: bodies.text },
+          '2': { value: bodies.html },
+        },
+      } as unknown as Partial<Email>),
+      identities,
+    );
+    expect(draft.html).toBe('<p style="margin:0">Yes, <b>Thursday</b>.</p>');
+    expect(draft.unsigned).toBeUndefined();
+    expect(draft.quote?.text).toBe(reply.quote?.text);
+    expect(draft.quote?.html).toContain('<blockquote type="cite"');
+    // Kept and opened any number of times, it is signed once.
+    expect(bodiesOf(draft, sales as Identity).text).toBe(bodies.text);
+  });
+});
+
+describe('the pictures of what is answered or passed on', () => {
+  const pictured = () =>
+    email({
+      htmlBody: [{ partId: '1', type: 'text/html' }],
+      bodyValues: {
+        '1': { value: '<p>Look</p><img src="cid:photo@example.com">' },
+      },
+      attachments: [
+        { blobId: 'b1', name: 'menu.pdf', type: 'application/pdf', size: 10 },
+        {
+          blobId: 'b2',
+          name: 'photo.png',
+          type: 'image/png',
+          size: 5,
+          cid: 'photo@example.com',
+        },
+      ],
+    } as unknown as Partial<Email>);
+
+  it('go along with an answer, which quotes them in place', () => {
+    const draft = replyDraft(pictured(), identities, false);
+    expect(draft.quote?.html).toContain('src="cid:photo@example.com"');
+    expect(draft.pictures).toEqual([
+      {
+        cid: 'photo@example.com',
+        blobId: 'b2',
+        name: 'photo.png',
+        type: 'image/png',
+        size: 5,
+      },
+    ]);
+    expect(draft.attachments).toEqual([]);
+  });
+
+  it('are passed on in place, and the files beside them as files', () => {
+    const draft = forwardDraft(pictured(), identities);
+    expect(draft.pictures?.map((each) => each.name)).toEqual(['photo.png']);
+    expect(draft.attachments.map((each) => each.name)).toEqual(['menu.pdf']);
+  });
+});
+
+describe('listedAttachments', () => {
+  it('leaves out the pictures the words show in place', () => {
+    const listed = listedAttachments(
+      email({
+        htmlBody: [{ partId: '1', type: 'text/html' }],
+        bodyValues: { '1': { value: '<img src="cid:logo@example.com">' } },
+        attachments: [
+          { blobId: 'b1', name: 'menu.pdf', type: 'application/pdf', size: 10 },
+          {
+            blobId: 'b2',
+            name: 'logo.png',
+            type: 'image/png',
+            size: 5,
+            cid: 'logo@example.com',
+          },
+          // Given an id by the program that sent it, and shown nowhere in the words.
+          {
+            blobId: 'b3',
+            name: 'scan.png',
+            type: 'image/png',
+            size: 5,
+            cid: 'x',
+          },
+        ],
+      } as unknown as Partial<Email>),
+    );
+    expect(listed.map((each) => each.name)).toEqual(['menu.pdf', 'scan.png']);
   });
 });
 
@@ -136,43 +251,128 @@ describe('textOf', () => {
   });
 });
 
+describe('what the editor writes', () => {
+  const written =
+    '<p dir="auto"><span style="white-space: pre-wrap;">Hello  Bob,</span></p>' +
+    '<p><br></p>' +
+    '<ul><li value="1"><span>one</span></li><li value="2"><b><strong class="x">two</strong></b></li></ul>' +
+    '<blockquote><span>said before</span></blockquote>' +
+    '<p><span>See </span><a href="https://example.com/a" class="l"><span>the page</span></a><span> or </span><a href="https://example.com"><span>example.com</span></a></p>';
+
+  it('goes into a message without the editor\u2019s own marks', () => {
+    const html = mailHtml(written);
+    expect(html).not.toMatch(/class=|dir=|<span|pre-wrap/);
+    expect(html).toContain('<p style="margin:0">Hello &nbsp;Bob,</p>');
+    expect(html).toContain('<li value="2"><b><strong>two</strong></b></li>');
+    expect(html).toContain('<a href="https://example.com/a">the page</a>');
+    expect(html).toMatch(/<blockquote style="[^"]*border-left/);
+  });
+
+  it('keeps a picture that goes with the message, and no other', () => {
+    const html = mailHtml(
+      '<p><img src="cid:a@mailless" alt="plan.png" width="240" class="x" onerror="x()"><img src="https://example.com/far.png"></p>',
+    );
+    expect(html).toBe(
+      '<p style="margin:0"><img src="cid:a@mailless" alt="plan.png" width="240" style="max-width:100%;height:auto"></p>',
+    );
+  });
+
+  it('reads as plain words too', () => {
+    expect(plainOf(written)).toBe(
+      [
+        'Hello  Bob,',
+        '',
+        '- one',
+        '- two',
+        '> said before',
+        'See the page <https://example.com/a> or example.com',
+      ].join('\n'),
+    );
+    expect(plainOf('<p><br></p>')).toBe('');
+  });
+
+  it('starts from plain words, a paragraph to a line', () => {
+    expect(wordsHtml('a <b>\n\nc')).toBe(
+      '<p>a &lt;b&gt;</p><p><br></p><p>c</p>',
+    );
+    expect(plainOf(wordsHtml('a <b>\n\nc'))).toBe('a <b>\n\nc');
+  });
+
+  it('knows a link from what is not one', () => {
+    expect(linkAddress('example.com/a')).toBe('https://example.com/a');
+    expect(linkAddress(' https://example.com ')).toBe('https://example.com');
+    expect(linkAddress('bob@example.com')).toBe('mailto:bob@example.com');
+    expect(linkAddress(SCRIPT)).toBeNull();
+    expect(linkAddress('not a link')).toBeNull();
+  });
+
+  it('notices words about something attached', () => {
+    expect(mentionsAttachment('<p>The notes are attached.</p>')).toBe(true);
+    expect(mentionsAttachment('<p>See you Thursday.</p>')).toBe(false);
+  });
+});
+
 describe('signatures', () => {
   const ann = {
     ...identities[0],
-    textSignature: 'Ann Lee\nExample Ltd',
-  } as Identity;
-  const sales = {
-    ...identities[1],
-    textSignature: 'The sales team',
+    textSignature: 'Ann Lee\nExample <Ltd>',
   } as Identity;
   const plain = identities[0] as Identity;
+  const hello = { ...emptyDraft([ann]), html: '<p>Hello Bob,</p>' };
 
-  it('end a new message, under the line mail programs know them by', () => {
-    expect(emptyDraft([ann]).text).toBe('\n\n-- \nAnn Lee\nExample Ltd');
-    expect(emptyDraft([plain]).text).toBe('');
+  it('end a message, under the line mail programs know them by', () => {
+    const bodies = bodiesOf(hello, ann);
+    expect(bodies.text).toBe('Hello Bob,\n\n-- \nAnn Lee\nExample <Ltd>');
+    expect(bodies.html).toContain(
+      '<div class="mailless-words"><p style="margin:0">Hello Bob,</p></div>',
+    );
+    expect(bodies.html).toMatch(
+      /<div class="mailless-signature"[^>]*>-- <br>Ann Lee<br>Example &lt;Ltd&gt;<\/div>/,
+    );
+    expect(bodiesOf(hello, plain).text).toBe('Hello Bob,');
+    expect(bodiesOf(hello, plain).html).not.toContain('mailless-signature');
   });
 
-  it('go above what an answer quotes, and above what is passed on', () => {
-    const reply = replyDraft(email(), [ann, sales], false);
-    // Written to the sales address, so signed as sales.
-    expect(reply.text).toMatch(
-      /^\n\n-- \nThe sales team\n\nOn .* Bob wrote:\n> Thursday\?/,
+  it('go above what an answer quotes', () => {
+    const reply = { ...replyDraft(email(), [ann], false), html: '<p>Yes.</p>' };
+    const bodies = bodiesOf(reply, ann);
+    expect(bodies.text).toMatch(
+      /^Yes\.\n\n-- \nAnn Lee\nExample <Ltd>\n\nOn .* Bob wrote:\n> Thursday\?/,
     );
-    expect(forwardDraft(email(), [ann, sales]).text).toMatch(
-      /^\n\n-- \nThe sales team\n\n-{10} Forwarded message/,
+    expect(bodies.html.indexOf('mailless-signature')).toBeLessThan(
+      bodies.html.indexOf('mailless-quote'),
     );
   });
 
-  it('change with who the message is from', () => {
-    const written = 'Hello Bob,\n\n-- \nAnn Lee\nExample Ltd';
-    expect(swapSignature(written, ann, sales)).toBe(
-      'Hello Bob,\n\n-- \nThe sales team',
+  it('are left off a draft from elsewhere, which has its own', () => {
+    expect(bodiesOf({ ...hello, unsigned: true }, ann).text).toBe('Hello Bob,');
+  });
+});
+
+describe('laterChoices', () => {
+  const names = (now: string) =>
+    laterChoices(new Date(now)).map(
+      (choice) =>
+        `${choice.label}: ${choice.at.getDate()} at ${choice.at.getHours()}`,
     );
-    expect(swapSignature(written, ann, plain)).toBe('Hello Bob,');
-    expect(swapSignature('Hello Bob,', plain, ann)).toBe(
-      'Hello Bob,\n\n-- \nAnn Lee\nExample Ltd\n',
-    );
-    // Taken out by hand: it is not put back by changing nothing.
-    expect(swapSignature('Hello Bob,', ann, ann)).toBe('Hello Bob,');
+
+  it('offers the next moments a person would name', () => {
+    // A Friday morning.
+    expect(names('2026-10-09T09:30:00')).toEqual([
+      'In one hour: 9 at 10',
+      'This afternoon: 9 at 16',
+      'Tomorrow morning: 10 at 8',
+      'Monday morning: 12 at 8',
+    ]);
+  });
+
+  it('leaves out the afternoon once it is here, and Monday when it is tomorrow', () => {
+    // A Sunday evening.
+    expect(names('2026-10-11T18:00:00')).toEqual([
+      'In one hour: 11 at 19',
+      'Tomorrow morning: 12 at 8',
+    ]);
+    // A Monday: the one after.
+    expect(names('2026-10-12T18:00:00')).toContain('Monday morning: 19 at 8');
   });
 });

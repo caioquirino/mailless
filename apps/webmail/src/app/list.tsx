@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { Email, Id, Mailbox } from '@mailless/jmap-core';
-import { Avatar, Button, Icon, IconButton, Tag } from '@mailless/ui';
+import { Button, Icon, IconButton, Tag } from '@mailless/ui';
 import { nameOf } from '../lib/addresses';
 import { canView, openAttachment } from '../lib/attachments';
 import { formatWhen } from '../lib/format';
 import type { Attachment, ListKey, MailStore } from '../lib/mail';
+import { Face } from './face';
 import { useMail, useServices, useSynced } from './services';
 
 /** One row: a conversation, as the newest of its messages that the list found. */
@@ -20,6 +21,8 @@ interface Row {
   who: string;
   /** Whose face stands for the row: who wrote last, or who it is going to. */
   face: string;
+  /** Their address, by which their picture is found. */
+  faceEmail: string | undefined;
   /** What is attached anywhere in the conversation. */
   files: Attachment[];
 }
@@ -86,6 +89,9 @@ function rowsOf(
       face: nameOfFirst(
         outgoing ? email.to : (conversation.at(-1) ?? email).from,
       ),
+      faceEmail: (outgoing
+        ? email.to
+        : (conversation.at(-1) ?? email).from)?.[0]?.email,
     });
   }
   return rows;
@@ -114,6 +120,7 @@ export function MessageList(props: MessageListProps) {
   useSynced(store.emails);
   useSynced(store.threads);
   useSynced(store.mailboxes);
+  useSynced(store.held);
   const [selected, setSelected] = useState<ReadonlySet<Id>>(new Set());
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -373,7 +380,7 @@ export function MessageList(props: MessageListProps) {
                     row.email.threadId === threadId ? 'page' : undefined
                   }
                 >
-                  <Avatar name={row.face} />
+                  <Face name={row.face} email={row.faceEmail} />
                   <span className="row-text">
                     <span className="row-top">
                       <span className="who">
@@ -422,6 +429,14 @@ export function MessageList(props: MessageListProps) {
                     <span className="preview muted">{row.email.preview}</span>
                     {row.email.keywords['$draft'] ? (
                       <Tag tone="warning">Draft</Tag>
+                    ) : null}
+                    {store.held.get(row.email.id) ? (
+                      <Tag>
+                        To be sent{' '}
+                        {formatWhen(
+                          store.held.get(row.email.id)?.sendAt as string,
+                        )}
+                      </Tag>
                     ) : null}
                   </span>
                 </Link>

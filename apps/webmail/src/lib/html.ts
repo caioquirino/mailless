@@ -48,6 +48,7 @@ const QUOTE = [
   '#divRplyFwdMsg',
   '#appendonsend',
   '.protonmail_quote',
+  '.mailless-quote',
 ].join(',');
 
 /** A message passed on is what the message is about, not something it quotes. */
@@ -166,6 +167,31 @@ function contentId(address: string): string | null {
   } catch {
     return match[1] as string;
   }
+}
+
+/**
+ * A message's HTML with nothing in it that acts: for putting inside another
+ * message, as what an answer quotes. It is still somebody else's page, and
+ * is only ever shown in a frame.
+ */
+export function quotableHtml(html: string): string {
+  const parsed = new DOMParser().parseFromString(html, 'text/html');
+  for (const element of [...parsed.querySelectorAll(`${REMOVED},style`)]) {
+    element.remove();
+  }
+  for (const element of [...parsed.querySelectorAll('*')]) {
+    for (const attribute of [...element.attributes]) {
+      const name = attribute.name.toLowerCase();
+      const unsafe =
+        name.startsWith('on') ||
+        name === 'srcdoc' ||
+        name === 'formaction' ||
+        (name === 'action' && element.tagName === 'FORM') ||
+        (name === 'href' && !LINK.test(attribute.value.trim()));
+      if (unsafe) element.removeAttribute(attribute.name);
+    }
+  }
+  return parsed.body.innerHTML;
 }
 
 /** The page to put in the frame for a message's HTML. */

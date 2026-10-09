@@ -27,3 +27,31 @@ if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
     this.dispatchEvent(new Event('close'));
   };
 }
+
+// What the editor asks of a browser that jsdom has not got: where the cursor
+// is on the page, and the event of something dragged over it.
+const nowhere = () =>
+  ({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    bottom: 0,
+    right: 0,
+    width: 0,
+    height: 0,
+  }) as DOMRect;
+Range.prototype.getBoundingClientRect ??= nowhere;
+Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+globalThis.DragEvent ??= class extends MouseEvent {} as typeof DragEvent;
+globalThis.ClipboardEvent ??= class extends Event {
+  clipboardData: DataTransfer | null = null;
+} as typeof ClipboardEvent;
+// With this the editor takes what is typed as a browser gives it, before the
+// page changes, which is the only way it is given here.
+InputEvent.prototype.getTargetRanges ??= () => [];
+
+// jsdom does not hand out addresses for what is held in memory.
+let made = 0;
+URL.createObjectURL ??= () => `blob:test-${++made}`;
+URL.revokeObjectURL ??= () => undefined;

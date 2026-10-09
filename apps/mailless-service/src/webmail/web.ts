@@ -84,7 +84,8 @@ export function webmailSecurityHeaders(
       "default-src 'self'",
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: https: http:",
+      // `blob:` is a picture being put in a message, shown from the copy this browser holds of it.
+      "img-src 'self' data: blob: https: http:",
       "font-src 'self' data:",
       `connect-src 'self' ${provider}`.trim(),
       `form-action 'self' ${provider}`.trim(),

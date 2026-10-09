@@ -44,6 +44,34 @@ export const ICONS = {
   'chevron-left': 'M15 5l-7 7 7 7',
   'chevron-right': 'M9 5l7 7-7 7',
   'chevron-down': 'M6 9l6 6 6-6',
+  'chevron-up': 'M6 15l6-6 6 6',
+  // What a message being written can be given, and the window it is written in.
+  bold: 'M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z',
+  italic: 'M10 5h8M6 19h8M14 5l-4 14',
+  underline: 'M7 4v7a5 5 0 0 0 10 0V4M5 20h14',
+  heading: 'M6 5v14M18 5v14M6 12h12',
+  list: 'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01',
+  numbered: 'M10 6h10M10 12h10M10 18h10M4 5h1v3M4 16h2l-2 3h2',
+  quote: 'M5 5v14M9 8h10M9 12h10M9 16h6',
+  link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+  plain: 'M6 5h12M12 5v14M9 19h6M4 4l16 16',
+  format:
+    'M4 19 9 6l5 13M5.6 15h6.8M16 12.5a2.5 2.5 0 0 1 5 0V19M21 16.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0Z',
+  emoji:
+    'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM8.5 14.5c.9 1.2 2.1 1.8 3.5 1.8s2.6-.6 3.5-1.8M9 10h.01M15 10h.01',
+  picture: 'M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M15.5 9.5h.01',
+  phone:
+    'M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1Z',
+  place:
+    'M12 21s7-6.2 7-11a7 7 0 0 0-14 0c0 4.8 7 11 7 11ZM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z',
+  birthday:
+    'M4 20h16M5 20v-7h14v7M8 13v-3M12 13v-3M16 13v-3M8 7v.01M12 7v.01M16 7v.01',
+  note: 'M5 4h14v16H5zM9 9h6M9 13h6M9 17h3',
+  options:
+    'M4 7h10M18 7h2M4 17h4M12 17h8M16 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4ZM10 15a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z',
+  minimise: 'M6 18h12',
+  expand: 'M5 9V5h4M19 9V5h-4M5 15v4h4M19 15v4h-4',
+  shrink: 'M9 5v4H5M15 5v4h4M9 19v-4H5M15 19v-4h4',
 } as const;
 
 export type IconName = keyof typeof ICONS;

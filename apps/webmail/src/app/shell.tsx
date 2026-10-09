@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -11,6 +13,7 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  Link,
   Navigate,
   NavLink,
   Route,
@@ -23,17 +26,18 @@ import {
 import { JmapRequestError } from '@mailless/jmap-client';
 import type { Mailbox } from '@mailless/jmap-core';
 import { Button, Icon, IconButton, type IconName } from '@mailless/ui';
-import { emptyDraft } from '../lib/compose';
-import { MailError, MailStore, type Draft } from '../lib/mail';
+import { emptyDraft, resumeDraft } from '../lib/compose';
+import { MailError, MailStore, type Draft, type Held } from '../lib/mail';
 import { answerPushes, Notifications } from '../lib/notifications';
 import { usePreference } from '../lib/preference';
-import { Compose } from './compose';
 import { MessageList } from './list';
 import { ProfileMenu } from './profile';
 import { Reader } from './reader';
+import { SearchBar } from './search';
 import { SettingsPage } from './settings';
 import {
   MailProvider,
+  type SayOptions,
   useMail,
   useServices,
   useSynced,
@@ -56,6 +60,17 @@ function explain(error: unknown): string | null {
   }
   return 'The server could not be reached. Check your connection and try again.';
 }
+
+const Compose = lazy(() =>
+  import('./compose').then((module) => ({ default: module.Compose })),
+);
+
+/** How many messages may be open for writing at once: what fits beside each other. */
+const MOST_WRITTEN_AT_ONCE = 3;
+
+const ContactsPage = lazy(() =>
+  import('./contacts').then((module) => ({ default: module.ContactsPage })),
+);
 
 const ROLE_ORDER = ['inbox', 'drafts', 'sent', 'archive', 'junk', 'trash'];
 
@@ -119,6 +134,7 @@ export function MailShell() {
   // On a narrow screen the mailboxes are a drawer, opened from the top bar.
   const [menu, setMenu] = useState(false);
   const closeMenu = useCallback(() => setMenu(false), []);
+  const inContacts = useLocation().pathname.startsWith('/contacts');
   // On a wide one they fold down to their icons, and stay as they were left.
   const [folded, setFolded] = usePreference<boolean>(
     'mailless.mail.sidebar-folded',
@@ -131,11 +147,16 @@ export function MailShell() {
     if (narrow) setMenu((open) => !open);
     else setFolded(!folded);
   };
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [notice, setNotice] = useState<{
-    text: string;
-    problem: boolean;
-  } | null>(null);
+  /** The messages being written: each in a window of its own, one of them in front. */
+  const [writing, setWriting] = useState<Array<{ key: string; draft: Draft }>>(
+    [],
+  );
+  const [front, setFront] = useState<string | null>(null);
+  const open = useRef({ writing, made: 0 });
+  open.current.writing = writing;
+  const [notice, setNotice] = useState<
+    ({ text: string; problem: boolean } & SayOptions) | null
+  >(null);
 
   useEffect(() => {
     let current = true;
@@ -168,6 +189,8 @@ export function MailShell() {
 
   useEffect(() => {
     if (status !== 'ready') return;
+    // The address book, for the pictures of whoever is in it. Mail is shown without waiting for it.
+    void store.contacts.start().catch(() => undefined);
     // What was chosen before on this browser is picked up; failing to is not worth a word.
     void notifications.start().catch(() => undefined);
     return answerPushes(
@@ -188,18 +211,62 @@ export function MailShell() {
     }
   }, []);
   const say = useCallback(
-    (text: string) => setNotice({ text, problem: false }),
+    (text: string, options: SayOptions = {}) =>
+      setNotice({ text, problem: false, ...options }),
     [],
   );
+  const compose = useCallback(
+    (draft: Draft) => {
+      const { writing: now } = open.current;
+      // A draft or an answer already being written is gone on with where it is.
+      const there = now.find(
+        (each) =>
+          (draft.replaces !== undefined &&
+            each.draft.replaces === draft.replaces) ||
+          (draft.answers !== undefined &&
+            JSON.stringify(each.draft.answers) ===
+              JSON.stringify(draft.answers)),
+      );
+      if (there) return setFront(there.key);
+      if (now.length >= MOST_WRITTEN_AT_ONCE) {
+        return say(
+          'Close one of the messages you are writing to start another.',
+        );
+      }
+      const key = `writing-${++open.current.made}`;
+      setWriting([...now, { key, draft }]);
+      setFront(key);
+    },
+    [say],
+  );
+  const closeWriting = useCallback((key: string) => {
+    const left = open.current.writing.filter((each) => each.key !== key);
+    setWriting(left);
+    setFront((now) => (now === key ? (left.at(-1)?.key ?? null) : now));
+  }, []);
+  const unsend = useCallback(
+    async (held: Pick<Held, 'submissionId' | 'emailId'>) => {
+      await act(async () => {
+        await store.unsend(held);
+        const email = store.emails.get(held.emailId);
+        // Back among the drafts, and open to go on with.
+        if (email) compose(resumeDraft(email, store.identities.values()));
+      });
+    },
+    [store, act, compose],
+  );
   const mail = useMemo<Mail>(
-    () => ({ store, compose: setDraft, act, say, notifications }),
-    [store, act, say, notifications],
+    () => ({ store, compose, act, say, unsend, notifications }),
+    [store, compose, act, say, unsend, notifications],
   );
 
   // What was said in passing goes away by itself; a problem stays until it is closed.
   useEffect(() => {
     if (!notice || notice.problem) return;
-    const timer = window.setTimeout(() => setNotice(null), 4000);
+    const timer = window.setTimeout(
+      () => setNotice(null),
+      (notice.seconds ?? 4) * 1000,
+    );
     return () => window.clearTimeout(timer);
   }, [notice]);
 
@@ -232,14 +299,30 @@ export function MailShell() {
     );
   }
 
+  const drawer = { menu, onCloseMenu: closeMenu };
   return (
     <MailProvider value={mail}>
       <div className="shell">
         <TopBar onMenu={toggleMenu} />
         <div className="body">
           <Rail />
-          <Sidebar open={menu} folded={folded} onClose={closeMenu} />
+          {inContacts ? null : (
+            <Sidebar open={menu} folded={folded} onClose={closeMenu} />
+          )}
           <Routes>
+            <Route path="/contacts" element={<ContactsRoute {...drawer} />} />
+            <Route
+              path="/contacts/new"
+              element={<ContactsRoute adding {...drawer} />}
+            />
+            <Route
+              path="/contacts/:cardId"
+              element={<ContactsRoute {...drawer} />}
+            />
+            <Route
+              path="/contacts/:cardId/edit"
+              element={<ContactsRoute editing {...drawer} />}
+            />
             <Route path="/" element={<ToInbox />} />
             <Route path="/box/:mailboxId" element={<MailboxPage />} />
             <Route path="/box/:mailboxId/:threadId" element={<MailboxPage />} />
@@ -255,6 +338,19 @@ export function MailShell() {
             role={notice.problem ? 'alert' : 'status'}
           >
             <span>{notice.text}</span>
+            {notice.action ? (
+              <button
+                type="button"
+                className="button button-small toast-action"
+                onClick={() => {
+                  const { act: taken } = notice.action as { act(): void };
+                  setNotice(null);
+                  taken();
+                }}
+              >
+                {notice.action.label}
+              </button>
+            ) : null}
             <button
               type="button"
               className="button button-small"
@@ -264,13 +360,21 @@ export function MailShell() {
             </button>
           </div>
         ) : null}
-        {draft ? (
-          <Compose
-            // A new message is a new form: nothing of the last one is left in it.
-            key={JSON.stringify([draft.replaces, draft.answers, draft.subject])}
-            draft={draft}
-            onClose={() => setDraft(null)}
-          />
+        {writing.length > 0 ? (
+          // The editor is a good part of the page's weight: fetched when first written with.
+          <Suspense fallback={null}>
+            <div className="compose-dock">
+              {writing.map((each) => (
+                <Compose
+                  key={each.key}
+                  draft={each.draft}
+                  front={each.key === front}
+                  onFront={() => setFront(each.key)}
+                  onClose={() => closeWriting(each.key)}
+                />
+              ))}
+            </div>
+          </Suspense>
         ) : null}
       </div>
     </MailProvider>
@@ -278,18 +382,6 @@ export function MailShell() {
 }
 
 function TopBar({ onMenu }: { onMenu(): void }) {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [params] = useSearchParams();
-  const searching = location.pathname.startsWith('/search');
-  const [text, setText] = useState(searching ? (params.get('q') ?? '') : '');
-  const search = (event: FormEvent) => {
-    event.preventDefault();
-    const query = text.trim();
-    if (query === '') return;
-    void navigate(`/search?q=${encodeURIComponent(query)}`);
-  };
-
   return (
     <header className="topbar">
       <IconButton
@@ -308,16 +400,7 @@ function TopBar({ onMenu }: { onMenu(): void }) {
         </svg>
         <span className="brand-name">mailless</span>
       </NavLink>
-      <form className="search" role="search" onSubmit={search}>
-        <Icon name="search" size={18} />
-        <input
-          type="search"
-          aria-label="Search mail"
-          placeholder="Search mail"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-        />
-      </form>
+      <SearchBar />
       <div className="topbar-user">
         <NavLink
           to="/settings"
@@ -335,28 +418,59 @@ function TopBar({ onMenu }: { onMenu(): void }) {
 
 /** The parts of mailless: mail, and what is on its way. On a phone it sits along the bottom. */
 function Rail() {
+  const contacts = useLocation().pathname.startsWith('/contacts');
+  const item = (
+    to: string,
+    icon: IconName,
+    label: string,
+    current: boolean,
+  ) => (
+    <Link
+      to={to}
+      className={`rail-item${current ? ' rail-current' : ''}`}
+      {...(current ? { 'aria-current': 'page' as const } : {})}
+    >
+      <span className="rail-icon">
+        <Icon name={icon} />
+      </span>
+      {label}
+    </Link>
+  );
   return (
     <nav className="rail" aria-label="Sections">
-      <NavLink to="/" className="rail-item rail-current" aria-current="page">
+      {item('/', 'mail', 'Mail', !contacts)}
+      <span
+        className="rail-item rail-soon"
+        aria-disabled="true"
+        title="Not here yet"
+      >
         <span className="rail-icon">
-          <Icon name="mail" />
+          <Icon name="calendar" />
         </span>
-        Mail
-      </NavLink>
-      {(['calendar', 'contacts'] as const).map((section) => (
-        <span
-          key={section}
-          className="rail-item rail-soon"
-          aria-disabled="true"
-          title="Not here yet"
-        >
-          <span className="rail-icon">
-            <Icon name={section} />
-          </span>
-          {section === 'calendar' ? 'Calendar' : 'Contacts'}
-        </span>
-      ))}
+        Calendar
+      </span>
+      {item('/contacts', 'contacts', 'Contacts', contacts)}
     </nav>
+  );
+}
+
+/** The address book, which is fetched when it is first gone to. */
+function ContactsRoute(props: {
+  editing?: boolean;
+  adding?: boolean;
+  menu: boolean;
+  onCloseMenu(): void;
+}) {
+  const { cardId } = useParams();
+  return (
+    <Suspense fallback={null}>
+      <ContactsPage
+        cardId={props.adding ? 'new' : cardId}
+        editing={props.editing === true}
+        menu={props.menu}
+        onCloseMenu={props.onCloseMenu}
+      />
+    </Suspense>
   );
 }
 

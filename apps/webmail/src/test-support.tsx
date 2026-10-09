@@ -35,8 +35,10 @@ type MessageOptions = NonNullable<Parameters<typeof buildMessage>[0]>;
  * A real mail server over memory, reached through its HTTP handler without
  * a network, and an identity provider that gives out tokens it accepts.
  */
-export async function fakeBackend() {
+export async function fakeBackend(options: { holds?: boolean } = {}) {
   const sent: Array<{ message: string; recipients: string[] }> = [];
+  /** What the server asked to be woken for, when it can hold a message. */
+  const waiting: string[] = [];
   const storage = new InMemoryStorageAdapter();
   /** Pushes, as a push service gets them. Unread until a test says where they go. */
   const push = {
@@ -88,6 +90,16 @@ export async function fakeBackend() {
       },
     },
     identities: () => [{ id: 'ann', email: 'ann@example.com', name: 'Ann' }],
+    // A server that holds messages, for sending later and for taking one back.
+    ...(options.holds
+      ? {
+          scheduler: {
+            schedule: async (job: { submissionId: string }) => {
+              waiting.push(job.submissionId);
+            },
+          },
+        }
+      : {}),
   });
   await server.provisionAccount(AUTH);
 
@@ -132,19 +144,25 @@ export async function fakeBackend() {
   let sequence = 0;
   /** Puts a message in a mailbox, as delivery does. Each is a minute newer than the last. */
   const deliver = async (
-    options: MessageOptions & { mailbox?: string; seen?: boolean } = {},
+    options: MessageOptions & {
+      mailbox?: string;
+      seen?: boolean;
+      /** The whole message as it travels, for what the options cannot say. */
+      raw?: string;
+    } = {},
   ) => {
     sequence++;
     const when = new Date(Date.UTC(2026, 0, 5, 9, sequence));
-    const { mailbox, seen, ...message } = options;
+    const { mailbox, seen, raw, ...message } = options;
     const imported = await server.importMessage(
       AUTH,
       new TextEncoder().encode(
-        buildMessage({
-          messageId: `<m${sequence}@example.com>`,
-          date: when.toUTCString(),
-          ...message,
-        }),
+        raw ??
+          buildMessage({
+            messageId: `<m${sequence}@example.com>`,
+            date: when.toUTCString(),
+            ...message,
+          }),
       ),
       {
         mailboxRole: mailbox ?? 'inbox',
@@ -159,7 +177,14 @@ export async function fakeBackend() {
 
   // What is there to begin with is not news.
   await push.flush();
-  return { server, state, sent, push, fetch: fetcher, deliver };
+  /** The time has come for everything that was held: it is sent, unless it was taken back. */
+  const due = async () => {
+    for (const submissionId of waiting.splice(0)) {
+      await server.sendScheduled(AUTH, submissionId);
+    }
+    await push.flush();
+  };
+  return { server, state, sent, push, fetch: fetcher, deliver, due };
 }
 
 export type FakeBackend = Awaited<ReturnType<typeof fakeBackend>>;

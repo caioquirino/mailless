@@ -1,4 +1,5 @@
 import type { JmapClient } from '@mailless/jmap-client';
+import type { Email } from '@mailless/jmap-core';
 import type { Attachment } from './mail';
 
 /*
@@ -69,4 +70,31 @@ export async function openAttachment(
     tab.close();
     throw error;
   }
+}
+
+/** A whole message as it travelled, headers and all, as something to save or look at. */
+function original(email: Email, type: string): Attachment {
+  // Without what a file's name cannot have in it.
+  const name = [...(email.subject ?? '')]
+    .map((char) => (char < ' ' || '\\/:*?"<>|'.includes(char) ? ' ' : char))
+    .join('')
+    .replace(/ +/g, ' ')
+    .trim()
+    .slice(0, 80);
+  return {
+    blobId: email.blobId,
+    name: `${name || 'message'}.eml`,
+    type,
+    size: email.size,
+  };
+}
+
+/** Saves a message to disk, as a file other mail programs can open. */
+export function saveMessage(client: JmapClient, email: Email): Promise<void> {
+  return saveAttachment(client, original(email, 'message/rfc822'));
+}
+
+/** Shows a message as it travelled, in a tab of its own, as plain text. */
+export function showOriginal(client: JmapClient, email: Email): Promise<void> {
+  return openAttachment(client, original(email, 'text/plain'));
 }

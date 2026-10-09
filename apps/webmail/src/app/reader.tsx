@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { Email, EmailBodyPart, Mailbox } from '@mailless/jmap-core';
-import { Avatar, Button, Icon, IconButton, Tag } from '@mailless/ui';
+import { Button, Icon, IconButton, Tag, type IconName } from '@mailless/ui';
 import { formatAddresses, nameOf } from '../lib/addresses';
-import { canView, openAttachment } from '../lib/attachments';
 import {
-  attachmentsOf,
+  canView,
+  openAttachment,
+  saveMessage,
+  showOriginal,
+} from '../lib/attachments';
+import {
   forwardDraft,
+  listedAttachments,
   replyDraft,
   resumeDraft,
 } from '../lib/compose';
@@ -19,6 +24,8 @@ import {
   splitQuotedText,
 } from '../lib/html';
 import type { Attachment } from '../lib/mail';
+import { printMessage, type PicturesShown } from '../lib/print';
+import { Face } from './face';
 import { MoveTo } from './list';
 import { useMail, useServices, useSynced } from './services';
 
@@ -236,6 +243,9 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
               <Message
                 email={email}
                 open={open?.has(email.id) ?? false}
+                fromHere={conversation.slice(index).map((each) => each.id)}
+                alone={conversation.length === 1}
+                leave={leave}
                 onToggle={() => {
                   const next = new Set(open ?? []);
                   if (!next.delete(email.id)) next.add(email.id);
@@ -250,50 +260,278 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
   );
 }
 
-function Message(props: { email: Email; open: boolean; onToggle(): void }) {
+export interface Choice {
+  label: string;
+  icon: IconName;
+  act(): void;
+}
+
+/** A button that opens a short list of things to do. Null in the list draws a line. */
+export function More(props: { label: string; choices: Array<Choice | null> }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const outside = (event: Event) => {
+      if (!box.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open]);
+  return (
+    <span className="more" ref={box}>
+      <IconButton
+        icon="more"
+        label={props.label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      />
+      {open ? (
+        <div className="more-menu" role="menu" aria-label={props.label}>
+          {props.choices.map((choice, index) =>
+            choice === null ? (
+              <hr key={index} />
+            ) : (
+              <button
+                key={choice.label}
+                type="button"
+                role="menuitem"
+                className="more-choice"
+                onClick={() => {
+                  setOpen(false);
+                  choice.act();
+                }}
+              >
+                <Icon name={choice.icon} size={18} />
+                {choice.label}
+              </button>
+            ),
+          )}
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
+interface MessageProps {
+  email: Email;
+  open: boolean;
+  onToggle(): void;
+  /** This message and those after it in the conversation. */
+  fromHere: readonly string[];
+  /** Does something after which the conversation is left, and says it was done. */
+  leave(action: () => Promise<unknown>, done: string): Promise<void>;
+  /** Whether it is the only message of the conversation: without it, nothing is left to read. */
+  alone: boolean;
+}
+
+function Message(props: MessageProps) {
   const { email, open } = props;
-  const { store, compose } = useMail();
+  const { client } = useServices();
+  const { store, compose, act, say, unsend } = useMail();
+  const navigate = useNavigate();
   useSynced(store.identities);
+  useSynced(store.held);
+  const held = store.held.get(props.email.id);
   const identities = store.identities.values();
   const sender = email.from?.[0];
+  const who = sender ? nameOf(sender) : 'an unknown sender';
   const draft = email.keywords['$draft'] === true;
+  const flagged = email.keywords['$flagged'] === true;
   const loaded = email.bodyValues !== undefined;
   const canSend = identities.length > 0;
   const several = (email.to?.length ?? 0) + (email.cc?.length ?? 0) > 1;
+  const junk = store.mailbox('junk');
+  const trash = store.mailbox('trash');
+  const inTrash = trash !== undefined && email.mailboxIds[trash.id] === true;
+  /** Which pictures each part of the message is showing, for printing the same. */
+  const shown = useRef(new Map<string, PicturesShown>());
+
+  /** Takes this one message away. The rest of the conversation stays open. */
+  const away = (action: () => Promise<unknown>, done: string) => {
+    if (props.alone) return void props.leave(action, done);
+    void act(action).then((worked) => {
+      if (worked) say(done);
+    });
+  };
+  const choices: Array<Choice | null | false> = [
+    canSend && {
+      label: 'Reply',
+      icon: 'reply',
+      act: () => compose(replyDraft(email, identities, false)),
+    },
+    canSend &&
+      several && {
+        label: 'Reply to all',
+        icon: 'reply-all',
+        act: () => compose(replyDraft(email, identities, true)),
+      },
+    canSend && {
+      label: 'Forward',
+      icon: 'forward',
+      act: () => compose(forwardDraft(email, identities)),
+    },
+    canSend && null,
+    {
+      label: inTrash ? 'Delete this message for good' : 'Delete this message',
+      icon: 'delete',
+      act: () =>
+        away(
+          () => store.remove([email.id]),
+          inTrash ? 'Deleted for good' : 'Moved to the trash',
+        ),
+    },
+    {
+      label: 'Mark unread from here',
+      icon: 'unread',
+      act: () =>
+        void props.leave(
+          () => store.setKeyword(props.fromHere, '$seen', false),
+          'Marked unread',
+        ),
+    },
+    junk !== undefined &&
+      !email.mailboxIds[junk.id] && {
+        label: 'Report as junk',
+        icon: 'junk',
+        act: () => away(() => store.move([email.id], junk.id), 'Moved to Junk'),
+      },
+    junk !== undefined &&
+      !email.mailboxIds[junk.id] && {
+        label: 'Report phishing',
+        icon: 'junk',
+        act: () =>
+          away(
+            // Marked for what it is, as mail programs agree to mark it, then put with the junk.
+            () =>
+              store
+                .setKeyword([email.id], '$phishing', true)
+                .then(() => store.move([email.id], junk.id)),
+            'Reported as phishing, and moved to Junk',
+          ),
+      },
+    sender !== undefined && {
+      label: `Add ${who} to contacts`,
+      icon: 'contacts',
+      act: () =>
+        void navigate(
+          `/contacts/new?${new URLSearchParams({
+            name: sender.name?.trim() ?? '',
+            email: sender.email,
+          }).toString()}`,
+        ),
+    },
+    null,
+    {
+      label: 'Print',
+      icon: 'file',
+      act: () => {
+        // The pictures on the screen, of whichever of its parts show any.
+        const parts = [...shown.current.values()];
+        printMessage(email, {
+          images: parts.some((part) => part.images),
+          inline: Object.assign({}, ...parts.map((part) => part.inline)),
+        });
+      },
+    },
+    {
+      label: 'Download message',
+      icon: 'attach',
+      act: () => void act(() => saveMessage(client, email)),
+    },
+    {
+      label: 'Show original',
+      icon: 'mail',
+      act: () => void act(() => showOriginal(client, email)),
+    },
+  ];
 
   return (
     <article
       className={`message${open ? ' open' : ''}`}
-      aria-label={`Message from ${sender ? nameOf(sender) : 'an unknown sender'}`}
+      aria-label={`Message from ${who}`}
     >
-      <button
-        type="button"
-        className="message-head"
-        aria-expanded={open}
-        onClick={props.onToggle}
-      >
-        <Avatar
-          name={sender ? nameOf(sender) : '?'}
-          size={open ? 'large' : undefined}
-        />
-        <span className="message-from">
-          <strong>{sender ? nameOf(sender) : '(unknown sender)'}</strong>
-          {draft ? <Tag tone="warning">Draft</Tag> : null}
-          {open && sender?.name ? (
-            <span className="muted small"> {sender.email}</span>
-          ) : null}
-        </span>
-        <time
-          className="when muted small"
-          dateTime={email.receivedAt}
-          title={formatFull(email.receivedAt)}
+      <div className="message-top">
+        <button
+          type="button"
+          className="message-head"
+          aria-expanded={open}
+          onClick={props.onToggle}
         >
-          {open ? formatFull(email.receivedAt) : formatWhen(email.receivedAt)}
-        </time>
-        {open ? null : <span className="preview muted">{email.preview}</span>}
-      </button>
+          <Face
+            name={sender ? nameOf(sender) : '?'}
+            email={sender?.email}
+            {...(open ? { size: 'large' as const } : {})}
+          />
+          <span className="message-from">
+            <strong>{sender ? nameOf(sender) : '(unknown sender)'}</strong>
+            {draft ? <Tag tone="warning">Draft</Tag> : null}
+            {open && sender?.name ? (
+              <span className="muted small"> {sender.email}</span>
+            ) : null}
+          </span>
+          <time
+            className="when muted small"
+            dateTime={email.receivedAt}
+            title={formatFull(email.receivedAt)}
+          >
+            {open ? formatFull(email.receivedAt) : formatWhen(email.receivedAt)}
+          </time>
+          {open ? null : <span className="preview muted">{email.preview}</span>}
+        </button>
+        {open && !draft ? (
+          <span className="message-tools">
+            <IconButton
+              icon="flag"
+              label={
+                flagged
+                  ? 'Remove the flag from this message'
+                  : 'Flag this message'
+              }
+              pressed={flagged}
+              onClick={() =>
+                void act(() =>
+                  store.setKeyword([email.id], '$flagged', !flagged),
+                )
+              }
+            />
+            <IconButton
+              icon="reply"
+              label={`Reply to ${who}`}
+              disabled={!canSend || !loaded}
+              onClick={() => compose(replyDraft(email, identities, false))}
+            />
+            {loaded ? (
+              <More
+                label="More for this message"
+                choices={choices.filter((choice) => choice !== false)}
+              />
+            ) : null}
+          </span>
+        ) : null}
+      </div>
       {open ? (
         <div className="message-body">
+          {held ? (
+            <p className="notice small held-notice">
+              Not sent yet: it goes {formatFull(held.sendAt)}.{' '}
+              <button
+                type="button"
+                className="button button-small"
+                onClick={() => void unsend(held)}
+              >
+                Do not send it
+              </button>
+            </p>
+          ) : null}
           <p className="recipients muted small">
             To: {formatAddresses(email.to) || '(nobody)'}
             {email.cc?.length ? <> · Cc: {formatAddresses(email.cc)}</> : null}
@@ -303,8 +541,11 @@ function Message(props: { email: Email; open: boolean; onToggle(): void }) {
           </p>
           {loaded ? (
             <>
-              <Body email={email} />
-              <Attachments attachments={attachmentsOf(email)} />
+              <Body
+                email={email}
+                onShown={(part, pictures) => shown.current.set(part, pictures)}
+              />
+              <Attachments attachments={listedAttachments(email)} />
               <div className="row message-actions">
                 {draft ? (
                   <Button
@@ -364,7 +605,11 @@ function Message(props: { email: Email; open: boolean; onToggle(): void }) {
 }
 
 /** What a message says: each part of its body in turn, as it was written. */
-function Body({ email }: { email: Email }) {
+function Body(props: {
+  email: Email;
+  onShown(part: string, pictures: PicturesShown): void;
+}) {
+  const { email, onShown } = props;
   const parts = (email.htmlBody ?? []).filter(
     (part) => part.type === 'text/html' || part.type === 'text/plain',
   );
@@ -380,7 +625,13 @@ function Body({ email }: { email: Email }) {
         return (
           <div key={part.partId ?? index} className="part">
             {part.type === 'text/html' ? (
-              <HtmlPart html={text} email={email} />
+              <HtmlPart
+                html={text}
+                email={email}
+                onShown={(pictures) =>
+                  onShown(part.partId ?? String(index), pictures)
+                }
+              />
             ) : (
               <PlainPart text={text} />
             )}
@@ -508,9 +759,19 @@ function useInlineImages(email: Email, html: string): Record<string, string> {
   return images;
 }
 
-function HtmlPart({ html, email }: { html: string; email: Email }) {
+function HtmlPart(props: {
+  html: string;
+  email: Email;
+  onShown(pictures: PicturesShown): void;
+}) {
+  const { html, email } = props;
   const [images, setImages] = useState(false);
   const inline = useInlineImages(email, html);
+  const said = useRef(props.onShown);
+  said.current = props.onShown;
+  useEffect(() => {
+    said.current({ images, inline });
+  }, [images, inline]);
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(120);
   const remote = useMemo(() => hasRemoteImages(html), [html]);

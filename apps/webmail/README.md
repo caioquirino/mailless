@@ -7,9 +7,42 @@ JMAP API it is a client of.
 - **Conversations**: one row for each, newest first; read, archive, delete,
   move, flag, several at a time; the trash and junk emptied in one go.
 - **Reading**: each message of a conversation, its attachments saved to disk.
-- **Writing**: new messages, answers and forwards, with attachments, and
-  drafts kept to go on with later.
-- **Search** through everything.
+- **Writing**: new messages, answers and forwards, in a window that docks in
+  the corner, folds down to its title or takes the whole page (on a phone it
+  always takes the screen). Rich text, written with
+  [Lexical](https://lexical.dev): emphasis, headings, lists, quotes and links,
+  sent as a page and as plain words. Emoji, as characters every mail program
+  shows. Pictures among the words: dropped, pasted or chosen, then sized,
+  dragged elsewhere or taken out, and sent as parts of the message that the
+  words point at. Who it is for as chips. What is answered
+  stays under the words exactly as it came, behind a button, and is never
+  put through the editor. Attachments up to what the server will send (a
+  large one is uploaded in pieces), by choosing, dropping or pasting them.
+  Sending can wait: a few seconds after Send, in which "Undo" takes the
+  message back (how long is a setting), or until a time chosen beside Send.
+  The server does the waiting, so a message goes when its time comes whether
+  or not this page is open, and until then it says where it is filed that it
+  has not gone, with a button to stop it.
+  Who it is for is suggested while typing, from the address book and from
+  who was written to before. Up to three messages can be open at once, one
+  in front and the others down to their titles. An answer or a forward
+  takes along the pictures the original shows in place.
+  What is written is kept as a draft by itself a moment after the last
+  change, and closing the window loses nothing.
+- **Contacts**: the address book, beside the mail. Everyone in it under the
+  letter their name starts with, searched by anything their card says; one
+  person at a time, with how to reach them, a button to write to each
+  address, and the mail there has been with them; a form to add someone or
+  change them, with a photo. Whoever wrote a message is added from the
+  message. Kept as cards other programs read too (JSContact, over JMAP).
+  The photo kept of someone is beside their mail too, and one's own, chosen
+  in the settings, stands for one's own. Nothing is fetched from anywhere
+  to put a face to mail: only pictures the user put there are shown.
+- **Search** through everything, narrowed two ways that are one: typed, with
+  words such as `from:`, `has:attachment` or `newer:1m` (people are offered
+  while one is being named), or filled in as a form. Either changes the
+  other, and what narrows a search is shown in the bar, each to be taken out
+  by itself.
 
 It talks to the server through [`@mailless/jmap-client`](../../libs/jmap/client)
 and nothing else, so it works with any JMAP server that has the mail
@@ -108,7 +141,9 @@ function: there is no bucket or CDN to keep in step.
 
 - A notification that says who wrote when no tab is open: that would mean
   the worker holding a sign-in of its own.
-- Contacts, and suggestions while typing an address.
-- Writing in rich text; messages are written as plain text.
+- Bringing contacts in from a file, or out to one; and sharing an address book.
+- While writing: templates,
+  and how far
+  an attachment has got while it uploads.
 - The mailboxes of other accounts shared with you.
 - Renaming and removing mailboxes, and keyboard shortcuts.

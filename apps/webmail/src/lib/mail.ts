@@ -4,11 +4,12 @@ import {
   ObjectCache,
   QueryView,
   sync,
+  type Batch,
   type BatchResult,
   type JmapClient,
   type Synced,
 } from '@mailless/jmap-client';
-import { CAPABILITY_MAIL } from '@mailless/jmap-core';
+import { CAPABILITY_MAIL, CAPABILITY_SUBMISSION } from '@mailless/jmap-core';
 import type {
   Email,
   EmailAddress,
@@ -18,6 +19,10 @@ import type {
   SetError,
   Thread,
 } from '@mailless/jmap-core';
+import { bodiesOf } from './compose';
+import { Contacts } from './contacts';
+import { People } from './people';
+import { filterOf, parseSearch } from './search';
 
 /*
  * The mail as this page knows it: a copy of what it has looked at, kept in
@@ -92,6 +97,11 @@ export interface Attachment {
   size: number;
 }
 
+/** A picture among the words of a message, which point at it by its `cid`. */
+export interface Picture extends Attachment {
+  cid: string;
+}
+
 /** How full a mailbox is, in bytes. `limit` is null when there is none. */
 export interface Usage {
   used: number;
@@ -105,7 +115,14 @@ export interface Draft {
   cc: EmailAddress[];
   bcc: EmailAddress[];
   subject: string;
-  text: string;
+  /** What was written, as the editor holds it. */
+  html: string;
+  /** What is being answered or passed on. It goes under what was written, as it is. */
+  quote?: { text: string; html: string };
+  /** Not signed when sent: a draft from elsewhere, which has its signature in its words. */
+  unsigned?: boolean;
+  /** The pictures among the words. One the words no longer point at is left behind. */
+  pictures?: Picture[];
   attachments: Attachment[];
   /** The Message-IDs this answers and the conversation it belongs to. */
   inReplyTo?: string[] | null;
@@ -114,6 +131,108 @@ export interface Draft {
   answers?: { emailId: Id; keyword: '$answered' | '$forwarded' };
   /** The saved draft this replaces. */
   replaces?: Id;
+}
+
+/** When to send: now, when nothing is said. */
+export interface SendOptions {
+  /** Held for this many seconds first, in which it can be taken back. */
+  holdFor?: number;
+  /** Held until then. */
+  at?: Date;
+}
+
+/** A message the server is holding: not sent yet, and still possible to take back. */
+export interface Held {
+  submissionId: Id;
+  emailId: Id;
+  /** When it will be sent. */
+  sendAt: string;
+}
+
+/**
+ * The messages waiting to be sent. Asked for afresh only when something
+ * about sending has changed: finding them means going through everything
+ * that was ever sent.
+ */
+export class HeldSends implements Synced {
+  private state: string | null = null;
+  private byEmail = new Map<Id, Held>();
+  private readonly listeners = new Set<() => void>();
+  version = 0;
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  get(emailId: Id): Held | undefined {
+    return this.byEmail.get(emailId);
+  }
+
+  values(): Held[] {
+    return [...this.byEmail.values()];
+  }
+
+  /** Something was sent or taken back from here: what is known is out of date. */
+  touch(): void {
+    this.state = null;
+  }
+
+  ask(batch: Batch): (result: BatchResult) => boolean {
+    const known = this.state;
+    if (known !== null) {
+      const changes = batch.call('EmailSubmission/changes', {
+        sinceState: known,
+        maxChanges: 50,
+      });
+      return (result) => {
+        try {
+          if (result.get(changes).newState === known) return false;
+        } catch {
+          // Too much changed to be told what: asked afresh, like any change.
+        }
+        this.state = null;
+        return true;
+      };
+    }
+    const query = batch.call('EmailSubmission/query', {
+      filter: { undoStatus: 'pending' },
+    });
+    const got = batch.call('EmailSubmission/get', {
+      '#ids': query.ref('/ids'),
+      properties: ['emailId', 'sendAt', 'undoStatus'],
+    });
+    return (result) => {
+      let answer;
+      try {
+        answer = result.get(got);
+      } catch {
+        return false;
+      }
+      this.state = answer.state;
+      const next = new Map<Id, Held>();
+      for (const each of answer.list) {
+        if (each.undoStatus !== 'pending') continue;
+        next.set(each.emailId, {
+          submissionId: each.id,
+          emailId: each.emailId,
+          sendAt: each.sendAt,
+        });
+      }
+      const same =
+        next.size === this.byEmail.size &&
+        [...next].every(
+          ([id, held]) =>
+            this.byEmail.get(id)?.submissionId === held.submissionId,
+        );
+      this.byEmail = next;
+      if (!same) {
+        this.version++;
+        for (const listener of [...this.listeners]) listener();
+      }
+      return false;
+    };
+  }
 }
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
@@ -130,6 +249,8 @@ function describe(error: SetError | undefined): string {
       return 'The mailbox is full. Remove some mail and try again.';
     case 'tooLarge':
       return 'The message is too large to send.';
+    case 'blobNotFound':
+      return 'Something attached to the message is no longer there. Take it out and attach it again.';
     case 'tooManyRecipients':
       return 'The message has too many recipients.';
     case 'invalidRecipients':
@@ -151,11 +272,24 @@ export class MailStore {
   readonly identities: ObjectCache<Identity>;
   readonly emails: ObjectCache<Email>;
   readonly threads: ObjectCache<Thread>;
+  /** The messages waiting to be sent. */
+  readonly held = new HeldSends();
+  /** Who a message might be for. Found out when one is first written. */
+  readonly people: People;
+  /** The address book. Fetched when it is first looked at, or a message first written. */
+  readonly contacts: Contacts;
+  /**
+   * For how long the server will hold a message before sending it, in
+   * seconds. Nought when it cannot, or when this account cannot send.
+   */
+  holdLimit = 0;
   private readonly lists = new Map<string, QueryView>();
   private refreshing: Promise<void> | undefined;
   private again = false;
 
   constructor(readonly client: JmapClient) {
+    this.contacts = new Contacts(client);
+    this.people = new People(client, this.contacts);
     this.mailboxes = new ObjectCache(client, {
       type: 'Mailbox',
       everything: true,
@@ -182,6 +316,11 @@ export class MailStore {
     mailboxes.done(result);
     // An account that cannot send has no identities to ask for.
     if (result.ok(identities.call)) identities.done(result);
+    const session = await this.client.session();
+    const sending = session.capabilities[CAPABILITY_SUBMISSION] as
+      { submissionExtensions?: Record<string, string[]> } | undefined;
+    const most = Number(sending?.submissionExtensions?.['FUTURERELEASE']?.[0]);
+    this.holdLimit = Number.isFinite(most) && most > 0 ? most : 0;
   }
 
   /** The mailbox with a role: `inbox`, `trash`. */
@@ -200,7 +339,7 @@ export class MailStore {
         type: 'Email',
         filter:
           key.search !== undefined
-            ? { text: key.search }
+            ? filterOf(parseSearch(key.search), this.mailboxes.values())
             : { inMailbox: key.mailboxId },
         sort: [{ property: 'receivedAt', isAscending: false }],
         // A conversation is one row, whatever number of messages it has.
@@ -268,6 +407,7 @@ export class MailStore {
           ...(this.identities.isComplete ? [this.identities] : []),
           this.emails,
           this.threads,
+          ...(this.holdLimit > 0 ? [this.held] : []),
           ...this.lists.values(),
         ];
         await sync(this.client, parts);
@@ -601,6 +741,32 @@ export class MailStore {
   private message(draft: Draft, mailboxId: Id): Partial<Email> {
     const identity = this.identities.get(draft.identityId);
     if (!identity) throw new MailError('Choose who the message is from.');
+    const bodies = bodiesOf(draft, identity);
+    const text = { partId: 'text', type: 'text/plain' };
+    const html = { partId: 'html', type: 'text/html' };
+    const attachments = draft.attachments.map((attachment) => ({
+      blobId: attachment.blobId,
+      type: attachment.type,
+      name: attachment.name,
+      disposition: 'attachment',
+    }));
+    const pictures = (draft.pictures ?? [])
+      .filter((picture) => bodies.html.includes(`cid:${picture.cid}`))
+      .map((picture) => ({
+        blobId: picture.blobId,
+        type: picture.type,
+        name: picture.name,
+        disposition: 'inline',
+        cid: picture.cid,
+      }));
+    // Pictures travel beside the page that shows them, which is said by how the parts are nested.
+    const words = {
+      type: 'multipart/alternative',
+      subParts: [
+        text,
+        { type: 'multipart/related', subParts: [html, ...pictures] },
+      ],
+    };
     return {
       mailboxIds: { [mailboxId]: true },
       keywords: { $draft: true, $seen: true },
@@ -611,14 +777,21 @@ export class MailStore {
       subject: draft.subject,
       inReplyTo: draft.inReplyTo ?? null,
       references: draft.references ?? null,
-      bodyValues: { text: { value: draft.text } },
-      textBody: [{ partId: 'text', type: 'text/plain' }],
-      attachments: draft.attachments.map((attachment) => ({
-        blobId: attachment.blobId,
-        type: attachment.type,
-        name: attachment.name,
-        disposition: 'attachment',
-      })),
+      bodyValues: {
+        text: { value: bodies.text },
+        html: { value: bodies.html },
+      },
+      ...(pictures.length === 0
+        ? { textBody: [text], htmlBody: [html], attachments }
+        : {
+            bodyStructure:
+              attachments.length === 0
+                ? words
+                : {
+                    type: 'multipart/mixed',
+                    subParts: [words, ...attachments],
+                  },
+          }),
     } as unknown as Partial<Email>;
   }
 
@@ -629,8 +802,14 @@ export class MailStore {
     return mailbox;
   }
 
-  /** Keeps a message being written, in place of the copy kept before. Returns the new copy's id. */
-  async saveDraft(draft: Draft): Promise<Id> {
+  /**
+   * Keeps a message being written, in place of the copy kept before.
+   * Returns the new copy's id, and where what goes with the message is
+   * now: each file and picture is a part of the copy that was made, and
+   * the part of the copy before it, which it may have been until now, is
+   * gone with that copy. Whoever goes on writing must point at the new ones.
+   */
+  async saveDraft(draft: Draft): Promise<{ id: Id; blobs: Record<Id, Id> }> {
     const drafts = this.requireMailbox('drafts', 'drafts');
     const response = await this.client.call('Email/set', {
       create: { draft: this.message(draft, drafts.id) },
@@ -639,12 +818,37 @@ export class MailStore {
     });
     const id = response.created?.['draft']?.id;
     if (!id) throw new MailError(describe(response.notCreated?.['draft']));
+
+    const blobs: Record<Id, Id> = {};
+    if (draft.attachments.length + (draft.pictures?.length ?? 0) > 0) {
+      const made = await this.client.call('Email/get', {
+        ids: [id],
+        properties: ['attachments'],
+      });
+      // Pictures are known by their own ids; the files come back in the order they were given.
+      const files = [...draft.attachments];
+      for (const part of made.list[0]?.attachments ?? []) {
+        if (!part.blobId) continue;
+        const cid = part.cid?.replace(/^<|>$/g, '');
+        const picture = draft.pictures?.find((each) => each.cid === cid);
+        const before = picture ?? files.shift();
+        if (before) blobs[before.blobId] = part.blobId;
+      }
+    }
     await this.refresh();
-    return id;
+    return { id, blobs };
   }
 
-  /** Sends a message, and files it under Sent. */
-  async send(draft: Draft): Promise<void> {
+  /**
+   * Sends a message, and files it under Sent: now, or held by the server
+   * first, for a few seconds or until a time. Held, it can be taken back
+   * with `unsend`. Returns what was made, with `submissionId` set when it
+   * is being held.
+   */
+  async send(
+    draft: Draft,
+    options: SendOptions = {},
+  ): Promise<{ emailId: Id; submissionId: Id | null }> {
     if (draft.to.length + draft.cc.length + draft.bcc.length === 0) {
       throw new MailError('Say who the message is for.');
     }
@@ -655,7 +859,13 @@ export class MailStore {
       create: { draft: this.message(draft, drafts.id) },
     });
     const submitted = batch.call('EmailSubmission/set', {
-      create: { send: { identityId: draft.identityId, emailId: '#draft' } },
+      create: {
+        send: {
+          identityId: draft.identityId,
+          emailId: '#draft',
+          ...this.envelope(draft, options),
+        },
+      },
       onSuccessUpdateEmail: {
         '#send': {
           'keywords/$draft': null,
@@ -706,6 +916,68 @@ export class MailStore {
     if (draft.replaces || draft.answers) {
       await after.send().catch(() => undefined);
     }
+    this.held.touch();
+    this.people.note([...draft.to, ...draft.cc, ...draft.bcc]);
     await this.refresh().catch(() => undefined);
+    const held = this.envelope(draft, options).envelope !== undefined;
+    const submissionId = result.get(submitted).created?.['send']?.id ?? null;
+    return { emailId, submissionId: held ? submissionId : null };
+  }
+
+  /**
+   * How a message that is to be held is addressed. Holding is asked for
+   * where the sender is named, so everyone it goes to is named there too.
+   */
+  private envelope(
+    draft: Draft,
+    options: SendOptions,
+  ): { envelope?: Record<string, unknown> } {
+    const identity = this.identities.get(draft.identityId);
+    const hold =
+      options.at !== undefined
+        ? { HOLDUNTIL: options.at.toISOString().replace(/\.\d+Z$/, 'Z') }
+        : options.holdFor !== undefined && options.holdFor > 0
+          ? { HOLDFOR: String(Math.round(options.holdFor)) }
+          : null;
+    if (!hold || !identity || this.holdLimit === 0) return {};
+    return {
+      envelope: {
+        mailFrom: { email: identity.email, parameters: hold },
+        rcptTo: [...draft.to, ...draft.cc, ...draft.bcc].map((address) => ({
+          email: address.email,
+          parameters: null,
+        })),
+      },
+    };
+  }
+
+  /**
+   * Takes back a message the server is holding, and puts it among the
+   * drafts again, to go on with or to discard. Fails when it has gone.
+   */
+  async unsend(held: Pick<Held, 'submissionId' | 'emailId'>): Promise<void> {
+    const drafts = this.requireMailbox('drafts', 'drafts');
+    const canceled = await this.client.call('EmailSubmission/set', {
+      update: { [held.submissionId]: { undoStatus: 'canceled' } },
+    });
+    this.held.touch();
+    if (canceled.notUpdated?.[held.submissionId]) {
+      await this.refresh().catch(() => undefined);
+      throw new MailError('It is too late to take it back: it has been sent.');
+    }
+    await this.client.call('Email/set', {
+      update: {
+        [held.emailId]: {
+          mailboxIds: { [drafts.id]: true },
+          'keywords/$draft': true,
+        },
+      },
+    });
+    await this.refresh();
+    // It may be in no list that is open here: fetched whole, to go on writing it.
+    await this.emails.fetch([held.emailId], {
+      properties: [...LIST_PROPERTIES],
+    });
+    await this.bodies([held.emailId]);
   }
 }

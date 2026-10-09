@@ -65,6 +65,9 @@ describe('webmail', () => {
     expect(policy).not.toMatch(/script-src[^;]*unsafe/);
     expect(policy).toContain("connect-src 'self' https://auth.example.com;");
     expect(policy).toContain("frame-src 'self';");
+    // A picture being put in a message is shown from the copy the browser holds of it.
+    expect(policy).toMatch(/img-src [^;]*\bblob:/);
+    expect(policy).not.toMatch(/(script|default|frame|connect)-src[^;]*blob:/);
     expect(policy).toContain("object-src 'none'");
     expect(policy).toContain("frame-ancestors 'none'");
     expect(headers.get('x-frame-options')).toBe('DENY');

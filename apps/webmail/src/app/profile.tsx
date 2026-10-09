@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Avatar, Button, Icon } from '@mailless/ui';
+import { Button, Icon } from '@mailless/ui';
+import { Face } from './face';
 import { formatSize } from '../lib/format';
 import type { Usage } from '../lib/mail';
 import { useMail, useServices, useSynced } from './services';
@@ -74,12 +75,12 @@ export function ProfileMenu() {
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <Avatar name={name} />
+        <Face name={name} email={identity?.email} />
       </button>
       {open ? (
         <div className="profile-card" role="dialog" aria-label="Account">
           <div className="profile-who">
-            <Avatar name={name} size="large" />
+            <Face name={name} email={identity?.email} size="large" />
             <div className="profile-names">
               <strong>{name}</strong>
               {identity && identity.email !== name ? (

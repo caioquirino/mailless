@@ -196,9 +196,15 @@ code {
   color: var(--muted);
 }
 
-a.button {
+/* A link that looks like a button is laid out like one: what is in it centred, on one line. */
+a.button,
+label.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
   text-decoration: none;
-  display: inline-block;
 }
 
 .button.disabled {

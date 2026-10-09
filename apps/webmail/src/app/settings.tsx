@@ -1,4 +1,9 @@
-import { useState, useSyncExternalStore, type FormEvent } from 'react';
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type FormEvent,
+} from 'react';
 import type { Identity } from '@mailless/jmap-core';
 import {
   Button,
@@ -7,6 +12,11 @@ import {
   type Theme,
   type ThemeChoice,
 } from '@mailless/ui';
+import { isPicture } from '../lib/compose';
+import { cardPhoto } from '../lib/contacts';
+import { usePreference } from '../lib/preference';
+import { UNDO_SECONDS } from '../lib/undo';
+import { Face } from './face';
 import { useMail, useServices, useSynced } from './services';
 
 /** Turning notifications on and off, for wherever there is a switch for it. */
@@ -68,6 +78,140 @@ function Appearance({ theme }: { theme: Theme }) {
           </label>
         ))}
       </fieldset>
+    </section>
+  );
+}
+
+/** The picture that stands for the user, where their own mail is shown. */
+function PictureSetting() {
+  const { client } = useServices();
+  const { store, act, say } = useMail();
+  useSynced(store.identities);
+  useSynced(store.contacts.cards);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const identity = store.identities.values()[0];
+  const [ready, setReady] = useState(store.contacts.cards.isComplete);
+  useEffect(() => {
+    let current = true;
+    void store.contacts.start().then(
+      () => current && setReady(true),
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [store]);
+  // Kept on a card of one's own in the address book, which needs one to be there.
+  if (!identity || !ready || !store.contacts.available) return null;
+  const me = { name: identity.name || null, email: identity.email };
+  const card = store.contacts.cardFor(identity.email);
+  const has = card !== undefined && cardPhoto(card) !== null;
+
+  const choose = async (picked: File | undefined) => {
+    setProblem(null);
+    if (!picked) return;
+    if (!isPicture(picked)) {
+      setProblem('A picture is a PNG, JPEG, GIF or WebP file.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const uploaded = await client.upload(picked, { type: picked.type });
+      const kept = await act(() =>
+        store.contacts.setPhoto(me, uploaded.blobId),
+      );
+      if (kept) say('Your picture was changed');
+    } catch {
+      setProblem('The picture could not be uploaded.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="setting" aria-labelledby="setting-picture">
+      <h2 id="setting-picture">Your picture</h2>
+      <p className="muted">
+        Shown here for your own mail. It is kept on a card for you in your
+        contacts, and goes to nobody: people you write to do not see it.
+      </p>
+      {problem ? (
+        <p className="notice notice-error" role="alert">
+          {problem}
+        </p>
+      ) : null}
+      <div className="row">
+        <Face
+          name={identity.name || identity.email}
+          email={identity.email}
+          size="large"
+        />
+        <label className={`button${busy ? ' disabled' : ''}`}>
+          {busy
+            ? 'Uploading…'
+            : has
+              ? 'Change the picture'
+              : 'Choose a picture'}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            className="visually-hidden"
+            aria-label="Choose your picture"
+            disabled={busy}
+            onChange={(event) => {
+              const picked = event.target.files?.[0];
+              event.target.value = '';
+              void choose(picked);
+            }}
+          />
+        </label>
+        {has ? (
+          <button
+            type="button"
+            className="button button-quiet"
+            disabled={busy}
+            onClick={() =>
+              void act(() => store.contacts.setPhoto(me, null)).then(
+                (gone) => gone && say('Your picture was removed'),
+              )
+            }
+          >
+            Remove it
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+const UNDO_CHOICES = [0, 5, 10, 20, 30];
+
+/** For how long a message just sent can be taken back. */
+function UndoSetting() {
+  const { store } = useMail();
+  const [seconds, setSeconds] = usePreference<number>(UNDO_SECONDS, 10);
+  // Where the server cannot hold a message, there is nothing to choose.
+  if (store.holdLimit === 0) return null;
+  return (
+    <section className="setting" aria-labelledby="setting-undo">
+      <h2 id="setting-undo">Undo send</h2>
+      <p className="muted">
+        A message waits this long before it goes, and can be taken back until
+        then. It waits on the server, so it is sent even if this page is closed.
+      </p>
+      <label className="field">
+        <span>Wait</span>
+        <select
+          value={seconds}
+          onChange={(event) => setSeconds(Number(event.target.value))}
+        >
+          {UNDO_CHOICES.map((each) => (
+            <option key={each} value={each}>
+              {each === 0 ? 'Do not wait' : `${each} seconds`}
+            </option>
+          ))}
+        </select>
+      </label>
     </section>
   );
 }
@@ -191,6 +335,8 @@ export function SettingsPage() {
         </p>
         {theme ? <Appearance theme={theme} /> : null}
         <NotificationSetting />
+        <UndoSetting />
+        <PictureSetting />
         <section className="setting" aria-labelledby="setting-account">
           <h2 id="setting-account">Account</h2>
           {config.accountUrl ? (

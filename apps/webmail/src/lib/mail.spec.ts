@@ -7,7 +7,7 @@ const draft = (changes: Partial<Draft> = {}): Draft => ({
   cc: [],
   bcc: [],
   subject: 'Lunch',
-  text: 'Thursday?',
+  html: '<p>Thursday?</p>',
   attachments: [],
   ...changes,
 });
@@ -218,15 +218,15 @@ describe('MailStore', () => {
   it('keeps a draft, and replaces it when it is kept again or sent', async () => {
     const backend = await fakeBackend();
     const store = await testStore(backend);
-    const first = await store.saveDraft(draft());
+    const { id: first } = await store.saveDraft(draft());
     expect(store.mailbox('drafts')?.totalEmails).toBe(1);
-    const second = await store.saveDraft(
-      draft({ text: 'Friday?', replaces: first }),
+    const { id: second } = await store.saveDraft(
+      draft({ html: '<p>Friday?</p>', replaces: first }),
     );
     expect(second).not.toBe(first);
     expect(store.mailbox('drafts')?.totalEmails).toBe(1);
 
-    await store.send(draft({ text: 'Friday?', replaces: second }));
+    await store.send(draft({ html: '<p>Friday?</p>', replaces: second }));
     expect(store.mailbox('drafts')?.totalEmails).toBe(0);
     expect(backend.sent[0]?.message).toContain('Friday?');
   });
