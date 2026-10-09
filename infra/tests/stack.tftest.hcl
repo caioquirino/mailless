@@ -185,6 +185,7 @@ variables {
   mail_from_subdomain  = "bounce"
   dmarc_policy         = "quarantine"
   alarm_email          = null
+  bimi_logo            = null
 
   account_quota_bytes = null
 
@@ -911,6 +912,90 @@ run "rejects_a_tiny_quota" {
   }
 
   expect_failures = [var.account_quota_bytes]
+}
+
+run "uploads_nothing_was_made_of_are_removed" {
+  command = plan
+
+  # The third rule of the bucket. Picked by its place: Terraform cannot yet
+  # search the rules of this resource in a test.
+  assert {
+    condition     = aws_s3_bucket_lifecycle_configuration.mail.rule[2].id == "expire-unused-uploads"
+    error_message = "The rule that removes unused uploads must be the third of the bucket, where this test looks for it."
+  }
+
+  assert {
+    condition     = aws_s3_bucket_lifecycle_configuration.mail.rule[2].expiration[0].days == 2
+    error_message = "An upload nothing was made of must be removed after two days by default."
+  }
+
+  assert {
+    condition     = aws_s3_bucket_lifecycle_configuration.mail.rule[2].filter[0].and[0].tags["mailless-temporary"] == "true"
+    error_message = "Only what is tagged as temporary may be removed: never a message."
+  }
+}
+
+run "rejects_uploads_removed_within_the_day" {
+  command = plan
+
+  variables {
+    upload_retention_days = 0
+  }
+
+  expect_failures = [var.upload_retention_days]
+}
+
+run "no_logo_is_published_unless_one_is_given" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(output.dns_records), "bimi") && length(aws_lambda_function.logo) == 0 && output.logo_url == null
+    error_message = "Without a logo there is no record for one, and nothing to hand it out."
+  }
+}
+
+run "the_domain_can_publish_its_logo" {
+  command = plan
+
+  variables {
+    bimi_logo = "tests/fixture-logo.svg"
+  }
+
+  assert {
+    condition     = output.dns_records["bimi"].name == "default._bimi.example.com" && output.dns_records["bimi"].type == "TXT"
+    error_message = "The logo must be announced where mail programs look for it."
+  }
+
+  assert {
+    condition     = output.dns_records["bimi"].value == "v=BIMI1; l=${output.logo_url}; a=;" && endswith(output.logo_url, "/bimi/logo.svg") && startswith(output.logo_url, "https://")
+    error_message = "The record must say where the logo is, and that no certificate goes with it."
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.logo[0].route_key == "GET /bimi/logo.svg" && aws_apigatewayv2_route.logo[0].authorization_type == "NONE"
+    error_message = "The logo must be there for anyone to fetch, and only to fetch."
+  }
+}
+
+run "rejects_a_logo_without_a_dmarc_policy_that_is_enforced" {
+  command = plan
+
+  variables {
+    bimi_logo    = "tests/fixture-logo.svg"
+    dmarc_policy = "none"
+  }
+
+  expect_failures = [var.bimi_logo]
+}
+
+run "rejects_a_logo_that_is_not_an_svg" {
+  command = plan
+
+  variables {
+    bimi_logo = "tests/fixture-bundle.mjs"
+  }
+
+  expect_failures = [var.bimi_logo]
 }
 
 run "alarms_can_email_someone" {

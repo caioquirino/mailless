@@ -3,6 +3,11 @@ output "dns_records" {
   value       = local.dns_records
 }
 
+output "logo_url" {
+  description = "Where the domain's logo is published, when one is."
+  value       = local.logo_published ? local.logo_url : null
+}
+
 output "dns_records_managed" {
   description = "Whether this stack created the DNS records."
   value       = var.route53_zone_id != null

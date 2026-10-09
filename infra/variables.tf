@@ -175,6 +175,45 @@ variable "inbound_retention_days" {
   default     = 7
 }
 
+variable "bimi_logo" {
+  description = <<-EOT
+    Path to the domain's logo, to publish it for mail programs that show a
+    sender's logo beside their mail (BIMI). An SVG in the profile BIMI asks
+    for (SVG Tiny PS: square, no scripts, no links to anything outside the
+    file, at most 32 KB). Null publishes none. No certificate is published
+    with it, so services that require one, Gmail and Apple Mail among them,
+    do not show it.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.bimi_logo == null ? true : endswith(lower(var.bimi_logo), ".svg") && fileexists(var.bimi_logo)
+    error_message = "bimi_logo must be the path of an .svg file that exists."
+  }
+
+  validation {
+    condition     = var.bimi_logo == null ? true : length(file(var.bimi_logo)) <= 32768
+    error_message = "The logo may be at most 32 KB: mail services do not fetch a larger one."
+  }
+
+  validation {
+    condition     = var.bimi_logo == null ? true : contains(["quarantine", "reject"], coalesce(var.dmarc_policy, "none"))
+    error_message = "A logo is only shown for a domain whose dmarc_policy is quarantine or reject."
+  }
+}
+
+variable "upload_retention_days" {
+  description = "Days to keep a file a client uploaded and made nothing of. A message made from an upload has its own copy, so this only has to outlast the writing of one message."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.upload_retention_days >= 1
+    error_message = "upload_retention_days must be at least 1: clients are promised that an upload stays usable for a while."
+  }
+}
+
 variable "log_retention_days" {
   description = "Days to keep Lambda logs."
   type        = number

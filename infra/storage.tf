@@ -125,6 +125,30 @@ resource "aws_s3_bucket_lifecycle_configuration" "mail" {
     }
   }
 
+  # What a client uploads is there for a message to be made of it, which copies
+  # it. The upload itself is tagged when stored, and removed here once it has
+  # had time to be used: also the pieces of a large file, and the file joined
+  # from them. An upload something relies on directly, such as the photo of a
+  # contact, has its tag taken off and stays. The tag must match
+  # TEMPORARY_TAG in @mailless/storage-s3.
+  rule {
+    id     = "expire-unused-uploads"
+    status = "Enabled"
+
+    filter {
+      and {
+        prefix = local.blob_prefix
+        tags = {
+          "mailless-temporary" = "true"
+        }
+      }
+    }
+
+    expiration {
+      days = var.upload_retention_days
+    }
+  }
+
   rule {
     id     = "abort-incomplete-uploads"
     status = "Enabled"

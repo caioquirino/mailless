@@ -46,6 +46,14 @@ locals {
         value = "v=DMARC1; p=${var.dmarc_policy}"
       }
     },
+    # Where the domain's logo is, for mail programs that show one. No certificate goes with it (a=).
+    local.logo_published ? {
+      bimi = {
+        name  = "default._bimi.${var.domain}"
+        type  = "TXT"
+        value = "v=BIMI1; l=${local.logo_url}; a=;"
+      }
+    } : {},
     {
       # DKIM always has three tokens; indexing keeps the keys known before the identity exists.
       for index in range(3) : "dkim${index}" => {

@@ -31,8 +31,9 @@ data "aws_iam_policy_document" "api" {
   }
 
   statement {
-    sid       = "Messages"
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    sid = "Messages"
+    # Tagging marks an upload as temporary, and unmarks one that something comes to rely on.
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:PutObjectTagging", "s3:DeleteObjectTagging"]
     resources = ["${aws_s3_bucket.mail.arn}/${local.blob_prefix}*"]
   }
 

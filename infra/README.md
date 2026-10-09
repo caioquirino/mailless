@@ -106,6 +106,22 @@ dependencies, so each run does the following, skipping what is already done:
 
 `pnpm infra` on its own lists the available tasks.
 
+### When a run is cut short
+
+Terraform locks the state while it changes it. A run that is interrupted, or
+loses its connection, can leave the lock behind, and the next run then stops
+with "Error acquiring the state lock".
+
+```sh
+pnpm infra state show     # whether the state is locked, by whom and since when
+pnpm infra state unlock   # shows the same, asks, then removes the lock
+```
+
+Remove a lock only when the run that holds it is over: unlocking under a run
+that is still going lets two change the state at once. A run that changed
+things and could not save the state leaves `infra/errored.tfstate`; both
+commands say so, and how to save it.
+
 A new deployment has no accounts. Make the first one, whose user may
 administer the rest, and give it a password:
 
@@ -262,6 +278,51 @@ ADMIN_BACKEND=https://<API hostname> pnpm nx dev admin-web
 ```
 
 The pages then come from your machine and everything else from the stack.
+
+### How large an attachment may be
+
+A message may carry about 28 MB of attachments. Amazon SES carries 40 MB a
+message, counted after attachments are encoded for mail, which makes them a
+third larger. A recipient's own server may refuse less: 20 to 25 MB is
+common.
+
+One upload to the API holds 4 MB, which is what fits in a call to a
+function. A mail app sends a larger file in pieces and has the server join
+them, with `Blob/upload` (RFC 9404); the session says how much may be joined
+(`maxSizeBlobSet`) and how much a message may carry
+(`maxSizeAttachmentsPerEmail`). The webmail does this by itself. A mail app
+that does not is held to 4 MB a file.
+
+### The domain's logo
+
+Some mail programs show a logo beside a sender's mail (BIMI). To publish
+yours, give the path of the file:
+
+```hcl
+bimi_logo = "logo.svg"
+```
+
+The stack then hands the file out at `/bimi/logo.svg` and adds the DNS
+record that says so (`default._bimi`), which is among `dns_records` when the
+DNS is kept elsewhere. Nobody else is involved and nothing is paid for. The
+file is an SVG in the profile BIMI asks for (SVG Tiny PS: square, no
+scripts, nothing fetched from outside the file, 32 KB at most), and
+`dmarc_policy` must be `quarantine` or `reject`.
+
+No certificate is published with it. Mail services that show a logo
+without one, Yahoo and Fastmail among them, show this; Gmail and Apple Mail
+ask for a certificate bought from an authority, and show nothing without.
+
+### What happens to an upload
+
+A file a client uploads is there for a message to be made of it, and the
+message keeps a copy of its own. The upload itself, the pieces of a large
+file and the file joined from them are removed after
+`upload_retention_days` (two by default), by a rule on the bucket that
+costs nothing to run. Nothing that is part of a message is touched by it,
+and an upload something relies on directly, such as the photo of a contact,
+stays. Uploads made before this rule existed carry no mark and are not
+removed by it.
 
 ### The webmail
 

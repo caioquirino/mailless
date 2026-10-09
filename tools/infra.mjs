@@ -13,6 +13,7 @@ if (!task || task.startsWith('-')) {
       '  admin     make the first account, and say who may administer: pnpm infra admin <create|grant|revoke|list>\n' +
       '  directory list the accounts and their addresses: pnpm infra directory show\n' +
       '  send-test send a test message and wait for it to arrive: pnpm infra send-test [recipient]\n' +
+      '  state     see or remove the lock on the Terraform state: pnpm infra state <show|unlock>\n' +
       '  init      create the state bucket if needed and initialise Terraform\n' +
       '  validate  check the configuration\n' +
       '  test      run the infrastructure tests\n' +
@@ -26,6 +27,7 @@ if (!task || task.startsWith('-')) {
 const direct = {
   password: { script: 'infra/scripts/set-password.mjs' },
   'send-test': { script: 'infra/scripts/send-test.mjs' },
+  state: { script: 'infra/scripts/state.mjs' },
   // Uses the admin tool from the service build, so that is brought up to date first.
   'app-password': {
     script: 'infra/scripts/app-password.mjs',
