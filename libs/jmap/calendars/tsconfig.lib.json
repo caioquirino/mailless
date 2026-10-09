@@ -11,11 +11,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../core/tsconfig.lib.json" },
-    { "path": "../engine/tsconfig.lib.json" },
-    { "path": "../mail/tsconfig.lib.json" },
-    { "path": "../contacts/tsconfig.lib.json" },
-    { "path": "../calendars/tsconfig.lib.json" },
-    { "path": "../sharing/tsconfig.lib.json" }
+    { "path": "../engine/tsconfig.lib.json" }
   ],
   "exclude": [
     "vite.config.ts",

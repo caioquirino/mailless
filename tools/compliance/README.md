@@ -32,10 +32,9 @@ run, including the scenarios that passed.
 
 ## What is and is not in scope
 
-Every test the suite runs against this server passes; `baseline.json` lists
-only the files that are skipped. Those cover calendars, which this server
-does not implement, and one test of a principal's availability, which needs
-calendars.
+Every test of the suite runs against this server and passes: mail, contacts,
+calendars and the core. `baseline.json` is empty, and is there for the day a
+newer suite asks for something that is not here yet.
 
 The suite expects one particular behaviour in a few places where the RFCs
 allow several. The server follows the suite there, since that is what clients

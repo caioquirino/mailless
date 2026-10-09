@@ -1,6 +1,7 @@
 import {
   CAPABILITY_BLOB,
   CAPABILITY_BLOCKED_SENDERS,
+  CAPABILITY_CALENDARS,
   CAPABILITY_CONTACTS,
   CAPABILITY_CORE,
   CAPABILITY_MAIL,
@@ -30,6 +31,8 @@ const BY_TYPE: Record<string, string> = {
   ShareNotification: CAPABILITY_PRINCIPALS,
   AddressBook: CAPABILITY_CONTACTS,
   ContactCard: CAPABILITY_CONTACTS,
+  Calendar: CAPABILITY_CALENDARS,
+  CalendarEvent: CAPABILITY_CALENDARS,
   Tag: CAPABILITY_TAGS,
   BlockedSender: CAPABILITY_BLOCKED_SENDERS,
 };
@@ -37,6 +40,8 @@ const BY_TYPE: Record<string, string> = {
 /** Copying a blob between accounts is part of the core (RFC 8620 §6.3); the rest of Blob is RFC 9404. */
 const BY_METHOD: Record<string, string> = {
   'Blob/copy': CAPABILITY_CORE,
+  // Asked of a principal, and answered from their calendars.
+  'Principal/getAvailability': CAPABILITY_CALENDARS,
 };
 
 /** The capability a method needs in `using`, or undefined for one this package does not know. */

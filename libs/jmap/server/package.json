@@ -68,6 +68,7 @@
     ]
   },
   "dependencies": {
+    "@mailless/jmap-calendars": "workspace:*",
     "@mailless/jmap-contacts": "workspace:*",
     "@mailless/jmap-core": "workspace:*",
     "@mailless/jmap-engine": "workspace:*",

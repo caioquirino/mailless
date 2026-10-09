@@ -33,6 +33,7 @@ depending on them, so that only an app chooses a cloud.
 | [`@mailless/jmap-engine`](libs/jmap/engine)               | The JMAP engine: requests, sessions, accounts, blobs, push, the standard methods and the storage contract. | Working |
 | [`@mailless/jmap-mail`](libs/jmap/mail)                   | Mail as a module: mailboxes, emails, threads, sending, vacation response, read receipts, blobs and quota.  | Working |
 | [`@mailless/jmap-contacts`](libs/jmap/contacts)           | Contacts as a module: address books and JSContact cards.                                                   | Working |
+| [`@mailless/jmap-calendars`](libs/jmap/calendars)         | Calendars as a module: calendars, JSCalendar events and the times those that repeat are on.                | Working |
 | [`@mailless/jmap-sharing`](libs/jmap/sharing)             | Sharing as a module: principals and share notifications.                                                   | Working |
 | [`@mailless/storage-dynamodb`](libs/storage/dynamodb)     | Metadata store on DynamoDB (or DynamoDB Local).                                                            | Working |
 | [`@mailless/storage-s3`](libs/storage/s3)                 | Blob store on S3 or an S3-compatible server.                                                               | Working |

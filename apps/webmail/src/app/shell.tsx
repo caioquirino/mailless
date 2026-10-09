@@ -74,6 +74,10 @@ const ContactsPage = lazy(() =>
   import('./contacts').then((module) => ({ default: module.ContactsPage })),
 );
 
+const CalendarPage = lazy(() =>
+  import('./calendar').then((module) => ({ default: module.CalendarPage })),
+);
+
 /** The screens of someone signed in. */
 export function MailShell() {
   const { client, push } = useServices();
@@ -103,7 +107,10 @@ export function MailShell() {
   // On a narrow screen the mailboxes are a drawer, opened from the top bar.
   const [menu, setMenu] = useState(false);
   const closeMenu = useCallback(() => setMenu(false), []);
-  const inContacts = useLocation().pathname.startsWith('/contacts');
+  const { pathname } = useLocation();
+  // Contacts and the calendar each draw a menu of their own.
+  const inContacts =
+    pathname.startsWith('/contacts') || pathname.startsWith('/calendar');
   // On a wide one they fold down to their icons, and stay as they were left.
   const [folded, setFolded] = usePreference<boolean>(
     'mailless.mail.sidebar-folded',
@@ -226,7 +233,13 @@ export function MailShell() {
   );
   // Pulled down on a phone: what changed is asked for, and the page stays as it is.
   const pull = usePull(() =>
-    act(() => Promise.all([store.refresh(), store.contacts.refresh()])),
+    act(() =>
+      Promise.all([
+        store.refresh(),
+        store.contacts.refresh(),
+        store.calendar.refresh(),
+      ]),
+    ),
   );
   const mail = useMemo<Mail>(
     () => ({ store, compose, act, say, unsend, notifications }),
@@ -295,6 +308,11 @@ export function MailShell() {
             <Route
               path="/contacts/:cardId/edit"
               element={<ContactsRoute editing {...drawer} />}
+            />
+            <Route path="/calendar" element={<CalendarRoute {...drawer} />} />
+            <Route
+              path="/calendar/:view/:date"
+              element={<CalendarRoute {...drawer} />}
             />
             <Route path="/" element={<ToInbox />} />
             <Route path="/box/:mailboxId" element={<MailboxPage />} />
@@ -403,6 +421,36 @@ function ContactsRoute(props: {
       <ContactsPage
         cardId={props.adding ? 'new' : cardId}
         editing={props.editing === true}
+        menu={props.menu}
+        folded={props.folded}
+        onCloseMenu={props.onCloseMenu}
+      />
+    </Suspense>
+  );
+}
+
+/** The calendar, which is fetched when it is first gone to. */
+function CalendarRoute(props: {
+  menu: boolean;
+  folded: boolean;
+  onCloseMenu(): void;
+}) {
+  const { view, date } = useParams();
+  // With no view asked for: the week where there is room for one, the list of days where there is not.
+  const narrow =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(max-width: 48rem)').matches;
+  return (
+    <Suspense fallback={null}>
+      <CalendarPage
+        view={
+          view === 'week' || view === 'agenda'
+            ? view
+            : narrow
+              ? 'agenda'
+              : 'week'
+        }
+        date={date}
         menu={props.menu}
         folded={props.folded}
         onCloseMenu={props.onCloseMenu}

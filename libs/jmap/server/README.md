@@ -361,6 +361,39 @@ card must have and the client left out: `uid`, `created`, `updated`.
 - `shareWith` is always null: access is given to a whole account (see
   [Shared accounts](#shared-accounts)), not to one address book.
 
+### Calendars
+
+`Calendar/get`, `/changes` and `/set`, and `CalendarEvent/get`, `/changes`,
+`/set`, `/query` and `/queryChanges`, under `urn:ietf:params:jmap:calendars`
+(JMAP for Calendars; events are JSCalendar, RFC 8984).
+
+- Every account has a calendar to start with, its default, with a reminder
+  half an hour before as the calendar's own. An account older than calendars
+  gets it the first time it is used.
+- An event is kept as it is given: properties this server does not know
+  survive a round trip. What it relies on is checked (`start`, `duration`,
+  `timeZone`, the calendars it is in).
+- `utcStart` and `utcEnd` are worked out from the event's own time zone and
+  given when asked for by name.
+- `CalendarEvent/query` filters by `inCalendar`, `after`, `before` (in the
+  `timeZone` argument, or UTC), `text`, `title`, `description`, `location`,
+  `attendee` and `uid`, and sorts by `start`, `uid`, `created` and `updated`.
+- An event that repeats is found in any time one of its occurrences is in.
+  With `expandRecurrences`, and a filter that says `after` and `before`,
+  `CalendarEvent/query` gives each occurrence an id of its own (the event's,
+  and when it is), which `CalendarEvent/get` answers to with `baseEventId`
+  and `recurrenceId`. Changing or destroying such an id changes that one
+  occurrence, kept with the event in `recurrenceOverrides`.
+- Rules are understood from `daily` to `yearly`, with `interval`, `count`,
+  `until`, `byDay` (and `nthOfPeriod`), `byMonthDay`, `byMonth` and
+  `firstDayOfWeek`, as `recurrenceRules` or as the one `recurrenceRule` of
+  the JSCalendar that follows RFC 8984. Times are worked out on the event's
+  own clock, so that nine o'clock stays nine when the clocks change.
+- `CalendarEvent/copy` copies an event to another account the user may write
+  to, and `Principal/getAvailability` says when someone is busy, and not with
+  what.
+- Not there yet: sending invitations, and alerts that notify.
+
 ### Vacation response
 
 With a `transport`, the server offers the vacation response capability: one

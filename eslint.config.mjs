@@ -40,6 +40,7 @@ export default [
             ...[
               'scope:jmap-mail',
               'scope:jmap-contacts',
+              'scope:jmap-calendars',
               'scope:jmap-sharing',
             ].map((sourceTag) => ({
               sourceTag,
@@ -55,6 +56,7 @@ export default [
                 'scope:jmap-engine',
                 'scope:jmap-mail',
                 'scope:jmap-contacts',
+                'scope:jmap-calendars',
                 'scope:jmap-sharing',
               ],
             },

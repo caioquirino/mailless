@@ -3562,3 +3562,852 @@ a.button.write {
     height: 2.75rem;
   }
 }
+
+/* ---------------------------------------------------------------- calendar */
+
+.calendar {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  overflow: hidden;
+}
+
+.calendar-bar {
+  position: static;
+  gap: var(--space-1);
+  min-height: 3.25rem;
+}
+
+.calendar-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0 var(--space-3);
+  overflow: hidden;
+  font-size: 1.15rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-views {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+}
+
+.calendar-view {
+  padding: 0.3rem 0.9rem;
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.calendar-view.current {
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-weight: 700;
+}
+
+/* The round button for a new event: where there is no menu beside the calendar. */
+.calendar-add {
+  display: none;
+}
+
+/* A month to find a day in. */
+.mini-month {
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.mini-head {
+  display: flex;
+  align-items: center;
+  min-height: 2.25rem;
+}
+
+.mini-head strong {
+  flex: 1;
+  font-size: 0.9rem;
+}
+
+.mini-head .icon-button {
+  width: 1.9rem;
+  height: 1.9rem;
+}
+
+.mini-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.mini-letter {
+  display: grid;
+  place-items: center;
+  height: 1.5rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.mini-day {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 1.9rem;
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+
+.mini-day:hover {
+  background: var(--hover);
+}
+
+.mini-other {
+  color: var(--border-strong);
+}
+
+.mini-week {
+  background: var(--accent-soft);
+}
+
+.mini-today {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.mini-busy::after {
+  position: absolute;
+  bottom: 2px;
+  left: calc(50% - 2px);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+  content: '';
+}
+
+.calendar-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.calendar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.25rem;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.calendar-row:hover {
+  background: var(--hover);
+}
+
+.calendar-row input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--event, var(--accent));
+}
+
+.calendar-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The week: a column for each day, an hour to a row. */
+.week {
+  --gutter: 3.5rem;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.week-heads,
+.week-whole {
+  display: flex;
+  flex: none;
+  /* As much narrower as the bar the hours scroll with is wide. */
+  scrollbar-gutter: stable;
+  overflow-y: hidden;
+}
+
+.week-gutter {
+  position: relative;
+  flex: none;
+  width: var(--gutter);
+  padding: var(--space-1) var(--space-2) 0 0;
+  text-align: right;
+}
+
+.week-head {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  border-left: 1px solid var(--line);
+}
+
+.week-name {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.week-number {
+  display: grid;
+  place-items: center;
+  min-width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-pill);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.week-head.week-today .week-name {
+  color: var(--accent);
+}
+
+.week-head.week-today .week-number {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.week-whole {
+  border-bottom: 1px solid var(--border);
+}
+
+.week-whole-day {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  min-height: 1.6rem;
+  padding: 2px 4px 4px 2px;
+  border-left: 1px solid var(--line);
+}
+
+.whole-event {
+  display: block;
+  width: 100%;
+  padding: 1px var(--space-2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--event, var(--accent));
+  color: #fff;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.whole-draft,
+.week-draft {
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--text);
+  cursor: default;
+  pointer-events: none;
+}
+
+.week-hours {
+  flex: 1;
+  min-height: 0;
+  overflow-y: scroll;
+  overscroll-behavior-y: contain;
+}
+
+.week-body {
+  position: relative;
+  display: flex;
+}
+
+.week-hour {
+  position: absolute;
+  right: var(--space-2);
+  margin-top: -0.55rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.week-day {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border-left: 1px solid var(--line);
+  /* A line for each hour, drawn once for the whole day. */
+  background-image: linear-gradient(var(--line) 1px, transparent 1px);
+  background-size: 100% 48px;
+  cursor: cell;
+}
+
+.week-day.week-today {
+  background-color: color-mix(in srgb, var(--accent-soft) 40%, transparent);
+}
+
+.week-event {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  overflow: hidden;
+  border: 0;
+  border-left: 3px solid var(--event, var(--accent));
+  border-radius: var(--radius-sm);
+  background: color-mix(
+    in srgb,
+    var(--event, var(--accent)) 16%,
+    var(--surface)
+  );
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.week-event:hover {
+  background: color-mix(
+    in srgb,
+    var(--event, var(--accent)) 26%,
+    var(--surface)
+  );
+}
+
+.week-event-short {
+  flex-direction: row;
+  gap: var(--space-2);
+  padding-top: 1px;
+  padding-bottom: 0;
+}
+
+.week-event-title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.week-event-time {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.week-now {
+  position: absolute;
+  right: 0;
+  left: -5px;
+  z-index: 1;
+  border-top: 2px solid var(--danger);
+  pointer-events: none;
+}
+
+.week-now::before {
+  position: absolute;
+  top: -6px;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  content: '';
+}
+
+/* The agenda: the days that have something on, one under the other. */
+.agenda {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: var(--space-6);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+.agenda-day {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-4) var(--space-5) var(--space-2);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.agenda-today > :first-child {
+  color: var(--accent);
+}
+
+.agenda-none {
+  margin: 0;
+  padding: 0 var(--space-5) var(--space-3);
+}
+
+.agenda-events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agenda-event {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 3.5rem;
+  padding: 0 var(--space-5) 0 var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agenda-event:hover {
+  background: var(--hover);
+}
+
+.agenda-time {
+  display: grid;
+  flex: none;
+  justify-items: end;
+  width: 3.75rem;
+}
+
+.agenda-bar {
+  flex: none;
+  width: 4px;
+  height: 2.25rem;
+  border-radius: 2px;
+  background: var(--event, var(--accent));
+}
+
+.agenda-what {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.agenda-what > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Writing an event: docked in the corner, as a message is. */
+.event-dock {
+  position: fixed;
+  right: var(--space-5);
+  bottom: 0;
+  z-index: 5;
+  width: min(30rem, calc(100vw - 2 * var(--space-5)));
+  max-height: calc(100dvh - var(--space-6));
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow-raised);
+}
+
+.event-editor {
+  display: flex;
+  flex-direction: column;
+  max-height: inherit;
+}
+
+.event-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 2.75rem;
+  padding: 0 var(--space-2) 0 var(--space-4);
+  background: var(--raised);
+  border-bottom: 1px solid var(--line);
+}
+
+.event-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.event-fields {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-4);
+  overflow-y: auto;
+}
+
+.event-fields input:not([type='checkbox']),
+.event-fields select,
+.event-fields textarea {
+  box-sizing: border-box;
+  min-height: 2.4rem;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.event-fields textarea {
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+}
+
+.event-fields .event-title {
+  width: 100%;
+  min-height: 2.75rem;
+  border-width: 0 0 2px;
+  border-radius: 0;
+  padding: 0;
+  font-size: 1.25rem;
+  font-weight: 500;
+}
+
+.event-fields .event-title:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.event-when {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.event-all-day {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.event-part {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.event-part-icon,
+.event-dot {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.5rem;
+  height: 2.4rem;
+  color: var(--muted);
+}
+
+.event-dot {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin: 0.82rem 0.375rem;
+  border-radius: 50%;
+}
+
+.event-part-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.event-part-body > input,
+.event-part-body > select,
+.event-part-body > textarea {
+  flex: 1;
+  min-width: 0;
+}
+
+.event-reminders {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.event-reminder {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.event-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.event-add-part {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2rem;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.event-add-part:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.event-own {
+  margin: 0;
+}
+
+.event-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.event-foot-gap {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+}
+
+/* In a window of its own, the form is the whole window. */
+.event-window {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--surface);
+}
+
+.event-window .event-editor {
+  flex: 1;
+  max-height: none;
+}
+
+@media (min-width: 48.01rem) {
+  .side-folded.side-calendars .mini-month,
+  .side-folded.side-calendars .calendar-list {
+    display: none;
+  }
+}
+
+@media (max-width: 48rem) {
+  .calendar {
+    border-radius: 0;
+    /* Room for the sections along the bottom. */
+    margin-bottom: 4rem;
+  }
+
+  .calendar-title {
+    margin: 0 var(--space-2);
+    font-size: 1rem;
+  }
+
+  .calendar-bar .icon-button,
+  .calendar-bar .button {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .calendar-view {
+    padding: 0.55rem 0.8rem;
+  }
+
+  .week {
+    --gutter: 2.6rem;
+  }
+
+  .week-head {
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    padding: var(--space-1) 0;
+  }
+
+  .week-event-time {
+    display: none;
+  }
+
+  .agenda-event {
+    min-height: 4rem;
+  }
+
+  .calendar-add {
+    position: absolute;
+    right: var(--space-4);
+    bottom: var(--space-4);
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 3.75rem;
+    height: 3.75rem;
+    border: 0;
+    border-radius: 1.25rem;
+    background: var(--accent);
+    color: var(--accent-text);
+    box-shadow: var(--shadow-raised);
+  }
+
+  /* Writing an event takes the whole screen, and has no window to move to. */
+  .event-dock {
+    inset: 0;
+    z-index: 6;
+    width: auto;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .event-dock .event-editor {
+    height: 100dvh;
+  }
+
+  .event-head .icon-button[aria-label='Open in a window of its own'] {
+    display: none;
+  }
+
+  .event-fields input:not([type='checkbox']),
+  .event-fields select {
+    min-height: 2.75rem;
+    font-size: 1rem;
+  }
+}
+
+.event-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.event-scope legend {
+  float: left;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.event-scope label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.event-repeat {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.event-repeat > select {
+  flex: 1;
+  min-width: 10rem;
+}
+
+.event-until {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Dragging in the week: drawing an event, moving one, pulling its end. */
+.week-event {
+  touch-action: pan-y;
+}
+
+.week-event-edge {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 7px;
+  cursor: ns-resize;
+}
+
+/* The one being written can be taken hold of, where the others only show. */
+.week-mine {
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.week-event-held {
+  opacity: 0.35;
+}
+
+.week-landing {
+  z-index: 3;
+  box-shadow: var(--shadow-raised);
+}
+
+.week-dragging {
+  user-select: none;
+}
+
+.week-dragging,
+.week-dragging .week-day,
+.week-dragging .week-event {
+  cursor: grabbing;
+}
+
+.week-dragging.week-resize,
+.week-dragging.week-resize .week-day,
+.week-dragging.week-resize .week-event,
+.week-dragging.week-draw,
+.week-dragging.week-draw .week-day {
+  cursor: ns-resize;
+}
+
+/* Nothing in the hours is text to select: a press there is the start of a drag. */
+.week-body {
+  user-select: none;
+}

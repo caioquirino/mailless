@@ -42,6 +42,8 @@ export const CAPABILITY_PRINCIPALS = 'urn:ietf:params:jmap:principals';
 export const CAPABILITY_PRINCIPALS_OWNER =
   'urn:ietf:params:jmap:principals:owner';
 export const CAPABILITY_CONTACTS = 'urn:ietf:params:jmap:contacts';
+/** JMAP for Calendars: calendars, and events as JSCalendar (RFC 8984). */
+export const CAPABILITY_CALENDARS = 'urn:ietf:params:jmap:calendars';
 export const CAPABILITY_WEBSOCKET = 'urn:ietf:params:jmap:websocket';
 /**
  * Not an RFC's: the names and colours someone gives to keywords of their own

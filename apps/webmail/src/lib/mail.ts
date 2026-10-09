@@ -20,6 +20,7 @@ import type {
   Thread,
 } from '@mailless/jmap-core';
 import { bodiesOf } from './compose';
+import { Calendars } from './calendar';
 import { Contacts } from './contacts';
 import { People } from './people';
 import { filterOf, parseSearch } from './search';
@@ -289,6 +290,8 @@ export class MailStore {
   readonly people: People;
   /** The address book. Fetched when it is first looked at, or a message first written. */
   readonly contacts: Contacts;
+  /** The calendars and their events: fetched when the calendar is first gone to. */
+  readonly calendar: Calendars;
   readonly tags: Tags;
   /** The senders whose mail goes to the junk, and whether a message is the first from its sender. */
   readonly blocked: Blocked;
@@ -307,6 +310,7 @@ export class MailStore {
 
   constructor(readonly client: JmapClient) {
     this.contacts = new Contacts(client);
+    this.calendar = new Calendars(client);
     this.tags = new Tags(client);
     this.blocked = new Blocked(client);
     this.firstTimes = new FirstTimes(client);

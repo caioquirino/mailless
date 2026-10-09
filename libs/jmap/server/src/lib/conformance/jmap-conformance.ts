@@ -4,6 +4,7 @@ import {
   CAPABILITY_BLOB,
   CAPABILITY_CONTACTS,
   CAPABILITY_BLOCKED_SENDERS,
+  CAPABILITY_CALENDARS,
   CAPABILITY_TAGS,
   CAPABILITY_MDN,
   CAPABILITY_PRINCIPALS,
@@ -46,6 +47,7 @@ const USING = [
   CAPABILITY_PRINCIPALS,
   CAPABILITY_CONTACTS,
   CAPABILITY_BLOCKED_SENDERS,
+  CAPABILITY_CALENDARS,
   CAPABILITY_TAGS,
 ];
 const URLS = {
@@ -4030,7 +4032,7 @@ export function describeJmapConformance(
       await subscribe({
         deviceClientId: 'delivery-only',
         url: 'https://push.example.net/v1/delivery',
-        types: ['EmailDelivery', 'CalendarEvent'],
+        types: ['EmailDelivery', 'Task'],
       });
 
       expect(await server.pushStateChange(AUTH.accountId, ['Thread'])).toEqual({
@@ -4053,6 +4055,8 @@ export function describeJmapConformance(
       ).toEqual([
         'AddressBook',
         'BlockedSender',
+        'Calendar',
+        'CalendarEvent',
         'ContactCard',
         'Email',
         'EmailDelivery',
@@ -7890,6 +7894,438 @@ export function describeJmapConformance(
       await h.call('BlockedSender/set', { destroy: [created.one.id] });
       const later = await whereIs((await arrives('loud@example.net')).id);
       expect(later.mailboxIds).toEqual({ [inbox]: true });
+    });
+  });
+
+  describe(`${name}: calendars`, () => {
+    let h: Harness;
+    let calendarId: string;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      calendarId = (await h.call('Calendar/get', { ids: null })).list[0].id;
+    });
+    const event = (more: Json = {}) => ({
+      calendarIds: { [calendarId]: true },
+      title: 'Lunch',
+      start: '2026-10-09T13:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Lisbon',
+      ...more,
+    });
+    const make = async (more: Json = {}) =>
+      (await h.call('CalendarEvent/set', { create: { e: event(more) } }))
+        .created.e;
+
+    it('gives an account a calendar to start with, as its default', async () => {
+      const session = h.server.getSession(AUTH);
+      expect(session.capabilities[CAPABILITY_CALENDARS]).toEqual({});
+      const { list } = await h.call('Calendar/get', { ids: null });
+      expect(list).toHaveLength(1);
+      expect(list[0]).toMatchObject({
+        name: 'Personal',
+        isDefault: true,
+        isVisible: true,
+        color: '#2456c8',
+        myRights: { mayReadItems: true, mayWriteAll: true },
+      });
+      expect(Object.keys(list[0].defaultAlertsWithTime)).toHaveLength(1);
+    });
+
+    it('makes, changes and removes calendars, and says what is wrong with one', async () => {
+      const { created, notCreated } = await h.call('Calendar/set', {
+        create: {
+          work: { name: ' Work ', color: '#7C3AED' },
+          bad: { name: '', color: 'purple', timeZone: 'Mars/Olympus' },
+        },
+        onSuccessSetIsDefault: '#work',
+      });
+      expect(notCreated.bad).toMatchObject({
+        type: 'invalidProperties',
+        properties: ['name', 'color', 'timeZone'],
+      });
+      // Nothing is the default when part of the call failed.
+      expect(created.work).toMatchObject({ name: 'Work', color: '#7c3aed' });
+      const made = await h.call('Calendar/set', {
+        update: { [created.work.id]: { isVisible: false, sortOrder: 2 } },
+        onSuccessSetIsDefault: created.work.id,
+      });
+      expect(made.updated[created.work.id]).toEqual({ isDefault: true });
+      expect(made.updated[calendarId]).toEqual({ isDefault: false });
+      const refused = await h.call('Calendar/set', {
+        update: { [calendarId]: { isDefault: true } },
+      });
+      expect(refused.notUpdated[calendarId]).toMatchObject({
+        properties: ['isDefault'],
+      });
+
+      // A calendar with events in it is not removed unless that is asked for.
+      await h.call('CalendarEvent/set', {
+        create: { e: event({ calendarIds: { [created.work.id]: true } }) },
+      });
+      const kept = await h.call('Calendar/set', { destroy: [created.work.id] });
+      expect(kept.notDestroyed[created.work.id]).toMatchObject({
+        type: 'calendarHasEvent',
+      });
+      const gone = await h.call('Calendar/set', {
+        destroy: [created.work.id],
+        onDestroyRemoveEvents: true,
+      });
+      expect(gone.destroyed).toEqual([created.work.id]);
+      expect((await h.call('CalendarEvent/query', {})).ids).toEqual([]);
+    });
+
+    it('keeps an event as it was given, and says when it is in the world’s time', async () => {
+      const created = await make({
+        description: 'By the station',
+        locations: { '1': { '@type': 'Location', name: 'Luigi’s' } },
+        'example.com:custom': { kept: true },
+      });
+      expect(created).toMatchObject({
+        '@type': 'Event',
+        uid: expect.any(String),
+        sequence: 0,
+      });
+      const [read] = (await h.call('CalendarEvent/get', { ids: [created.id] }))
+        .list;
+      // When it is in the world's time follows from the rest, and is said when asked for.
+      expect(read).not.toHaveProperty('utcStart');
+      expect(read).toMatchObject({ isDraft: false, isOrigin: true });
+      expect(
+        (
+          await h.call('CalendarEvent/get', {
+            ids: [created.id],
+            properties: ['utcStart', 'utcEnd'],
+          })
+        ).list[0],
+        // Lisbon is an hour ahead of UTC in October.
+      ).toMatchObject({
+        utcStart: '2026-10-09T12:00:00Z',
+        utcEnd: '2026-10-09T13:00:00Z',
+      });
+      expect(read).toMatchObject({
+        title: 'Lunch',
+        start: '2026-10-09T13:00:00',
+        duration: 'PT1H',
+        'example.com:custom': { kept: true },
+        locations: { '1': { name: 'Luigi’s' } },
+      });
+
+      const { updated, notUpdated } = await h.call('CalendarEvent/set', {
+        update: {
+          [created.id]: {
+            start: '2026-12-09T13:00:00',
+            'locations/1/name': 'Home',
+          },
+          missing: { title: 'x' },
+        },
+      });
+      expect(updated[created.id]).toEqual({ updated: expect.any(String) });
+      expect(notUpdated.missing).toMatchObject({ type: 'notFound' });
+      const [changed] = (
+        await h.call('CalendarEvent/get', {
+          ids: [created.id],
+          properties: ['locations', 'utcEnd'],
+        })
+      ).list;
+      // Lisbon is level with UTC in December.
+      expect(changed).toEqual({
+        id: created.id,
+        locations: { '1': { '@type': 'Location', name: 'Home' } },
+        utcEnd: '2026-12-09T14:00:00Z',
+      });
+    });
+
+    it('refuses an event that is not one, or is in no calendar of the account', async () => {
+      const { notCreated } = await h.call('CalendarEvent/set', {
+        create: {
+          a: event({ start: 'tomorrow', duration: 'an hour' }),
+          b: event({ calendarIds: { nowhere: true } }),
+          c: event({
+            timeZone: 'Mars/Olympus',
+            utcStart: '2026-01-01T00:00:00Z',
+          }),
+          d: { title: 'No calendar', start: '2026-10-09T13:00:00' },
+        },
+      });
+      expect(notCreated.a.properties).toEqual(['start', 'duration']);
+      expect(notCreated.b.properties).toEqual(['calendarIds']);
+      expect(notCreated.c.properties).toEqual(['timeZone', 'utcStart']);
+      expect(notCreated.d.properties).toEqual(['calendarIds']);
+    });
+
+    it('finds events by when they are, by calendar and by words, in order', async () => {
+      const lunch = await make();
+      const dinner = await make({
+        title: 'Dinner at Sofia’s',
+        start: '2026-10-09T19:30:00',
+        duration: 'PT2H',
+        participants: {
+          s: {
+            '@type': 'Participant',
+            name: 'Sofia Reyes',
+            email: 'sofia@example.com',
+          },
+        },
+      });
+      const market = await make({
+        title: 'Market',
+        start: '2026-10-10T10:00:00',
+      });
+      const day = (
+        await h.call('CalendarEvent/query', {
+          filter: {
+            after: '2026-10-09T00:00:00',
+            before: '2026-10-10T00:00:00',
+          },
+          sort: [{ property: 'start', isAscending: true }],
+          timeZone: 'Europe/Lisbon',
+        })
+      ).ids;
+      expect(day).toEqual([lunch.id, dinner.id]);
+      // What is going on at a moment is what has begun and not ended.
+      expect(
+        (
+          await h.call('CalendarEvent/query', {
+            filter: {
+              after: '2026-10-09T13:30:00',
+              before: '2026-10-09T13:31:00',
+            },
+            timeZone: 'Europe/Lisbon',
+          })
+        ).ids,
+      ).toEqual([lunch.id]);
+      expect(
+        (await h.call('CalendarEvent/query', { filter: { text: 'sofia' } }))
+          .ids,
+      ).toEqual([dinner.id]);
+      expect(
+        (
+          await h.call('CalendarEvent/query', {
+            filter: { inCalendar: calendarId, title: 'market' },
+          })
+        ).ids,
+      ).toEqual([market.id]);
+      await h.fail('CalendarEvent/query', { filter: { after: 'soon' } });
+      // Every time of an event that repeats is only asked for between two moments.
+      await h.fail('CalendarEvent/query', { expandRecurrences: true });
+
+      const { state } = await h.call('CalendarEvent/get', { ids: [] });
+      const { queryState } = await h.call('CalendarEvent/query', {});
+      await h.call('CalendarEvent/set', { destroy: [market.id] });
+      expect(
+        await h.call('CalendarEvent/queryChanges', {
+          sinceQueryState: queryState,
+        }),
+      ).toMatchObject({ removed: [market.id], added: [] });
+      expect(
+        (await h.call('CalendarEvent/changes', { sinceState: state }))
+          .destroyed,
+      ).toEqual([market.id]);
+    });
+  });
+
+  describe(`${name}: events that repeat`, () => {
+    let h: Harness;
+    let calendarId: string;
+    let seriesId: string;
+    const WEEK = {
+      after: '2026-10-12T00:00:00',
+      before: '2026-10-19T00:00:00',
+    };
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      calendarId = (await h.call('Calendar/get', { ids: null })).list[0].id;
+      seriesId = (
+        await h.call('CalendarEvent/set', {
+          create: {
+            e: {
+              calendarIds: { [calendarId]: true },
+              title: 'Stand-up',
+              start: '2026-10-05T09:00:00',
+              duration: 'PT30M',
+              timeZone: 'Europe/Lisbon',
+              recurrenceRules: [
+                {
+                  '@type': 'RecurrenceRule',
+                  frequency: 'weekly',
+                  byDay: [{ day: 'mo' }, { day: 'we' }],
+                },
+              ],
+            },
+          },
+        })
+      ).created.e.id;
+    });
+    const expanded = async (filter: Json = WEEK) =>
+      (
+        await h.call('CalendarEvent/query', {
+          filter,
+          expandRecurrences: true,
+          sort: [{ property: 'start', isAscending: true }],
+          timeZone: 'Europe/Lisbon',
+        })
+      ).ids as string[];
+
+    it('are found once in a time they are on in, and each time when asked', async () => {
+      // On in a week long after it began, and found by that.
+      expect(
+        (await h.call('CalendarEvent/query', { filter: WEEK })).ids,
+      ).toEqual([seriesId]);
+      expect(
+        (
+          await h.call('CalendarEvent/query', {
+            filter: { before: '2026-10-05T00:00:00' },
+          })
+        ).ids,
+      ).toEqual([]);
+
+      const ids = await expanded();
+      expect(ids).toEqual([
+        `${seriesId}_20261012T090000`,
+        `${seriesId}_20261014T090000`,
+      ]);
+      const { list, notFound } = await h.call('CalendarEvent/get', {
+        ids: [...ids, `${seriesId}_20261013T090000`, 'nothing_20261013T090000'],
+        properties: [
+          'baseEventId',
+          'recurrenceId',
+          'start',
+          'title',
+          'utcStart',
+        ],
+      });
+      expect(list).toEqual([
+        {
+          id: ids[0],
+          baseEventId: seriesId,
+          recurrenceId: '2026-10-12T09:00:00',
+          start: '2026-10-12T09:00:00',
+          title: 'Stand-up',
+          utcStart: '2026-10-12T08:00:00Z',
+        },
+        {
+          id: ids[1],
+          baseEventId: seriesId,
+          recurrenceId: '2026-10-14T09:00:00',
+          start: '2026-10-14T09:00:00',
+          title: 'Stand-up',
+          utcStart: '2026-10-14T08:00:00Z',
+        },
+      ]);
+      // A Tuesday is not one of its days, and an event that is not there has no days.
+      expect(notFound).toEqual([
+        `${seriesId}_20261013T090000`,
+        'nothing_20261013T090000',
+      ]);
+      // An occurrence is the event that once: it has no rule of its own.
+      const [whole] = (await h.call('CalendarEvent/get', { ids: [ids[0]] }))
+        .list;
+      expect(whole).not.toHaveProperty('recurrenceRules');
+      expect(whole).not.toHaveProperty('utcStart');
+    });
+
+    it('can be changed for one time, which is kept with the event, and have one time taken out', async () => {
+      const [monday, wednesday] = await expanded();
+      const { updated, notUpdated } = await h.call('CalendarEvent/set', {
+        update: {
+          [monday as string]: {
+            title: 'Stand-up, in the garden',
+            start: '2026-10-12T10:00:00',
+          },
+          [`${seriesId}_20261013T090000`]: { title: 'Not one of its days' },
+          [wednesday as string]: { calendarIds: { other: true } },
+        },
+      });
+      expect(Object.keys(updated)).toEqual([monday]);
+      expect(notUpdated[`${seriesId}_20261013T090000`]).toMatchObject({
+        type: 'notFound',
+      });
+      expect(notUpdated[wednesday as string]).toMatchObject({
+        type: 'invalidProperties',
+        properties: ['calendarIds'],
+      });
+      await h.call('CalendarEvent/set', { destroy: [wednesday] });
+
+      const [series] = (
+        await h.call('CalendarEvent/get', {
+          ids: [seriesId],
+          properties: ['title', 'recurrenceOverrides'],
+        })
+      ).list;
+      expect(series).toEqual({
+        id: seriesId,
+        title: 'Stand-up',
+        recurrenceOverrides: {
+          '2026-10-12T09:00:00': {
+            title: 'Stand-up, in the garden',
+            start: '2026-10-12T10:00:00',
+          },
+          '2026-10-14T09:00:00': { excluded: true },
+        },
+      });
+      // It still goes by the time its rule gave it, wherever it was moved to.
+      expect(await expanded()).toEqual([monday]);
+      expect(
+        (
+          await h.call('CalendarEvent/get', {
+            ids: [monday],
+            properties: ['title', 'start', 'recurrenceId'],
+          })
+        ).list[0],
+      ).toEqual({
+        id: monday,
+        title: 'Stand-up, in the garden',
+        start: '2026-10-12T10:00:00',
+        recurrenceId: '2026-10-12T09:00:00',
+      });
+      expect(
+        (await h.call('CalendarEvent/get', { ids: [wednesday] })).notFound,
+      ).toEqual([wednesday]);
+
+      // Moved as a whole, it takes along what was changed for one of its times.
+      await h.call('CalendarEvent/set', {
+        update: { [seriesId]: { start: '2026-10-05T11:30:00' } },
+      });
+      const [moved] = (
+        await h.call('CalendarEvent/get', {
+          ids: [seriesId],
+          properties: ['recurrenceOverrides'],
+        })
+      ).list;
+      // In whatever order a store keeps the parts of a record.
+      expect(Object.keys(moved.recurrenceOverrides).sort()).toEqual([
+        '2026-10-12T11:30:00',
+        '2026-10-14T11:30:00',
+      ]);
+      expect(await expanded()).toEqual([`${seriesId}_20261012T113000`]);
+    });
+
+    it('take the time of whoever they are, for someone asking when they are free', async () => {
+      const busy = (utcStart: string, utcEnd: string, id = AUTH.accountId) =>
+        h.request([['Principal/getAvailability', { id, utcStart, utcEnd }]]);
+      const [[, answer]] = (await busy(
+        '2026-10-12T00:00:00Z',
+        '2026-10-13T00:00:00Z',
+      )) as unknown as [[string, Json]];
+      expect(answer.list).toEqual([
+        {
+          utcStart: '2026-10-12T08:00:00Z',
+          utcEnd: '2026-10-12T08:30:00Z',
+          busyStatus: 'confirmed',
+          event: null,
+        },
+      ]);
+      const [[, tuesday]] = (await busy(
+        '2026-10-13T00:00:00Z',
+        '2026-10-14T00:00:00Z',
+      )) as unknown as [[string, Json]];
+      expect(tuesday.list).toEqual([]);
+      const [[name]] = await busy(
+        '2026-10-12T00:00:00Z',
+        '2026-10-13T00:00:00Z',
+        'nobody',
+      );
+      expect(name).toBe('error');
     });
   });
 

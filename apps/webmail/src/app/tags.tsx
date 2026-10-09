@@ -332,11 +332,13 @@ export function TagSetting() {
 }
 
 /** A tag's name and its colour. */
-function TagForm(props: {
+export function TagForm(props: {
   label: string;
   start: { name: string; color: string };
   busy: boolean;
   button: string;
+  /** The colours to choose from, when not those of tags. */
+  colors?: ReadonlyArray<{ color: string; name: string }>;
   onSave(name: string, color: string): void;
   onCancel(): void;
 }) {
@@ -361,7 +363,7 @@ function TagForm(props: {
         onChange={(event) => setName(event.target.value)}
       />
       <span className="tag-colors" role="radiogroup" aria-label="Colour">
-        {TAG_COLORS.map((each) => (
+        {(props.colors ?? TAG_COLORS).map((each) => (
           <button
             key={each.color}
             type="button"

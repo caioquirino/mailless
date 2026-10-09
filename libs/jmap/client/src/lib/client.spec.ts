@@ -163,14 +163,14 @@ describe('createJmapClient', () => {
       hello: 'there',
     });
 
-    expect(() => capabilitiesFor(['Calendar/get'])).toThrow(/using/);
-    await expect(client.call('Calendar/get', {})).rejects.toThrow(/using/);
+    expect(() => capabilitiesFor(['Task/get'])).toThrow(/using/);
+    await expect(client.call('Task/get', {})).rejects.toThrow(/using/);
     // Named, the server is asked, and says it does not have it.
     await expect(
       client.call(
-        'Calendar/get',
+        'Task/get',
         {},
-        { using: [CAPABILITY_CORE, 'urn:ietf:params:jmap:calendars'] },
+        { using: [CAPABILITY_CORE, 'urn:ietf:params:jmap:tasks'] },
       ),
     ).rejects.toMatchObject({
       name: 'JmapRequestError',

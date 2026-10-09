@@ -1,4 +1,5 @@
 import type { CoreCapability } from '@mailless/jmap-core';
+import { calendarsModule } from '@mailless/jmap-calendars';
 import { contactsModule } from '@mailless/jmap-contacts';
 import {
   createJmapEngine,
@@ -101,6 +102,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       blockedSendersModule(),
       sharingModule(),
       contactsModule(),
+      calendarsModule(),
     ],
   });
 

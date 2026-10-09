@@ -58,6 +58,9 @@
       "path": "./libs/jmap/contacts"
     },
     {
+      "path": "./libs/jmap/calendars"
+    },
+    {
       "path": "./libs/jmap/sharing"
     },
     {
