@@ -17,6 +17,8 @@ import { cardPhoto } from '../lib/contacts';
 import { usePreference } from '../lib/preference';
 import { UNDO_SECONDS } from '../lib/undo';
 import { Face } from './face';
+import { FolderSetting } from './folders';
+import { TagSetting } from './tags';
 import { useMail, useServices, useSynced } from './services';
 
 /** Turning notifications on and off, for wherever there is a switch for it. */
@@ -337,6 +339,8 @@ export function SettingsPage() {
         <NotificationSetting />
         <UndoSetting />
         <PictureSetting />
+        <FolderSetting />
+        <TagSetting />
         <section className="setting" aria-labelledby="setting-account">
           <h2 id="setting-account">Account</h2>
           {config.accountUrl ? (

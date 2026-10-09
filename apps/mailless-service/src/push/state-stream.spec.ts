@@ -89,6 +89,42 @@ describe('pushChanges', () => {
     expect(JSON.stringify(logs)).not.toContain('acc-');
   });
 
+  it('adds what arrived to a push about new mail, and to no other, and logs none of it', async () => {
+    const calls: unknown[] = [];
+    const asked: string[] = [];
+    const logs: Array<Record<string, unknown>> = [];
+    const arrived = [{ from: 'Bob', subject: 'Plans', preview: 'Shall we?' }];
+    await pushChanges(
+      event(
+        ['MODIFY', 'S#acc-1', 'EmailDelivery'],
+        ['MODIFY', 'S#acc-2', 'Email'],
+        ['MODIFY', 'S#acc-3', 'EmailDelivery'],
+      ),
+      {
+        jmap: {
+          pushStateChange: async (accountId, types, extra) => {
+            calls.push([accountId, types, extra]);
+            return { sent: 1, failed: 0, removed: 0 };
+          },
+        },
+        arrived: async (accountId) => {
+          asked.push(accountId);
+          // Not being able to say what arrived does not stop the push.
+          if (accountId === 'acc-3') throw new Error('table unavailable');
+          return arrived;
+        },
+        log: (entry) => logs.push(entry),
+      },
+    );
+    expect(asked).toEqual(['acc-1', 'acc-3']);
+    expect(calls).toEqual([
+      ['acc-1', ['EmailDelivery'], { 'mailless:arrived': arrived }],
+      ['acc-2', ['Email'], undefined],
+      ['acc-3', ['EmailDelivery'], undefined],
+    ]);
+    expect(JSON.stringify(logs)).not.toMatch(/Bob|Plans|Shall/);
+  });
+
   it('lets a failure on our side reach the caller, so the batch is retried', async () => {
     await expect(
       pushChanges(event(['MODIFY', 'S#acc-1', 'Email']), {

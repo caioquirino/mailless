@@ -829,7 +829,7 @@ function CloseAccount({
         <ConfirmButton
           label="Close account"
           title={`Close ${account.id}?`}
-          confirmLabel="Close account for good"
+          confirmLabel="Close account permanently"
           danger
           disabled={isSelf || close.isPending}
           typeToConfirm={account.id}

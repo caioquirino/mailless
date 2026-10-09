@@ -24,10 +24,12 @@ import {
   splitQuotedText,
 } from '../lib/html';
 import type { Attachment } from '../lib/mail';
+import { usePreference } from '../lib/preference';
 import { printMessage, type PicturesShown } from '../lib/print';
 import { Face } from './face';
 import { MoveTo } from './list';
-import { useMail, useServices, useSynced } from './services';
+import { TagChip, TagPicker } from './tags';
+import { useMail, useServices, useSynced, withUndo } from './services';
 
 /** A picture that came with a message is not shown in it when it is larger than this. */
 const MAX_INLINE_BYTES = 3 * 1024 * 1024;
@@ -52,7 +54,15 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
   const [busy, setBusy] = useState(false);
   /** Whether the messages tucked away in the middle of a long conversation are shown. */
   const [revealed, setRevealed] = useState(false);
-  const conversation = store.conversation(threadId);
+  /** Whether the conversation has the page to itself, the list put away until it is gone back to. */
+  const [alone, setAlone] = usePreference<boolean>(
+    'mailless.mail.reader-alone',
+    false,
+  );
+  const conversation = store.conversation(threadId, mailbox);
+  /** Whether the tags of the conversation are being chosen. */
+  const [tagging, setTagging] = useState(false);
+  useSynced(store.tags.made);
 
   useEffect(() => {
     let current = true;
@@ -61,7 +71,7 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
       if (!current) return;
       setState(read ? 'ready' : 'failed');
       if (!read) return;
-      const emails = store.conversation(threadId);
+      const emails = store.conversation(threadId, mailbox);
       // Open what has not been read, and the newest whatever it is.
       const unread = emails.filter((email) => !email.keywords['$seen']);
       const last = emails.at(-1);
@@ -120,6 +130,14 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
   const trash = store.mailbox('trash');
   const inTrash = mailbox !== undefined && mailbox.id === trash?.id;
   const flagged = conversation.some((email) => email.keywords['$flagged']);
+  /** In the trash or the junk, where what is being read can be put back from. */
+  const putAway = mailbox?.role === 'trash' || mailbox?.role === 'junk';
+  const wasIn = putAway
+    ? store
+        .wasIn(scope)
+        .map((each) => each.name)
+        .join(' and ')
+    : '';
   const subject = conversation[0]?.subject || '(no subject)';
 
   // A long conversation shows how it began, the message before the last and
@@ -136,15 +154,19 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
 
   const leave = async (action: () => Promise<unknown>, done: string) => {
     setBusy(true);
+    const mark = store.mark();
     const worked = await act(action);
     setBusy(false);
     if (!worked) return;
-    say(done);
+    say(done, withUndo({ act, say }, store.undoSince(mark)));
     void navigate(back);
   };
 
   return (
-    <section className="reader" aria-label="Conversation">
+    <section
+      className={`reader${alone ? ' reader-alone' : ''}`}
+      aria-label="Conversation"
+    >
       <div className="toolbar" role="toolbar" aria-label="Conversation actions">
         <Link
           className="icon-button back"
@@ -169,15 +191,27 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
         ) : null}
         <IconButton
           icon="delete"
-          label={inTrash ? 'Delete for good' : 'Delete'}
+          label={inTrash ? 'Delete permanently' : 'Delete'}
           disabled={busy}
           onClick={() =>
             void leave(
               () => store.remove(scope),
-              inTrash ? 'Deleted for good' : 'Moved to the trash',
+              inTrash ? 'Permanently deleted' : 'Moved to the trash',
             )
           }
         />
+        {putAway && wasIn !== '' ? (
+          <Button
+            size="small"
+            icon="inbox"
+            disabled={busy}
+            onClick={() =>
+              void leave(() => store.restore(scope), `Moved back to ${wasIn}`)
+            }
+          >
+            Move back to {wasIn}
+          </Button>
+        ) : null}
         <span className="toolbar-gap" />
         <IconButton
           icon="unread"
@@ -192,7 +226,7 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
         />
         <IconButton
           icon="flag"
-          label={flagged ? 'Remove the flag' : 'Flag'}
+          label={flagged ? 'Remove the star' : 'Star'}
           pressed={flagged}
           disabled={busy}
           onClick={() =>
@@ -217,10 +251,48 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
             )
           }
         />
+        <span className="more">
+          <IconButton
+            icon="tag"
+            label="Tags"
+            pressed={tagging}
+            disabled={busy}
+            onClick={() => setTagging(!tagging)}
+          />
+          {tagging ? (
+            <TagPicker
+              emails={conversation}
+              onClose={() => setTagging(false)}
+            />
+          ) : null}
+        </span>
+        <span className="toolbar-end reader-size">
+          <IconButton
+            icon={alone ? 'shrink' : 'expand'}
+            label={alone ? 'Show the list beside it' : 'Read on the whole page'}
+            pressed={alone}
+            onClick={() => setAlone(!alone)}
+          />
+        </span>
       </div>
       <h2 className="reader-subject">
         {subject}
         {mailbox ? <Tag>{mailbox.name}</Tag> : null}
+        {store.tags.on(conversation).map((tag) => (
+          <TagChip
+            key={tag.id}
+            tag={tag}
+            onRemove={() =>
+              void act(() =>
+                store.setKeyword(
+                  conversation.map((email) => email.id),
+                  tag.keyword,
+                  false,
+                ),
+              )
+            }
+          />
+        ))}
       </h2>
       <ol className="messages">
         {conversation.map((email, index) =>
@@ -358,8 +430,9 @@ function Message(props: MessageProps) {
   /** Takes this one message away. The rest of the conversation stays open. */
   const away = (action: () => Promise<unknown>, done: string) => {
     if (props.alone) return void props.leave(action, done);
+    const mark = store.mark();
     void act(action).then((worked) => {
-      if (worked) say(done);
+      if (worked) say(done, withUndo({ act, say }, store.undoSince(mark)));
     });
   };
   const choices: Array<Choice | null | false> = [
@@ -381,12 +454,14 @@ function Message(props: MessageProps) {
     },
     canSend && null,
     {
-      label: inTrash ? 'Delete this message for good' : 'Delete this message',
+      label: inTrash
+        ? 'Delete this message permanently'
+        : 'Delete this message',
       icon: 'delete',
       act: () =>
         away(
           () => store.remove([email.id]),
-          inTrash ? 'Deleted for good' : 'Moved to the trash',
+          inTrash ? 'Permanently deleted' : 'Moved to the trash',
         ),
     },
     {
@@ -493,8 +568,8 @@ function Message(props: MessageProps) {
               icon="flag"
               label={
                 flagged
-                  ? 'Remove the flag from this message'
-                  : 'Flag this message'
+                  ? 'Remove the star from this message'
+                  : 'Star this message'
               }
               pressed={flagged}
               onClick={() =>

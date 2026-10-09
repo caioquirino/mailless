@@ -1,9 +1,15 @@
 import type { JmapServer } from '@mailless/jmap-server';
 import { parseStateKey } from '@mailless/storage-dynamodb';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
+import { ARRIVED, type Arrival } from './arrivals.js';
 
 export interface PushDependencies {
   jmap: Pick<JmapServer, 'pushStateChange'>;
+  /**
+   * What reached an account just now, for the notification to say. Left out,
+   * or failing, a push says only that something changed.
+   */
+  arrived?(accountId: string): Promise<Arrival[]>;
   log?(entry: Record<string, unknown>): void;
 }
 
@@ -40,8 +46,17 @@ export async function pushChanges(
   deps: PushDependencies,
 ): Promise<void> {
   for (const [accountId, types] of changedStates(event)) {
-    const report = await deps.jmap.pushStateChange(accountId, [...types]);
-    // Type names and counts only: no account, no push service address.
+    // Only mail arriving is something to tell of; and not being able to tell must not stop the push.
+    const arrived =
+      types.has('EmailDelivery') && deps.arrived
+        ? await deps.arrived(accountId).catch(() => undefined)
+        : undefined;
+    const report = await deps.jmap.pushStateChange(
+      accountId,
+      [...types],
+      arrived && arrived.length > 0 ? { [ARRIVED]: arrived } : undefined,
+    );
+    // Type names and counts only: no account, no push service address, nothing of the mail.
     deps.log?.({ event: 'push', types: [...types].sort(), ...report });
   }
 }

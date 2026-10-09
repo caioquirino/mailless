@@ -24,8 +24,11 @@ export interface Search {
   /** Days, as `2026-01-31`: arrived before, or on or after. */
   before: string;
   after: string;
-  /** A mailbox, by its name. Nothing is all of them. */
+  /** A mailbox, by its name, with the mailboxes inside it. Nothing is all of them. */
   in: string;
+  starred: boolean;
+  /** Tags, by name, one to a line: mail that has every one of them. */
+  tags: string;
 }
 
 export const NO_SEARCH: Search = {
@@ -40,6 +43,8 @@ export const NO_SEARCH: Search = {
   before: '',
   after: '',
   in: '',
+  starred: false,
+  tags: '',
 };
 
 export const WITHIN_NAMES: Record<Within, string> = {
@@ -78,6 +83,7 @@ export function parseSearch(typed: string): Search {
   const search = { ...NO_SEARCH };
   const words: string[] = [];
   const without: string[] = [];
+  const tags: string[] = [];
   for (const term of terms(typed)) {
     const named = /^([a-z_]+):(.+)$/i.exec(term);
     const key = named?.[1]?.toLowerCase();
@@ -89,6 +95,8 @@ export function parseSearch(typed: string): Search {
     else if (key === 'has' && /^attachments?$/i.test(value)) {
       search.hasAttachment = true;
     } else if (key === 'is' && /^unread$/i.test(value)) search.unread = true;
+    else if (key === 'is' && /^starred$/i.test(value)) search.starred = true;
+    else if (key === 'tag' && value) tags.push(value);
     else if (key === 'before' && DAY.test(value)) search.before = value;
     else if (key === 'after' && DAY.test(value)) search.after = value;
     else if (
@@ -101,6 +109,7 @@ export function parseSearch(typed: string): Search {
   }
   search.words = words.join(' ');
   search.without = without.filter(Boolean).join(' ');
+  search.tags = [...new Set(tags)].join('\n');
   return search;
 }
 
@@ -111,6 +120,11 @@ export interface Narrowing {
   /** As it is typed: `from:`. */
   name: string;
   value: string;
+}
+
+/** The tags a search asks for. */
+export function tagsOf(search: Search): string[] {
+  return search.tags.split('\n').filter(Boolean);
 }
 
 export function narrowings(search: Search): Narrowing[] {
@@ -124,6 +138,10 @@ export function narrowings(search: Search): Narrowing[] {
   add('in', 'in:', search.in);
   if (search.hasAttachment) add('hasAttachment', 'has:', 'attachment');
   if (search.unread) add('unread', 'is:', 'unread');
+  if (search.starred) add('starred', 'is:', 'starred');
+  for (const tag of tagsOf(search)) {
+    found.push({ key: 'tags', name: 'tag:', value: tag });
+  }
   add('within', 'newer:', search.within);
   add('after', 'after:', search.after);
   add('before', 'before:', search.before);
@@ -155,6 +173,8 @@ export function mergeSearch(base: Search, over: Search): Search {
     if (key === 'words') continue;
     if (key === 'without' && value) {
       merged.without = [base.without, value].filter(Boolean).join(' ');
+    } else if (key === 'tags' && value) {
+      merged.tags = [...new Set([...tagsOf(base), ...tagsOf(over)])].join('\n');
     } else if (value !== '' && value !== false) {
       (merged as Record<string, unknown>)[key] = value;
     }
@@ -173,6 +193,14 @@ export function withoutNarrowing(search: Search, taken: Narrowing): Search {
         .join(' '),
     };
   }
+  if (taken.key === 'tags') {
+    return {
+      ...search,
+      tags: tagsOf(search)
+        .filter((tag) => tag.toLowerCase() !== taken.value.toLowerCase())
+        .join('\n'),
+    };
+  }
   return { ...search, [taken.key]: NO_SEARCH[taken.key] };
 }
 
@@ -184,6 +212,7 @@ export function filterOf(
   search: Search,
   mailboxes: readonly Mailbox[],
   now: Date = new Date(),
+  tags: ReadonlyArray<{ name: string; keyword: string }> = [],
 ): Record<string, unknown> | null {
   const conditions: Array<Record<string, unknown>> = [];
   const words = unquoted(search.words);
@@ -202,13 +231,37 @@ export function filterOf(
   }
   if (search.after) conditions.push({ after: `${search.after}T00:00:00Z` });
   if (search.before) conditions.push({ before: `${search.before}T00:00:00Z` });
+  if (search.starred) conditions.push({ hasKeyword: '$flagged' });
+  for (const name of tagsOf(search)) {
+    const tag = tags.find(
+      (each) => each.name.toLowerCase() === name.toLowerCase(),
+    );
+    // A tag there is none of is on nothing.
+    conditions.push({ hasKeyword: tag?.keyword ?? 'no-such-tag' });
+  }
   if (search.in) {
     const wanted = search.in.toLowerCase();
     const mailbox = mailboxes.find(
       (each) => each.name.toLowerCase() === wanted || each.role === wanted,
     );
-    // A mailbox there is none of holds nothing.
-    conditions.push({ inMailbox: mailbox?.id ?? 'no-such-mailbox' });
+    // What is in a folder is also what is in the folders inside it.
+    const within = mailbox ? [mailbox.id] : [];
+    for (const id of within) {
+      for (const each of mailboxes) {
+        if (each.parentId === id && !within.includes(each.id)) {
+          within.push(each.id);
+        }
+      }
+    }
+    conditions.push(
+      within.length > 1
+        ? {
+            operator: 'OR',
+            conditions: within.map((id) => ({ inMailbox: id })),
+          }
+        : // A mailbox there is none of holds nothing.
+          { inMailbox: within[0] ?? 'no-such-mailbox' },
+    );
   }
   if (conditions.length === 0) return null;
   return conditions.length === 1
@@ -222,8 +275,9 @@ export const SEARCH_WORDS: ReadonlyArray<{ typed: string; means: string }> = [
   { typed: 'to:', means: 'who it was written to' },
   { typed: 'subject:', means: 'what it is about' },
   { typed: 'has:attachment', means: 'with something attached' },
-  { typed: 'is:unread', means: 'not read yet' },
-  { typed: 'in:', means: 'a mailbox' },
+  { typed: 'is:unread', means: 'not read yet; also is:starred' },
+  { typed: 'in:', means: 'a folder, and the folders inside it' },
+  { typed: 'tag:', means: 'a tag it has' },
   { typed: 'newer:1m', means: 'from the last month (1d, 1w, 6m, 1y)' },
   { typed: 'before:', means: 'a day, as 2026-01-31; also after:' },
 ];

@@ -212,11 +212,11 @@ describe('the webmail', () => {
 
     // A flag of its own, apart from the conversation's.
     await userEvent.click(
-      within(carol).getByRole('button', { name: 'Flag this message' }),
+      within(carol).getByRole('button', { name: 'Star this message' }),
     );
     expect(
       await within(carol).findByRole('button', {
-        name: 'Remove the flag from this message',
+        name: 'Remove the star from this message',
       }),
     ).toHaveAttribute('aria-pressed', 'true');
 
@@ -261,6 +261,120 @@ describe('the webmail', () => {
     ).toBeInTheDocument();
   });
 
+  it('leaves a message thrown away out of its conversation, and shows it alone in the trash', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({
+      subject: 'Plans',
+      from: 'Bob <bob@example.com>',
+      text: 'First thoughts',
+    });
+    await backend.deliver({
+      subject: 'Re: Plans',
+      from: 'Carol <carol@example.com>',
+      text: 'Second thoughts',
+      inReplyTo: '<m1@example.com>',
+    });
+    await renderApp(backend);
+    await userEvent.click(await screen.findByRole('link', { name: /Plans/ }));
+    const carol = await within(reader()).findByRole('article', {
+      name: 'Message from Carol',
+    });
+    await userEvent.click(
+      within(carol).getByRole('button', { name: 'More for this message' }),
+    );
+    await userEvent.click(
+      within(carol).getByRole('menuitem', { name: 'Delete this message' }),
+    );
+
+    // Gone from what is being read, and from the count on its line in the list.
+    await waitFor(() =>
+      expect(
+        within(reader()).queryByRole('article', { name: 'Message from Carol' }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      within(reader()).getByRole('article', { name: 'Message from Bob' }),
+    ).toBeInTheDocument();
+    expect(
+      within(list('Inbox')).queryByLabelText('2 messages'),
+    ).not.toBeInTheDocument();
+
+    // In the trash it is by itself: the rest of the conversation was not thrown away.
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Trash/ }),
+    );
+    await userEvent.click(
+      await within(list('Trash')).findByRole('link', { name: /Plans/ }),
+    );
+    expect(
+      await within(reader()).findByRole('article', {
+        name: 'Message from Carol',
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(reader()).queryByRole('article', { name: 'Message from Bob' }),
+    ).not.toBeInTheDocument();
+
+    // Put back where it was, it is part of its conversation again.
+    await userEvent.click(
+      within(reader()).getByRole('button', { name: 'Move back to Inbox' }),
+    );
+    expect(await screen.findByText('Moved back to Inbox')).toBeInTheDocument();
+    expect(
+      await within(list('Trash')).findByText('There is nothing here.'),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Inbox/ }),
+    );
+    expect(
+      await within(list('Inbox')).findByLabelText('2 messages'),
+    ).toBeInTheDocument();
+  });
+
+  it('puts what was thrown away back in the mailbox it came from, not always the inbox', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Plans' });
+    await renderApp(backend);
+    const inbox = await screen.findByRole('region', { name: 'Inbox' });
+    const pick = async (region: HTMLElement) =>
+      userEvent.click(
+        await within(region).findByRole('checkbox', { name: /Select Plans/ }),
+      );
+
+    await pick(inbox);
+    await userEvent.click(
+      within(inbox).getByRole('button', { name: 'Archive' }),
+    );
+    await screen.findByText('Archived');
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Archive/ }),
+    );
+    await pick(list('Archive'));
+    await userEvent.click(
+      within(list('Archive')).getByRole('button', { name: 'Delete' }),
+    );
+    await screen.findByText('Moved to the trash');
+
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Trash/ }),
+    );
+    await pick(list('Trash'));
+    await userEvent.click(
+      within(list('Trash')).getByRole('button', {
+        name: 'Move back to Archive',
+      }),
+    );
+    expect(
+      await screen.findByText('Moved back to Archive'),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Archive/ }),
+    );
+    expect(
+      await within(list('Archive')).findByText('Plans'),
+    ).toBeInTheDocument();
+  });
+
   it('marks a conversation unread from one message on, and prints one by itself', async () => {
     const backend = await fakeBackend();
     await backend.deliver({ subject: 'Plans', from: 'Bob <bob@example.com>' });
@@ -293,6 +407,36 @@ describe('the webmail', () => {
     ).toBeInTheDocument();
   });
 
+  it('gives a conversation the whole page when asked, and remembers that', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Plans' });
+    await backend.deliver({ subject: 'Other news' });
+    await renderApp(backend);
+    await userEvent.click(await screen.findByRole('link', { name: /Plans/ }));
+    await within(reader()).findByRole('article');
+    expect(reader()).not.toHaveClass('reader-alone');
+
+    await userEvent.click(
+      within(reader()).getByRole('button', { name: 'Read on the whole page' }),
+    );
+    expect(reader()).toHaveClass('reader-alone');
+
+    // The next one opened is read the same way.
+    await userEvent.click(
+      within(reader()).getByRole('link', { name: 'Back to Inbox' }),
+    );
+    await userEvent.click(
+      await screen.findByRole('link', { name: /Other news/ }),
+    );
+    await within(reader()).findByRole('article');
+    expect(reader()).toHaveClass('reader-alone');
+
+    await userEvent.click(
+      within(reader()).getByRole('button', { name: 'Show the list beside it' }),
+    );
+    expect(reader()).not.toHaveClass('reader-alone');
+  });
+
   it('deletes the conversation being read and goes back to the list', async () => {
     const backend = await fakeBackend();
     await backend.deliver({ subject: 'Plans' });
@@ -318,6 +462,71 @@ describe('the webmail', () => {
       within(sidebar()).getByRole('link', { name: /Trash/ }),
     );
     expect(await within(list('Trash')).findByText('Plans')).toBeInTheDocument();
+  });
+
+  it('takes back what was just done: archived, thrown away or moved, with Undo', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Plans' });
+    await renderApp(backend);
+    await userEvent.click(await screen.findByRole('link', { name: /Plans/ }));
+    await within(reader()).findByRole('article');
+
+    await userEvent.click(
+      within(reader()).getByRole('button', { name: 'Delete' }),
+    );
+    await screen.findByText('Moved to the trash');
+    expect(
+      await within(list('Inbox')).findByText('There is nothing here.'),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(await screen.findByText('Undone')).toBeInTheDocument();
+    // Back in the inbox, and not marked as having been anywhere else.
+    const row = await within(list('Inbox')).findByRole('checkbox', {
+      name: /Select Plans/,
+    });
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Trash/ }),
+    );
+    expect(
+      await within(list('Trash')).findByText('There is nothing here.'),
+    ).toBeInTheDocument();
+    expect(row).toBeDefined();
+
+    // From the list too.
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Inbox/ }),
+    );
+    await userEvent.click(
+      await within(list('Inbox')).findByRole('checkbox', {
+        name: /Select Plans/,
+      }),
+    );
+    await userEvent.click(
+      within(list('Inbox')).getByRole('button', { name: 'Archive' }),
+    );
+    await screen.findByText('Archived');
+    await userEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(await within(list('Inbox')).findByText('Plans')).toBeInTheDocument();
+  });
+
+  it('offers no Undo for what was deleted permanently', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Plans', mailbox: 'trash' });
+    await renderApp(backend);
+    await userEvent.click(
+      within(
+        await screen.findByRole('navigation', { name: 'Mailboxes' }),
+      ).getByRole('link', { name: /Trash/ }),
+    );
+    await userEvent.click(
+      await within(list('Trash')).findByRole('link', { name: /Plans/ }),
+    );
+    await within(reader()).findByRole('article');
+    await userEvent.click(
+      within(reader()).getByRole('button', { name: 'Delete permanently' }),
+    );
+    await screen.findByText('Permanently deleted');
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
   });
 
   it('acts on several conversations at once', async () => {
@@ -1360,22 +1569,280 @@ describe('the webmail', () => {
     expect(within(narrowed).getAllByRole('listitem')).toHaveLength(1);
   });
 
-  it('makes a mailbox and shows it', async () => {
+  it('makes folders in the settings, one inside another, and shows them in the menu', async () => {
     const backend = await fakeBackend();
-    await renderApp(backend);
+    await renderApp(backend, '/settings');
+    const settings = await screen.findByRole('region', { name: 'Settings' });
+    expect(
+      within(settings).getByText('You have made no folders yet.'),
+    ).toBeInTheDocument();
+    // Nothing in the menu makes one: that is done here.
+    expect(screen.queryByRole('button', { name: 'New mailbox' })).toBeNull();
+
     await userEvent.click(
-      await screen.findByRole('button', { name: 'New mailbox' }),
+      within(settings).getByRole('button', { name: 'New folder' }),
     );
     await userEvent.type(
-      screen.getByLabelText('Name of the new mailbox'),
-      'Projects{Enter}',
+      within(settings).getByLabelText('Name of the new folder'),
+      'Clients{Enter}',
+    );
+    expect(await screen.findByText('Clients was made')).toBeInTheDocument();
+    await userEvent.click(
+      within(settings).getByRole('button', {
+        name: 'New folder inside Clients',
+      }),
+    );
+    await userEvent.type(
+      within(settings).getByLabelText('Name of the new folder inside Clients'),
+      'Acme{Enter}',
+    );
+    expect(await screen.findByText('Acme was made')).toBeInTheDocument();
+    expect(
+      within(
+        within(settings).getByRole('list', { name: 'Your folders' }),
+      ).getAllByRole('listitem'),
+    ).toHaveLength(2);
+
+    // In the menu, under their own heading; what is inside a folder folds away.
+    expect(
+      within(sidebar()).getByRole('button', { name: 'Folders' }),
+    ).toHaveAttribute('aria-expanded', 'true');
+    expect(
+      within(sidebar()).getByRole('link', { name: 'Acme' }),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(sidebar()).getByRole('button', {
+        name: 'Hide what is inside Clients',
+      }),
+    );
+    expect(within(sidebar()).queryByRole('link', { name: 'Acme' })).toBeNull();
+    expect(
+      within(sidebar()).getByRole('link', { name: 'Clients' }),
+    ).toBeInTheDocument();
+  });
+
+  it('renames a folder, moves it and deletes it, in the settings', async () => {
+    const backend = await fakeBackend();
+    await renderApp(backend, '/settings');
+    const settings = await screen.findByRole('region', { name: 'Settings' });
+    for (const name of ['Clients', 'Invoices']) {
+      await userEvent.click(
+        within(settings).getByRole('button', { name: 'New folder' }),
+      );
+      await userEvent.type(
+        within(settings).getByLabelText('Name of the new folder'),
+        `${name}{Enter}`,
+      );
+      await screen.findByText(`${name} was made`);
+    }
+
+    // Another name, and inside the other one.
+    await userEvent.click(
+      within(settings).getByRole('button', {
+        name: 'Rename or move Invoices',
+      }),
+    );
+    const name = within(settings).getByLabelText('Name of Invoices');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Bills');
+    await userEvent.selectOptions(
+      within(settings).getByLabelText('Inside'),
+      'Clients',
+    );
+    await userEvent.click(
+      within(name.closest('form') as HTMLElement).getByRole('button', {
+        name: 'Save',
+      }),
+    );
+    expect(await screen.findByText('Bills was changed')).toBeInTheDocument();
+    expect(
+      within(sidebar()).getByRole('button', {
+        name: 'Hide what is inside Clients',
+      }),
+    ).toBeInTheDocument();
+
+    // Gone only after being asked.
+    await userEvent.click(
+      within(settings).getByRole('button', { name: 'Delete Bills' }),
+    );
+    await userEvent.click(
+      within(
+        within(settings).getByRole('alertdialog', { name: 'Delete Bills' }),
+      ).getByRole('button', { name: 'Delete it' }),
+    );
+    expect(await screen.findByText('Bills was deleted')).toBeInTheDocument();
+    expect(within(sidebar()).queryByRole('link', { name: 'Bills' })).toBeNull();
+  });
+
+  it('tags a conversation, shows the tag on it, and finds it by the tag from the menu', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Old news' });
+    await backend.deliver({ subject: 'Plans' });
+    await renderApp(backend);
+    await userEvent.click(await screen.findByRole('link', { name: /Plans/ }));
+    await within(reader()).findByRole('article');
+
+    // Made on the spot, by typing its name, and put on what is being read.
+    await userEvent.click(
+      within(reader()).getByRole('button', { name: 'Tags' }),
+    );
+    const picker = screen.getByRole('dialog', {
+      name: 'Tags of this conversation',
+    });
+    expect(
+      within(picker).getByRole('checkbox', { name: 'Important' }),
+    ).not.toBeChecked();
+    await userEvent.type(
+      within(picker).getByLabelText('Find or make a tag'),
+      'Work',
+    );
+    await userEvent.click(
+      within(picker).getByRole('button', { name: 'Make the tag “Work”' }),
     );
     expect(
-      await screen.findByRole('region', { name: 'Projects' }),
-    ).toBeInTheDocument();
+      await within(picker).findByRole('checkbox', { name: 'Work' }),
+    ).toBeChecked();
+    await userEvent.click(
+      within(picker).getByRole('checkbox', { name: 'Important' }),
+    );
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: /Tags of/ })).toBeNull();
+
+    // On the conversation and on its line in the list.
+    const subject = within(reader()).getByRole('heading', { level: 2 });
+    expect(subject).toHaveTextContent('Work');
+    expect(subject).toHaveTextContent('Important');
+    const row = within(list('Inbox'))
+      .getByRole('link', { name: /Plans/ })
+      .closest('li') as HTMLElement;
+    expect(row).toHaveTextContent('Work');
+
+    // In the menu, and behind it everything that has it and nothing else.
+    await userEvent.click(
+      await within(sidebar()).findByRole('link', { name: 'Work' }),
+    );
+    const found = await screen.findByRole('region', { name: /^Search/ });
+    expect(await within(found).findByText('Plans')).toBeInTheDocument();
+    expect(within(found).queryByText('Old news')).not.toBeInTheDocument();
     expect(
-      within(sidebar()).getByRole('link', { name: 'Projects' }),
+      screen.getByRole('searchbox', { name: 'Search mail' }),
+    ).toBeDefined();
+
+    // Taken off where it is shown.
+    await userEvent.click(within(found).getByRole('link', { name: /Plans/ }));
+    await userEvent.click(
+      await within(reader()).findByRole('button', {
+        name: 'Remove the tag Work',
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        within(reader()).getByRole('heading', { level: 2 }),
+      ).not.toHaveTextContent('Work'),
+    );
+  });
+
+  it('stars a conversation from its line, and lists what is starred', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Old news' });
+    await backend.deliver({ subject: 'Plans' });
+    await renderApp(backend);
+    const inbox = await screen.findByRole('region', { name: 'Inbox' });
+    await userEvent.click(
+      await within(inbox).findByRole('button', { name: 'Star: Plans' }),
+    );
+    expect(
+      await within(inbox).findByRole('button', {
+        name: 'Remove the star: Plans',
+      }),
+    ).toHaveAttribute('aria-pressed', 'true');
+
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: 'Starred' }),
+    );
+    const found = await screen.findByRole('region', { name: /^Search/ });
+    expect(await within(found).findByText('Plans')).toBeInTheDocument();
+    expect(within(found).queryByText('Old news')).not.toBeInTheDocument();
+  });
+
+  it('keeps the tags in the settings: made, renamed, recoloured and deleted', async () => {
+    const backend = await fakeBackend();
+    await renderApp(backend, '/settings');
+    const settings = await screen.findByRole('region', { name: 'Settings' });
+    const tags = await within(settings).findByRole('list', {
+      name: 'Your tags',
+    });
+    // The two that are always there cannot be changed.
+    expect(within(tags).getAllByText('Always there')).toHaveLength(2);
+    expect(
+      within(tags).queryByRole('button', { name: /Delete the tag Important/ }),
+    ).toBeNull();
+
+    await userEvent.click(
+      within(settings).getByRole('button', { name: 'New tag' }),
+    );
+    await userEvent.type(
+      within(settings).getByLabelText('Name of the new tag'),
+      'Work',
+    );
+    await userEvent.click(
+      within(settings).getByRole('radio', { name: 'Green' }),
+    );
+    await userEvent.keyboard('{Enter}');
+    await userEvent.click(
+      within(settings).getByLabelText('Name of the new tag'),
+    );
+    await userEvent.keyboard('{Enter}');
+    expect(await screen.findByText('Work was made')).toBeInTheDocument();
+    expect(
+      await within(sidebar()).findByRole('link', { name: 'Work' }),
     ).toBeInTheDocument();
+
+    await userEvent.click(
+      within(tags).getByRole('button', { name: 'Rename or recolour Work' }),
+    );
+    const name = within(tags).getByLabelText('Name of Work');
+    expect(within(tags).getByRole('radio', { name: 'Green' })).toBeChecked();
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Office{Enter}');
+    expect(await screen.findByText('Office was changed')).toBeInTheDocument();
+
+    await userEvent.click(
+      within(tags).getByRole('button', { name: 'Delete the tag Office' }),
+    );
+    await userEvent.click(
+      within(
+        within(tags).getByRole('alertdialog', {
+          name: 'Delete the tag Office',
+        }),
+      ).getByRole('button', { name: 'Delete the tag' }),
+    );
+    expect(await screen.findByText('Office was deleted')).toBeInTheDocument();
+    expect(
+      within(sidebar()).queryByRole('link', { name: 'Office' }),
+    ).toBeNull();
+  });
+
+  it('folds a part of the menu away, says what waits in it, and remembers', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Spam', mailbox: 'junk' });
+    await renderApp(backend);
+    await screen.findByRole('region', { name: 'Inbox' });
+    const more = within(sidebar()).getByRole('button', { name: 'More' });
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(
+      within(sidebar()).getByRole('link', { name: /Trash/ }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(more);
+    expect(within(sidebar()).queryByRole('link', { name: /Trash/ })).toBeNull();
+    expect(
+      within(sidebar()).getByRole('button', { name: /More/ }),
+    ).toHaveAttribute('aria-expanded', 'false');
+    expect(within(sidebar()).getByLabelText('1 unread')).toBeInTheDocument();
+    expect(window.localStorage.getItem('mailless.mail.more-open')).toBe(
+      'false',
+    );
   });
 
   it('shows what arrives while the page is open, when it is looked at again', async () => {
@@ -1504,7 +1971,9 @@ describe('the webmail', () => {
     });
     await renderApp(backend, '/', { theme, push: browser.deps });
     await userEvent.click(
-      await screen.findByRole('link', { name: 'Settings' }),
+      within(await screen.findByRole('banner')).getByRole('link', {
+        name: 'Settings',
+      }),
     );
     const settings = await screen.findByRole('region', { name: 'Settings' });
 
@@ -1599,7 +2068,7 @@ describe('the webmail', () => {
       .parentElement as HTMLElement;
     expect(side).not.toHaveClass('side-folded');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Mailboxes' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Menu' }));
     expect(side).toHaveClass('side-folded');
     expect(window.localStorage.getItem('mailless.mail.sidebar-folded')).toBe(
       'true',
@@ -1611,7 +2080,7 @@ describe('the webmail', () => {
     expect(within(sidebar()).getByLabelText('1 unread')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Write' })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Mailboxes' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Menu' }));
     expect(side).not.toHaveClass('side-folded');
   });
 

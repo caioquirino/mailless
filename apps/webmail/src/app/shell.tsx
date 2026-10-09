@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type FormEvent,
   type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
@@ -19,7 +18,6 @@ import {
   Route,
   Routes,
   useLocation,
-  useNavigate,
   useParams,
   useSearchParams,
 } from 'react-router';
@@ -28,11 +26,14 @@ import type { Mailbox } from '@mailless/jmap-core';
 import { Button, Icon, IconButton, type IconName } from '@mailless/ui';
 import { emptyDraft, resumeDraft } from '../lib/compose';
 import { MailError, MailStore, type Draft, type Held } from '../lib/mail';
+import { orderMailboxes } from '../lib/mailboxes';
 import { answerPushes, Notifications } from '../lib/notifications';
 import { usePreference } from '../lib/preference';
+import { formatSearch, NO_SEARCH } from '../lib/search';
 import { MessageList } from './list';
 import { ProfileMenu } from './profile';
 import { PullMark, usePull } from './pull';
+import { Rail } from './rail';
 import { Reader } from './reader';
 import { SearchBar } from './search';
 import { SettingsPage } from './settings';
@@ -72,39 +73,6 @@ const MOST_WRITTEN_AT_ONCE = 3;
 const ContactsPage = lazy(() =>
   import('./contacts').then((module) => ({ default: module.ContactsPage })),
 );
-
-const ROLE_ORDER = ['inbox', 'drafts', 'sent', 'archive', 'junk', 'trash'];
-
-/** Mailboxes in the order people look for them: the known ones first, then the rest by name, each under its parent. */
-export function orderMailboxes(
-  mailboxes: readonly Mailbox[],
-): Array<{ mailbox: Mailbox; depth: number }> {
-  const rank = (mailbox: Mailbox) => {
-    const index = mailbox.role ? ROLE_ORDER.indexOf(mailbox.role) : -1;
-    return index === -1 ? ROLE_ORDER.length : index;
-  };
-  const sorted = [...mailboxes].sort(
-    (a, b) =>
-      rank(a) - rank(b) ||
-      a.sortOrder - b.sortOrder ||
-      a.name.localeCompare(b.name),
-  );
-  const ids = new Set(mailboxes.map((mailbox) => mailbox.id));
-  const result: Array<{ mailbox: Mailbox; depth: number }> = [];
-  const add = (parentId: string | null, depth: number) => {
-    for (const mailbox of sorted) {
-      const parent =
-        mailbox.parentId !== null && ids.has(mailbox.parentId)
-          ? mailbox.parentId
-          : null;
-      if (parent !== parentId) continue;
-      result.push({ mailbox, depth });
-      if (depth < 8) add(mailbox.id, depth + 1);
-    }
-  };
-  add(null, 0);
-  return result;
-}
 
 /** The screens of someone signed in. */
 export function MailShell() {
@@ -304,14 +272,13 @@ export function MailShell() {
     );
   }
 
-  const drawer = { menu, onCloseMenu: closeMenu };
+  const drawer = { menu, folded, onCloseMenu: closeMenu };
   return (
     <MailProvider value={mail}>
       <div className="shell">
         <TopBar onMenu={toggleMenu} />
         <div className="body" {...pull.touch}>
           <PullMark pull={pull} />
-          <Rail />
           {inContacts ? null : (
             <Sidebar open={menu} folded={folded} onClose={closeMenu} />
           )}
@@ -393,7 +360,7 @@ function TopBar({ onMenu }: { onMenu(): void }) {
       <IconButton
         className="menu-button"
         icon="menu"
-        label="Mailboxes"
+        label="Menu"
         onClick={onMenu}
       />
       <NavLink to="/" className="brand">
@@ -422,49 +389,12 @@ function TopBar({ onMenu }: { onMenu(): void }) {
   );
 }
 
-/** The parts of mailless: mail, and what is on its way. On a phone it sits along the bottom. */
-function Rail() {
-  const contacts = useLocation().pathname.startsWith('/contacts');
-  const item = (
-    to: string,
-    icon: IconName,
-    label: string,
-    current: boolean,
-  ) => (
-    <Link
-      to={to}
-      className={`rail-item${current ? ' rail-current' : ''}`}
-      {...(current ? { 'aria-current': 'page' as const } : {})}
-    >
-      <span className="rail-icon">
-        <Icon name={icon} />
-      </span>
-      {label}
-    </Link>
-  );
-  return (
-    <nav className="rail" aria-label="Sections">
-      {item('/', 'mail', 'Mail', !contacts)}
-      <span
-        className="rail-item rail-soon"
-        aria-disabled="true"
-        title="Not here yet"
-      >
-        <span className="rail-icon">
-          <Icon name="calendar" />
-        </span>
-        Calendar
-      </span>
-      {item('/contacts', 'contacts', 'Contacts', contacts)}
-    </nav>
-  );
-}
-
 /** The address book, which is fetched when it is first gone to. */
 function ContactsRoute(props: {
   editing?: boolean;
   adding?: boolean;
   menu: boolean;
+  folded: boolean;
   onCloseMenu(): void;
 }) {
   const { cardId } = useParams();
@@ -474,6 +404,7 @@ function ContactsRoute(props: {
         cardId={props.adding ? 'new' : cardId}
         editing={props.editing === true}
         menu={props.menu}
+        folded={props.folded}
         onCloseMenu={props.onCloseMenu}
       />
     </Suspense>
@@ -489,6 +420,9 @@ const ROLE_ICONS: Record<string, IconName> = {
   trash: 'delete',
 };
 
+/** The mailboxes every account has and nobody looks for often: under "More". */
+const MORE_ROLES = ['archive', 'junk', 'trash'];
+
 function Sidebar({
   open,
   folded,
@@ -499,21 +433,38 @@ function Sidebar({
   folded: boolean;
   onClose(): void;
 }) {
-  const { store, compose, act } = useMail();
+  const { store, compose } = useMail();
   useSynced(store.mailboxes);
   useSynced(store.identities);
-  const navigate = useNavigate();
   const location = useLocation();
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState('');
-  const [busy, setBusy] = useState(false);
-  const field = useRef<HTMLInputElement>(null);
   const identities = store.identities.values();
   const ordered = orderMailboxes(store.mailboxes.values());
-
-  useEffect(() => {
-    if (adding) field.current?.focus();
-  }, [adding]);
+  // Each part of the list folds away, and stays as it was left.
+  const [foldersOpen, setFoldersOpen] = usePreference<boolean>(
+    'mailless.mail.folders-open',
+    true,
+  );
+  const [moreOpen, setMoreOpen] = usePreference<boolean>(
+    'mailless.mail.more-open',
+    true,
+  );
+  const [tagsOpen, setTagsOpen] = usePreference<boolean>(
+    'mailless.mail.tags-open',
+    true,
+  );
+  useSynced(store.tags.made);
+  const searching = new URLSearchParams(location.search).get('q') ?? '';
+  /** The folders whose own folders are put away: their ids, as kept. */
+  const [shut, setShut] = usePreference<string>(
+    'mailless.mail.folders-shut',
+    '',
+  );
+  const shutIds = new Set(shut === '' ? [] : shut.split(' '));
+  const toggle = (id: string) => {
+    const next = new Set(shutIds);
+    if (!next.delete(id)) next.add(id);
+    setShut([...next].join(' '));
+  };
 
   // Going somewhere is what the drawer was opened for.
   useEffect(() => onClose(), [location.pathname, onClose]);
@@ -524,20 +475,130 @@ function Sidebar({
     document.title = unread > 0 ? `(${unread}) mailless` : 'mailless';
   }, [inbox?.unreadEmails]);
 
-  const add = async (event: FormEvent) => {
-    event.preventDefault();
-    const wanted = name.trim();
-    if (wanted === '' || busy) return;
-    setBusy(true);
-    let id: string | undefined;
-    const made = await act(async () => {
-      id = await store.createMailbox(wanted);
-    });
-    setBusy(false);
-    if (!made) return;
-    setAdding(false);
-    setName('');
-    if (id) void navigate(`/box/${id}`);
+  // Which part each mailbox is in goes by the one at the top of its branch.
+  type Entry = { mailbox: Mailbox; depth: number; parent: boolean };
+  const parts: Record<'main' | 'folders' | 'more', Entry[]> = {
+    main: [],
+    folders: [],
+    more: [],
+  };
+  let part: keyof typeof parts = 'main';
+  /** How deep the folder being skipped past is, with everything inside it. */
+  let hidden: number | null = null;
+  ordered.forEach(({ mailbox, depth }, index) => {
+    if (depth === 0) {
+      part =
+        mailbox.role === null
+          ? 'folders'
+          : MORE_ROLES.includes(mailbox.role)
+            ? 'more'
+            : 'main';
+    }
+    if (hidden !== null && depth > hidden) return;
+    hidden = null;
+    const parent = (ordered[index + 1]?.depth ?? 0) > depth;
+    parts[part].push({ mailbox, depth, parent });
+    if (parent && shutIds.has(mailbox.id)) hidden = depth;
+  });
+  /** What waits in a part that is folded away: said on its heading. */
+  const unreadIn = (name: 'folders' | 'more') =>
+    ordered.reduce((sum, { mailbox }, index) => {
+      let top = index;
+      while ((ordered[top]?.depth ?? 0) > 0) top--;
+      const role = ordered[top]?.mailbox.role ?? null;
+      const within = role === null ? 'folders' : 'more';
+      return role !== null && !MORE_ROLES.includes(role)
+        ? sum
+        : within === name
+          ? sum + mailbox.unreadEmails
+          : sum;
+    }, 0);
+
+  const rows = (entries: Entry[]) => (
+    <ul className="mailboxes">
+      {entries.map(({ mailbox, depth, parent }) => {
+        // Drafts are all still to be done; elsewhere it is the unread that count.
+        const count =
+          mailbox.role === 'drafts'
+            ? mailbox.totalEmails
+            : mailbox.unreadEmails;
+        const closed = shutIds.has(mailbox.id);
+        return (
+          <li key={mailbox.id} className="mailbox-line">
+            <NavLink
+              to={`/box/${mailbox.id}`}
+              className={`mailbox depth-${Math.min(depth, 4)}${
+                parent ? ' mailbox-parent' : ''
+              }`}
+              title={mailbox.name}
+            >
+              <Icon
+                name={ROLE_ICONS[mailbox.role ?? ''] ?? 'folder'}
+                size={18}
+              />
+              <span className="mailbox-name">{mailbox.name}</span>
+              {count > 0 ? (
+                <span
+                  className="count"
+                  aria-label={
+                    mailbox.role === 'drafts'
+                      ? `${count} drafts`
+                      : `${count} unread`
+                  }
+                >
+                  {count}
+                </span>
+              ) : null}
+            </NavLink>
+            {parent ? (
+              <button
+                type="button"
+                className={`mailbox-fold depth-${Math.min(depth, 4)}`}
+                aria-expanded={!closed}
+                aria-label={`${closed ? 'Show' : 'Hide'} what is inside ${mailbox.name}`}
+                onClick={() => toggle(mailbox.id)}
+              >
+                <Icon
+                  name={closed ? 'chevron-right' : 'chevron-down'}
+                  size={14}
+                />
+              </button>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+  const section = (
+    name: 'folders' | 'more',
+    label: string,
+    isOpen: boolean,
+    set: (open: boolean) => void,
+  ) => {
+    if (parts[name].length === 0) return null;
+    const waiting = isOpen ? 0 : unreadIn(name);
+    return (
+      <>
+        <button
+          type="button"
+          className="side-section"
+          aria-expanded={isOpen}
+          onClick={() => set(!isOpen)}
+        >
+          <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={14} />
+          <span className="side-section-name">{label}</span>
+          {waiting > 0 ? (
+            <span
+              className="side-section-count"
+              aria-label={`${waiting} unread`}
+            >
+              {waiting}
+            </span>
+          ) : null}
+        </button>
+        {isOpen ? rows(parts[name]) : null}
+      </>
+    );
   };
 
   return (
@@ -564,84 +625,63 @@ function Sidebar({
         />
       ) : null}
       <nav className="sidebar" aria-label="Mailboxes">
-        <ul className="mailboxes">
-          {ordered.map(({ mailbox, depth }) => {
-            // Drafts are all still to be done; elsewhere it is the unread that count.
-            const count =
-              mailbox.role === 'drafts'
-                ? mailbox.totalEmails
-                : mailbox.unreadEmails;
-            return (
-              <li key={mailbox.id}>
-                <NavLink
-                  to={`/box/${mailbox.id}`}
-                  className={`mailbox depth-${Math.min(depth, 4)}`}
-                  title={mailbox.name}
-                >
-                  <Icon
-                    name={ROLE_ICONS[mailbox.role ?? ''] ?? 'folder'}
-                    size={18}
-                  />
-                  <span className="mailbox-name">{mailbox.name}</span>
-                  {count > 0 ? (
-                    <span
-                      className="count"
-                      aria-label={
-                        mailbox.role === 'drafts'
-                          ? `${count} drafts`
-                          : `${count} unread`
-                      }
-                    >
-                      {count}
-                    </span>
-                  ) : null}
-                </NavLink>
-              </li>
-            );
-          })}
-        </ul>
-        {adding ? (
-          <form className="new-mailbox" onSubmit={(event) => void add(event)}>
-            <input
-              ref={field}
-              aria-label="Name of the new mailbox"
-              placeholder="Name"
-              maxLength={100}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-            <div className="row">
-              <Button
-                type="submit"
-                size="small"
-                variant="primary"
-                disabled={busy || name.trim() === ''}
-              >
-                Add
-              </Button>
-              <Button
-                size="small"
-                onClick={() => {
-                  setAdding(false);
-                  setName('');
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <Button
-            size="small"
-            variant="quiet"
-            icon="plus"
-            className="new-mailbox-button"
-            onClick={() => setAdding(true)}
-          >
-            New mailbox
-          </Button>
-        )}
+        {rows(parts.main)}
+        {section('folders', 'Folders', foldersOpen, setFoldersOpen)}
+        <button
+          type="button"
+          className="side-section"
+          aria-expanded={tagsOpen}
+          onClick={() => setTagsOpen(!tagsOpen)}
+        >
+          <Icon name={tagsOpen ? 'chevron-down' : 'chevron-right'} size={14} />
+          <span className="side-section-name">Tags</span>
+        </button>
+        {tagsOpen ? (
+          <ul className="mailboxes">
+            {store.tags.all().map((tag) => {
+              // What has a tag is found by searching for it, wherever it is.
+              const asked =
+                tag.fixed === 'starred'
+                  ? 'is:starred'
+                  : formatSearch({ ...NO_SEARCH, tags: tag.name });
+              return (
+                <li key={tag.id}>
+                  <Link
+                    to={`/search?q=${encodeURIComponent(asked)}`}
+                    className={`mailbox${
+                      location.pathname.startsWith('/search') &&
+                      searching === asked
+                        ? ' active'
+                        : ''
+                    }`}
+                    title={tag.name}
+                    style={{ '--tag': tag.color } as CSSProperties}
+                  >
+                    {tag.fixed === 'starred' ? (
+                      <span className="tag-star">
+                        <Icon name="flag" size={18} />
+                      </span>
+                    ) : (
+                      <span
+                        className="tag-dot tag-dot-menu"
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span className="mailbox-name">{tag.name}</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+        {section('more', 'More', moreOpen, setMoreOpen)}
+        {/* On a phone the bar at the top has no room for it. */}
+        <NavLink to="/settings" className="mailbox side-settings">
+          <Icon name="settings" size={18} />
+          <span className="mailbox-name">Settings</span>
+        </NavLink>
       </nav>
+      <Rail />
     </div>
   );
 }

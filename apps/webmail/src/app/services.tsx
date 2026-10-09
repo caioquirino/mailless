@@ -90,3 +90,24 @@ export function useSynced(source: {
 }): number {
   return useSyncExternalStore(source.subscribe, () => source.version);
 }
+
+/**
+ * What goes with saying that something was done: the way to take it back,
+ * when there is one, and longer to reach for it.
+ */
+export function withUndo(
+  mail: Pick<Mail, 'act' | 'say'>,
+  back: (() => Promise<void>) | null,
+): SayOptions {
+  if (!back) return {};
+  return {
+    seconds: 8,
+    action: {
+      label: 'Undo',
+      act: () =>
+        void mail.act(back).then((undone) => {
+          if (undone) mail.say('Undone');
+        }),
+    },
+  };
+}

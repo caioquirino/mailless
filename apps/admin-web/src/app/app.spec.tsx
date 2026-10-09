@@ -403,7 +403,7 @@ describe('accounts', () => {
       await screen.findByRole('button', { name: 'Close account' }),
     );
     const confirm = screen.getByRole('button', {
-      name: 'Close account for good',
+      name: 'Close account permanently',
     });
     expect(confirm).toBeDisabled();
     await user.type(screen.getByLabelText(/Type bob to confirm/), 'bo');

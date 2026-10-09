@@ -23,6 +23,7 @@ import { bodiesOf } from './compose';
 import { Contacts } from './contacts';
 import { People } from './people';
 import { filterOf, parseSearch } from './search';
+import { Tags } from './tags';
 
 /*
  * The mail as this page knows it: a copy of what it has looked at, kept in
@@ -150,6 +151,12 @@ export interface Held {
 }
 
 /**
+ * What a message thrown away is marked with: the mailbox it was in, so that
+ * it can be put back there. A keyword, so that it is known on every device.
+ */
+const WAS_IN = 'mailless-was-in-';
+
+/**
  * The messages waiting to be sent. Asked for afresh only when something
  * about sending has changed: finding them means going through everything
  * that was ever sent.
@@ -267,6 +274,9 @@ function describe(error: SetError | undefined): string {
   }
 }
 
+/** Where a message was and how it was marked, before something was done to it. */
+type Before = Pick<Email, 'mailboxIds' | 'keywords'>;
+
 export class MailStore {
   readonly mailboxes: ObjectCache<Mailbox>;
   readonly identities: ObjectCache<Identity>;
@@ -278,6 +288,7 @@ export class MailStore {
   readonly people: People;
   /** The address book. Fetched when it is first looked at, or a message first written. */
   readonly contacts: Contacts;
+  readonly tags: Tags;
   /**
    * For how long the server will hold a message before sending it, in
    * seconds. Nought when it cannot, or when this account cannot send.
@@ -285,10 +296,14 @@ export class MailStore {
   holdLimit = 0;
   private readonly lists = new Map<string, QueryView>();
   private refreshing: Promise<void> | undefined;
+  /** How many changes have been made, and how the messages of the last few were before. */
+  private changes = 0;
+  private readonly done: Array<{ at: number; was: Map<Id, Before> }> = [];
   private again = false;
 
   constructor(readonly client: JmapClient) {
     this.contacts = new Contacts(client);
+    this.tags = new Tags(client);
     this.people = new People(client, this.contacts);
     this.mailboxes = new ObjectCache(client, {
       type: 'Mailbox',
@@ -321,6 +336,8 @@ export class MailStore {
       { submissionExtensions?: Record<string, string[]> } | undefined;
     const most = Number(sending?.submissionExtensions?.['FUTURERELEASE']?.[0]);
     this.holdLimit = Number.isFinite(most) && most > 0 ? most : 0;
+    // What the tags are called, before any list is asked for by one of them.
+    await this.tags.start().catch(() => undefined);
   }
 
   /** The mailbox with a role: `inbox`, `trash`. */
@@ -339,7 +356,12 @@ export class MailStore {
         type: 'Email',
         filter:
           key.search !== undefined
-            ? filterOf(parseSearch(key.search), this.mailboxes.values())
+            ? filterOf(
+                parseSearch(key.search),
+                this.mailboxes.values(),
+                new Date(),
+                this.tags.all(),
+              )
             : { inMailbox: key.mailboxId },
         sort: [{ property: 'receivedAt', isAscending: false }],
         // A conversation is one row, whatever number of messages it has.
@@ -408,6 +430,7 @@ export class MailStore {
           this.emails,
           this.threads,
           ...(this.holdLimit > 0 ? [this.held] : []),
+          ...(this.tags.made.isComplete ? [this.tags.made] : []),
           ...this.lists.values(),
         ];
         await sync(this.client, parts);
@@ -456,13 +479,26 @@ export class MailStore {
     }
   }
 
-  /** The messages of a conversation that are held, oldest first. */
-  conversation(threadId: Id): Email[] {
+  /**
+   * The messages of a conversation that are held, oldest first, as seen from
+   * a mailbox. What was thrown away or is junk is not part of it any more:
+   * it is seen in the trash or the junk, where nothing else of it is.
+   */
+  conversation(threadId: Id, from?: Mailbox): Email[] {
     const thread = this.threads.get(threadId);
-    return (thread?.emailIds ?? [])
+    const all = (thread?.emailIds ?? [])
       .map((id) => this.emails.get(id))
       .filter((email): email is Email => email !== undefined)
       .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
+    const away = this.awayIds();
+    if (from && away.has(from.id)) {
+      return all.filter((email) => email.mailboxIds[from.id]);
+    }
+    const kept = all.filter((email) =>
+      Object.keys(email.mailboxIds).some((id) => !away.has(id)),
+    );
+    // A search finds what is in the trash too, and it has to be readable from there.
+    return kept.length > 0 || from ? kept : all;
   }
 
   /** Loads a conversation whole, with the text of each of its messages. */
@@ -519,10 +555,16 @@ export class MailStore {
     const ids = Object.keys(updates);
     if (ids.length === 0) return;
     const undo = new Map<Id, () => void>();
+    const was = new Map<Id, Before>();
     for (const id of ids) {
       const email = this.emails.get(id);
-      if (email) undo.set(id, this.emails.patch(id, local(email)));
+      if (!email) continue;
+      was.set(id, { mailboxIds: email.mailboxIds, keywords: email.keywords });
+      undo.set(id, this.emails.patch(id, local(email)));
     }
+    // Kept for a while, so that what was just done can be taken back.
+    this.done.push({ at: ++this.changes, was });
+    if (this.done.length > 20) this.done.shift();
     let refused: SetError | undefined;
     try {
       for (const chunk of chunks(ids, CHUNK)) {
@@ -545,6 +587,35 @@ export class MailStore {
     }
     await this.refresh();
     if (refused) throw new MailError(describe(refused));
+  }
+
+  /** A point in what has been changed, to take things back to. */
+  mark(): number {
+    return this.changes;
+  }
+
+  /**
+   * The way to take back what was changed since a mark: every message put
+   * where it was, marked as it was. Null when nothing was changed that can be:
+   * what was deleted permanently cannot.
+   */
+  undoSince(mark: number): (() => Promise<void>) | null {
+    const was = new Map<Id, Before>();
+    for (const entry of this.done) {
+      if (entry.at <= mark) continue;
+      // The first of several changes to one message is how it was to begin with.
+      for (const [id, before] of entry.was)
+        if (!was.has(id)) was.set(id, before);
+    }
+    if (was.size === 0) return null;
+    return () => {
+      const ids = [...was.keys()].filter((id) => this.emails.get(id));
+      this.dropFromLists(ids);
+      return this.change(
+        Object.fromEntries(ids.map((id) => [id, { ...was.get(id) }])),
+        (email) => was.get(email.id) ?? {},
+      );
+    };
   }
 
   /** Sets or clears a keyword on messages: `$seen`, `$flagged`. */
@@ -580,13 +651,43 @@ export class MailStore {
   move(emailIds: readonly Id[], to: Id, from?: Id): Promise<void> {
     if (from === to) return Promise.resolve();
     this.dropFromLists(emailIds, from);
+    const away = this.awayIds();
+    /** What is noted on a message, or struck from it, about where it was. */
+    const notes = (email: Email | undefined): Record<string, boolean> => {
+      if (!email) return {};
+      const noted = Object.keys(email.keywords).filter((keyword) =>
+        keyword.startsWith(WAS_IN),
+      );
+      // Out of the trash or the junk by hand: where it was is no longer where it would go back to.
+      if (!away.has(to)) {
+        return Object.fromEntries(noted.map((keyword) => [keyword, false]));
+      }
+      const leaving = Object.keys(email.mailboxIds).filter(
+        (id) => !away.has(id) && (from === undefined || id === from),
+      );
+      // From the trash to the junk, or the other way: what was noted still holds.
+      if (leaving.length === 0) return {};
+      return {
+        ...Object.fromEntries(noted.map((keyword) => [keyword, false])),
+        ...Object.fromEntries(
+          leaving.map((id) => [`${WAS_IN}${id.toLowerCase()}`, true]),
+        ),
+      };
+    };
     return this.change(
       Object.fromEntries(
         emailIds.map((id) => [
           id,
-          from === undefined
-            ? { mailboxIds: { [to]: true } }
-            : { [`mailboxIds/${from}`]: null, [`mailboxIds/${to}`]: true },
+          {
+            ...(from === undefined
+              ? { mailboxIds: { [to]: true } }
+              : { [`mailboxIds/${from}`]: null, [`mailboxIds/${to}`]: true }),
+            ...Object.fromEntries(
+              Object.entries(notes(this.emails.get(id))).map(
+                ([keyword, on]) => [`keywords/${keyword}`, on ? true : null],
+              ),
+            ),
+          },
         ]),
       ),
       (email) => {
@@ -594,7 +695,91 @@ export class MailStore {
           from === undefined ? {} : { ...email.mailboxIds };
         if (from !== undefined) delete mailboxIds[from];
         mailboxIds[to] = true;
-        return { mailboxIds };
+        const keywords = { ...email.keywords };
+        for (const [keyword, on] of Object.entries(notes(email))) {
+          if (on) keywords[keyword] = true;
+          else delete keywords[keyword];
+        }
+        return { mailboxIds, keywords };
+      },
+    );
+  }
+
+  /** The trash and the junk: where what is not wanted is put. */
+  private awayIds(): Set<Id> {
+    return new Set(
+      [this.mailbox('trash'), this.mailbox('junk')].flatMap((mailbox) =>
+        mailbox ? [mailbox.id] : [],
+      ),
+    );
+  }
+
+  /**
+   * Where messages in the trash or the junk would go back to: where each was
+   * when it was put there, as noted on it then. The inbox for one nothing is
+   * noted on, as when another program threw it away.
+   */
+  wasIn(emailIds: readonly Id[]): Mailbox[] {
+    const away = this.awayIds();
+    const mailboxes = this.mailboxes.values();
+    const found = new Map<Id, Mailbox>();
+    for (const id of emailIds) {
+      const keywords = Object.keys(this.emails.get(id)?.keywords ?? {});
+      const noted = keywords
+        .filter((keyword) => keyword.startsWith(WAS_IN))
+        .map((keyword) => keyword.slice(WAS_IN.length))
+        .flatMap((was) =>
+          // A keyword comes back in small letters, whatever the id was written in.
+          mailboxes.filter(
+            (mailbox) =>
+              mailbox.id.toLowerCase() === was && !away.has(mailbox.id),
+          ),
+        );
+      const inbox = this.mailbox('inbox');
+      for (const mailbox of noted.length > 0 ? noted : inbox ? [inbox] : []) {
+        found.set(mailbox.id, mailbox);
+      }
+    }
+    return [...found.values()];
+  }
+
+  /** Puts messages in the trash or the junk back where each of them was. */
+  restore(emailIds: readonly Id[]): Promise<void> {
+    const to = new Map(
+      emailIds.map((id) => [id, this.wasIn([id]).map((mailbox) => mailbox.id)]),
+    );
+    const moving = emailIds.filter((id) => (to.get(id)?.length ?? 0) > 0);
+    this.dropFromLists(moving);
+    const noted = (email: Email | undefined) =>
+      Object.keys(email?.keywords ?? {}).filter((keyword) =>
+        keyword.startsWith(WAS_IN),
+      );
+    return this.change(
+      Object.fromEntries(
+        moving.map((id) => [
+          id,
+          {
+            mailboxIds: Object.fromEntries(
+              (to.get(id) ?? []).map((mailboxId) => [mailboxId, true]),
+            ),
+            ...Object.fromEntries(
+              noted(this.emails.get(id)).map((keyword) => [
+                `keywords/${keyword}`,
+                null,
+              ]),
+            ),
+          },
+        ]),
+      ),
+      (email) => {
+        const keywords = { ...email.keywords };
+        for (const keyword of noted(email)) delete keywords[keyword];
+        return {
+          mailboxIds: Object.fromEntries(
+            (to.get(email.id) ?? []).map((mailboxId) => [mailboxId, true]),
+          ),
+          keywords,
+        };
       },
     );
   }
@@ -690,6 +875,42 @@ export class MailStore {
     }
     await this.refresh();
     return id;
+  }
+
+  /** Gives a mailbox another name, or puts it inside another one (or inside none). */
+  async changeMailbox(
+    id: Id,
+    change: { name?: string; parentId?: Id | null },
+  ): Promise<void> {
+    const response = await this.client.call('Mailbox/set', {
+      update: { [id]: change },
+    });
+    const error = response.notUpdated?.[id];
+    await this.refresh();
+    if (error) {
+      throw new MailError(
+        error.type === 'invalidProperties'
+          ? 'That cannot be done. Is there a mailbox with that name there already?'
+          : describe(error),
+      );
+    }
+  }
+
+  /** Removes a mailbox, and for good every message that is in no other. */
+  async removeMailbox(id: Id): Promise<void> {
+    const response = await this.client.call('Mailbox/set', {
+      destroy: [id],
+      onDestroyRemoveEmails: true,
+    });
+    const error = response.notDestroyed?.[id];
+    await this.refresh();
+    if (error && error.type !== 'notFound') {
+      throw new MailError(
+        error.type === 'mailboxHasChild'
+          ? 'There are mailboxes inside this one. Move or delete them first.'
+          : describe(error),
+      );
+    }
   }
 
   /** How full the mailbox is, or null when the server does not say (RFC 9425). */

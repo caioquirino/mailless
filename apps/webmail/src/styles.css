@@ -339,42 +339,45 @@ a.icon-button {
 
 /* ------------------------------------------------------- rail, sidebar */
 
+/* Mail, calendar, contacts: side by side at the foot of the menu. */
 .rail {
   display: flex;
   flex: none;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  width: 4.5rem;
-  padding-top: var(--space-1);
+  gap: var(--space-1);
+  margin: 0 0 var(--space-3) var(--space-2);
+  padding: var(--space-1);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
 }
 
 .rail-item {
   display: grid;
+  flex: 1;
   justify-items: center;
-  gap: 3px;
-  width: 4rem;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 0 4px;
+  border-radius: var(--radius);
   color: var(--muted);
   font-size: 0.75rem;
   text-decoration: none;
 }
 
+.rail-item:not(.rail-soon):hover {
+  background: var(--hover);
+}
+
 .rail-icon {
   display: grid;
   place-items: center;
-  width: 3.5rem;
-  height: 2rem;
-  border-radius: var(--radius-pill);
 }
 
-.rail-current {
-  color: var(--text);
-  font-weight: 700;
-}
-
-.rail-current .rail-icon {
+.rail-current,
+.rail-current:hover {
   background: var(--accent-soft);
   color: var(--accent-soft-text);
+  font-weight: 700;
 }
 
 .rail-soon {
@@ -387,8 +390,8 @@ a.icon-button {
   flex: none;
   flex-direction: column;
   gap: var(--space-4);
-  width: 14.5rem;
-  padding: var(--space-1) var(--space-3) 0 0;
+  width: 15.5rem;
+  padding: var(--space-1) var(--space-3) 0 var(--space-2);
 }
 
 .button.write {
@@ -489,15 +492,429 @@ a.icon-button {
   font-size: 0.8rem;
 }
 
-.new-mailbox {
-  display: grid;
-  gap: var(--space-2);
-  padding: 0 var(--space-2);
+/* A folder with folders inside: the arrow that shows or hides them leads its line. */
+.mailbox-line {
+  position: relative;
 }
 
-.new-mailbox-button {
-  align-self: flex-start;
-  margin-left: var(--space-2);
+.mailbox-parent .icon {
+  margin-left: 1.1rem;
+}
+
+.mailbox-fold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0.3rem;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.mailbox-fold.depth-1 {
+  left: 1.3rem;
+}
+
+.mailbox-fold.depth-2 {
+  left: 2.05rem;
+}
+
+.mailbox-fold.depth-3 {
+  left: 2.8rem;
+}
+
+.mailbox-fold.depth-4 {
+  left: 3.55rem;
+}
+
+.mailbox-fold:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* The heading of a part of the list: pressed, the part folds away. */
+.side-section {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  height: 2.125rem;
+  margin-top: var(--space-1);
+  padding: 0 var(--space-4) 0 0.55rem;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.side-section:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.side-section-name {
+  flex: 1;
+}
+
+.side-section-count {
+  min-width: 1.375rem;
+  padding: 0 0.4rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  letter-spacing: 0;
+  line-height: 1.375rem;
+  text-align: center;
+}
+
+/* In the bar at the top where there is room for it; in the menu only on a phone. */
+.mailbox.side-settings {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- tags */
+
+/* The colour of a tag is given where it is drawn, as --tag. */
+.tag-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--tag, var(--muted));
+}
+
+.tag-dot-large {
+  width: 0.875rem;
+  height: 0.875rem;
+  margin: 0 2px;
+}
+
+/* Where the icon of a mailbox would be, in the menu. */
+.tag-dot-menu {
+  width: 0.7rem;
+  height: 0.7rem;
+  margin: 0 0.2rem;
+}
+
+.tag-star {
+  display: grid;
+  flex: none;
+  color: var(--warning);
+}
+
+.tag-star .icon {
+  fill: currentColor;
+}
+
+.tag-chips {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.tag-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.35rem;
+  height: 1.375rem;
+  padding: 0 0.5rem;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tag-chip-remove {
+  display: grid;
+  place-items: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  margin-right: -0.3rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tag-chip-remove:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* The star of a line in the list: pressed, the conversation is starred. */
+.row-star {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--border-strong);
+  cursor: pointer;
+}
+
+.row-star:hover {
+  background: var(--hover);
+  color: var(--muted);
+}
+
+.row-star[aria-pressed='true'] {
+  color: var(--warning);
+}
+
+.row-star[aria-pressed='true'] .icon {
+  fill: currentColor;
+}
+
+/* Which tags a conversation has: under the button that opens it. */
+.tag-picker {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 3;
+  display: grid;
+  gap: var(--space-2);
+  width: 18.5rem;
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-raised);
+}
+
+.tag-picker-head {
+  display: none;
+  align-items: center;
+}
+
+.tag-picker-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.tag-find {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.tag-find input {
+  flex: 1;
+  min-width: 0;
+  height: 2.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  outline: none;
+}
+
+.tag-choices {
+  display: grid;
+  gap: 2px;
+  max-height: 40dvh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.tag-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.5rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.tag-choice:hover {
+  background: var(--hover);
+}
+
+.tag-make {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.5rem;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tag-fixed {
+  padding-right: var(--space-3);
+}
+
+.tag-colors {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.tag-color {
+  width: 1.625rem;
+  height: 1.625rem;
+  padding: 0;
+  border: 3px solid var(--raised);
+  border-radius: 50%;
+  background: var(--tag);
+  outline: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tag-color[aria-checked='true'] {
+  outline-color: var(--text);
+}
+
+/* The tags to search for: each pressed in or not. */
+.search-tagged {
+  align-items: flex-start;
+}
+
+.search-tagged > span {
+  padding-top: 0.35rem;
+}
+
+.search-tags {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.search-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2rem;
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.search-tag[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+/* The folders, in the settings. */
+.folders-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.folders-head > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.folders {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.folder {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 3.25rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.folder.depth-1,
+.folder.depth-2,
+.folder.depth-3,
+.folder.depth-4 {
+  margin-left: 0;
+}
+
+.folder-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.folder-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.folders .folder-form {
+  margin: 0;
+  border-width: 0 0 1px;
+  border-radius: 0;
+}
+
+.folder-form > input {
+  flex: 1;
+  min-width: 10rem;
+}
+
+.folder-inside {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.folders .confirm {
+  margin: var(--space-3) 0;
 }
 
 .panes {
@@ -647,6 +1064,12 @@ a.icon-button {
 .divider:focus-visible::after,
 .dragging .divider::after {
   background: var(--accent);
+}
+
+/* The conversation with the page to itself: the list waits behind the way back. */
+.panes:has(.reader-alone) > .list,
+.panes:has(.reader-alone) > .divider {
+  display: none;
 }
 
 /* While dragging, nothing under the pointer is selected or takes the pointer away. */
@@ -1994,9 +2417,56 @@ a.icon-button {
     font-size: 0;
   }
 
-  .side-folded .new-mailbox,
-  .side-folded .new-mailbox-button {
+  /* How many people there are is not something waiting: no dot for it. */
+  .side-folded .side-heading,
+  .side-folded.side-books .count {
     display: none;
+  }
+
+  /* The parts keep to their icons, one above the other. */
+  .side-folded .rail {
+    flex-direction: column;
+    margin-left: 0;
+  }
+
+  .side-folded .rail-item {
+    flex: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    place-content: center;
+  }
+
+  .side-folded .rail-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* The headings of the parts: a line between them, still to be pressed. */
+  .side-folded .side-section {
+    justify-content: center;
+    width: 2.5rem;
+    height: 1.25rem;
+    margin: 0 auto;
+    padding: 0;
+  }
+
+  .side-folded .tag-dot-menu {
+    margin: 0;
+  }
+
+  .side-folded .side-section-name,
+  .side-folded .side-section-count,
+  .side-folded .mailbox-fold {
+    display: none;
+  }
+
+  .side-folded .mailbox-parent .icon {
+    margin-left: 0;
   }
 }
 
@@ -2076,10 +2546,24 @@ a.icon-button {
     flex-direction: row;
     justify-content: space-around;
     width: auto;
+    align-items: center;
     height: 4rem;
+    margin: 0;
     padding: 0;
     background: var(--surface);
+    border: 0;
     border-top: 1px solid var(--border);
+    border-radius: 0;
+  }
+
+  .rail-item {
+    flex: none;
+    width: 5rem;
+  }
+
+  .mailbox.side-settings {
+    display: flex;
+    margin-top: auto;
   }
 
   /* The drawer and the button to write float over the page; nothing of them is in its flow. */
@@ -2179,6 +2663,11 @@ a.icon-button {
     display: none;
   }
 
+  /* Here a conversation has the page to itself already. */
+  .reader-size {
+    display: none;
+  }
+
   .settings {
     padding: var(--space-4);
     border-radius: 0;
@@ -2233,14 +2722,6 @@ a.icon-button {
 }
 
 /* ----------------------------------------------------------- contacts */
-
-.rail-item:not(.rail-soon):hover .rail-icon {
-  background: var(--hover);
-}
-
-.rail-current:hover .rail-icon {
-  background: var(--accent-soft);
-}
 
 a.button.write {
   display: inline-flex;
@@ -3016,5 +3497,63 @@ a.button.write {
   /* What was just done is said above the bar along the bottom and the button to write, not over them. */
   .toast {
     bottom: 9rem;
+  }
+}
+
+/* On a phone the tags of a conversation come up from the bottom, under the thumb. */
+@media (max-width: 48rem) {
+  .tag-picker {
+    position: fixed;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    width: auto;
+    padding: var(--space-4) var(--space-4) var(--space-5);
+    border-width: 1px 0 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    box-shadow: 0 -8px 30px rgb(0 0 0 / 25%);
+  }
+
+  .tag-picker-head {
+    display: flex;
+  }
+
+  .tag-find input,
+  .tag-choice,
+  .tag-make {
+    min-height: 3rem;
+  }
+
+  .tag-find input {
+    height: 3rem;
+  }
+
+  .row-star {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .tag-chip-remove {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  .tag-chip {
+    height: 1.75rem;
+  }
+
+  .row-item .tag-chip {
+    height: 1.375rem;
+  }
+
+  .tag-color {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .search-tag {
+    height: 2.75rem;
   }
 }

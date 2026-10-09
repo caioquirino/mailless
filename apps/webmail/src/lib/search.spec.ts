@@ -124,4 +124,51 @@ describe('a search', () => {
       inMailbox: 'no-such-mailbox',
     });
   });
+
+  it('asks for tags and for the star, typed or filled in', () => {
+    const search = parseSearch('tag:Work tag:"On hold" is:starred lunch');
+    expect(search).toMatchObject({
+      tags: 'Work\nOn hold',
+      starred: true,
+      words: 'lunch',
+    });
+    expect(formatSearch(search)).toBe(
+      'is:starred tag:Work tag:"On hold" lunch',
+    );
+    const [, work] = narrowings(search);
+    expect(work).toEqual({ key: 'tags', name: 'tag:', value: 'Work' });
+    expect(withoutNarrowing(search, work as never).tags).toBe('On hold');
+    expect(
+      filterOf(search, [], new Date(), [
+        { name: 'work', keyword: 'mailless-tag-1' },
+      ]),
+    ).toEqual({
+      operator: 'AND',
+      conditions: [
+        { text: 'lunch' },
+        { hasKeyword: '$flagged' },
+        { hasKeyword: 'mailless-tag-1' },
+        // A tag there is none of is on nothing.
+        { hasKeyword: 'no-such-tag' },
+      ],
+    });
+  });
+
+  it('looks in a folder and in the folders inside it', () => {
+    const box = (id: string, name: string, parentId: string | null) =>
+      ({ id, name, parentId, role: null }) as Mailbox;
+    const mailboxes = [
+      box('c', 'Clients', null),
+      box('a', 'Acme', 'c'),
+      box('p', 'Projects', 'a'),
+      box('t', 'Travel', null),
+    ];
+    expect(filterOf(parseSearch('in:Clients'), mailboxes)).toEqual({
+      operator: 'OR',
+      conditions: [{ inMailbox: 'c' }, { inMailbox: 'a' }, { inMailbox: 'p' }],
+    });
+    expect(filterOf(parseSearch('in:Travel'), mailboxes)).toEqual({
+      inMailbox: 't',
+    });
+  });
 });

@@ -321,6 +321,49 @@ describe('the service worker', () => {
     ]);
   });
 
+  it('says who wrote and about what when the server sends that along, with no page open', async () => {
+    const one = worker([]);
+    await one.push({
+      ...change,
+      'mailless:arrived': [
+        { from: 'Bob Builder', subject: 'Plans', preview: 'Shall we meet?' },
+      ],
+    });
+    expect(one.shown).toEqual([
+      {
+        title: 'Bob Builder',
+        body: 'Plans\nShall we meet?',
+        tag: 'mailless-new-mail',
+      },
+    ]);
+
+    const several = worker([]);
+    await several.push({
+      ...change,
+      'mailless:arrived': [
+        { from: 'Carol', subject: 'Invoice', preview: '' },
+        { from: '', subject: '', preview: 'Hello' },
+      ],
+    });
+    expect(several.shown).toEqual([
+      {
+        title: 'New messages',
+        body: 'Carol: Invoice\nSomeone: (no subject)',
+        tag: 'mailless-new-mail',
+      },
+    ]);
+
+    // Still nothing while someone is looking at their mail.
+    const looking = worker([
+      { url: 'https://mail.example.com/mail/', answer: { quiet: true } },
+    ]);
+    await looking.push({
+      ...change,
+      'mailless:arrived': [{ from: 'Bob', subject: 'Plans', preview: '' }],
+    });
+    expect(looking.shown).toEqual([]);
+  });
+
   it('says what an open page tells it, and nothing when someone is looking', async () => {
     const hidden = worker([
       {

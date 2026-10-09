@@ -336,4 +336,17 @@ describe('the contacts', () => {
       await screen.findByText('A picture is a PNG, JPEG, GIF or WebP file.'),
     ).toBeInTheDocument();
   });
+
+  it('folds its menu down to icons with the button in the top bar, as the mailboxes do', async () => {
+    const backend = await fakeBackend();
+    await renderApp(backend, '/contacts');
+    const side = (
+      await screen.findByRole('navigation', { name: 'Address books' })
+    ).parentElement as HTMLElement;
+    expect(side).not.toHaveClass('side-folded');
+    await userEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    expect(side).toHaveClass('side-folded');
+    await userEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    expect(side).not.toHaveClass('side-folded');
+  });
 });

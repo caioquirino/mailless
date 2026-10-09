@@ -1,4 +1,11 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { Avatar, Icon, IconButton } from '@mailless/ui';
 import { nameOf } from '../lib/addresses';
@@ -10,6 +17,7 @@ import {
   narrowings,
   NO_SEARCH,
   parseSearch,
+  tagsOf,
   SEARCH_WORDS,
   WITHIN_NAMES,
   withoutNarrowing,
@@ -30,6 +38,7 @@ const NAMING = /(?:^|\s)(from|to):([^\s"]*)$/i;
 export function SearchBar() {
   const { store } = useMail();
   useSynced(store.mailboxes);
+  useSynced(store.tags.made);
   const navigate = useNavigate();
   const location = useLocation();
   const [params] = useSearchParams();
@@ -345,7 +354,7 @@ export function SearchBar() {
             </select>
           </label>
           <label className="field">
-            <span>Search in</span>
+            <span>In</span>
             <select
               value={
                 store.mailboxes
@@ -359,6 +368,7 @@ export function SearchBar() {
               onChange={(event) => set({ in: event.target.value })}
             >
               <option value="">All mail</option>
+              {/* A folder is searched with the folders inside it. */}
               {store.mailboxes.values().map((each) => (
                 <option key={each.id} value={each.name}>
                   {each.name}
@@ -366,7 +376,56 @@ export function SearchBar() {
               ))}
             </select>
           </label>
+          <div className="field search-tagged">
+            <span id={`${uid}-tagged`}>Tagged</span>
+            <div
+              className="search-tags"
+              role="group"
+              aria-labelledby={`${uid}-tagged`}
+            >
+              {store.tags
+                .all()
+                .filter((tag) => tag.fixed !== 'starred')
+                .map((tag) => {
+                  const chosen = tagsOf(narrowed).some(
+                    (name) => name.toLowerCase() === tag.name.toLowerCase(),
+                  );
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      className="search-tag"
+                      aria-pressed={chosen}
+                      style={{ '--tag': tag.color } as CSSProperties}
+                      onClick={() =>
+                        set({
+                          tags: (chosen
+                            ? tagsOf(narrowed).filter(
+                                (name) =>
+                                  name.toLowerCase() !== tag.name.toLowerCase(),
+                              )
+                            : [...tagsOf(narrowed), tag.name]
+                          ).join('\n'),
+                        })
+                      }
+                    >
+                      <span className="tag-dot" aria-hidden="true" />
+                      {tag.name}
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
           <div className="search-checks">
+            <label htmlFor={`${uid}-starred`}>
+              <input
+                id={`${uid}-starred`}
+                type="checkbox"
+                checked={narrowed.starred}
+                onChange={(event) => set({ starred: event.target.checked })}
+              />
+              Starred
+            </label>
             <label htmlFor={`${uid}-attachment`}>
               <input
                 id={`${uid}-attachment`}

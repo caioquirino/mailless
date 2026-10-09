@@ -7,7 +7,8 @@ import { canView, openAttachment } from '../lib/attachments';
 import { formatWhen } from '../lib/format';
 import type { Attachment, ListKey, MailStore } from '../lib/mail';
 import { Face } from './face';
-import { useMail, useServices, useSynced } from './services';
+import { useMail, useServices, useSynced, withUndo } from './services';
+import { TagChips } from './tags';
 
 /** One row: a conversation, as the newest of its messages that the list found. */
 interface Row {
@@ -18,6 +19,8 @@ interface Row {
   count: number;
   unread: boolean;
   flagged: boolean;
+  /** Every message of the conversation, as seen from here. */
+  all: Email[];
   who: string;
   /** Whose face stands for the row: who wrote last, or who it is going to. */
   face: string;
@@ -56,7 +59,7 @@ function rowsOf(
   for (const id of ids) {
     const email = store.emails.get(id);
     if (!email) continue;
-    const all = store.conversation(email.threadId);
+    const all = store.conversation(email.threadId, mailbox);
     const conversation = all.length > 0 ? all : [email];
     // In a mailbox, what is done to a row is done to the messages that are in it.
     const within = mailbox
@@ -70,6 +73,7 @@ function rowsOf(
       count: conversation.length,
       unread: scope.some((each) => !each.keywords['$seen']),
       flagged: conversation.some((each) => each.keywords['$flagged']),
+      all: conversation,
       who: people(outgoing ? [email] : conversation, outgoing),
       files: conversation.flatMap((each) =>
         (each.attachments ?? [])
@@ -148,6 +152,14 @@ export function MessageList(props: MessageListProps) {
   const archive = store.mailbox('archive');
   const trash = store.mailbox('trash');
   const inTrash = mailbox !== undefined && mailbox.id === trash?.id;
+  /** In the trash or the junk, where what is chosen can be put back from. */
+  const putAway = mailbox?.role === 'trash' || mailbox?.role === 'junk';
+  const wasIn = putAway
+    ? store
+        .wasIn(chosenIds)
+        .map((each) => each.name)
+        .join(' and ')
+    : '';
   const emptiable =
     mailbox !== undefined &&
     (mailbox.role === 'trash' || mailbox.role === 'junk') &&
@@ -157,11 +169,12 @@ export function MessageList(props: MessageListProps) {
     setBusy(true);
     // What is being read is among what is being taken away: go back to the list.
     const reading = chosen.some((row) => row.email.threadId === threadId);
+    const mark = store.mark();
     const worked = await act(action);
     setBusy(false);
     if (!worked) return;
     setSelected(new Set());
-    if (done) say(done);
+    if (done) say(done, withUndo({ act, say }, store.undoSince(mark)));
     return reading;
   };
   const leave = async (action: () => Promise<unknown>, done: string) => {
@@ -174,9 +187,12 @@ export function MessageList(props: MessageListProps) {
   /** Something done to one row, whatever is selected. */
   const one = async (action: () => Promise<unknown>, done?: string) => {
     setBusy(true);
+    const mark = store.mark();
     const worked = await act(action);
     setBusy(false);
-    if (worked && done) say(done);
+    if (worked && done) {
+      say(done, withUndo({ act, say }, store.undoSince(mark)));
+    }
   };
   const several = (count: number, one: string, many: string) =>
     count === 1 ? one : `${count} ${many}`;
@@ -214,7 +230,7 @@ export function MessageList(props: MessageListProps) {
             ) : null}
             <IconButton
               icon="delete"
-              label={inTrash ? 'Delete for good' : 'Delete'}
+              label={inTrash ? 'Delete permanently' : 'Delete'}
               disabled={busy}
               onClick={() =>
                 void leave(
@@ -222,8 +238,8 @@ export function MessageList(props: MessageListProps) {
                   inTrash
                     ? several(
                         chosen.length,
-                        'Deleted for good',
-                        'deleted for good',
+                        'Permanently deleted',
+                        'permanently deleted',
                       )
                     : several(
                         chosen.length,
@@ -233,6 +249,21 @@ export function MessageList(props: MessageListProps) {
                 )
               }
             />
+            {putAway && wasIn !== '' ? (
+              <Button
+                size="small"
+                icon="inbox"
+                disabled={busy}
+                onClick={() =>
+                  void leave(
+                    () => store.restore(chosenIds),
+                    `Moved back to ${wasIn}`,
+                  )
+                }
+              >
+                Move back to {wasIn}
+              </Button>
+            ) : null}
             <IconButton
               icon="unread"
               label={anyUnread ? 'Mark read' : 'Mark unread'}
@@ -290,7 +321,8 @@ export function MessageList(props: MessageListProps) {
           aria-label={`Empty ${mailbox.name}`}
         >
           <p>
-            Delete everything in {mailbox.name} for good? This cannot be undone.
+            Permanently delete everything in {mailbox.name}? This cannot be
+            undone.
           </p>
           <div className="row">
             <button
@@ -372,6 +404,26 @@ export function MessageList(props: MessageListProps) {
                   {row.email.subject || 'the conversation without a subject'}
                 </span>
               </label>
+              <button
+                type="button"
+                className="row-star"
+                aria-pressed={row.flagged}
+                aria-label={`${row.flagged ? 'Remove the star' : 'Star'}: ${named(row)}`}
+                title={row.flagged ? 'Remove the star' : 'Star'}
+                onClick={() =>
+                  void act(() =>
+                    row.flagged
+                      ? store.setKeyword(
+                          row.all.map((each) => each.id),
+                          '$flagged',
+                          false,
+                        )
+                      : store.setKeyword(ids(row).slice(-1), '$flagged', true),
+                  )
+                }
+              >
+                <Icon name="flag" size={18} />
+              </button>
               <div className="row-main">
                 <Link
                   className="row-link"
@@ -399,15 +451,7 @@ export function MessageList(props: MessageListProps) {
                         {row.unread ? (
                           <span className="visually-hidden">Unread</span>
                         ) : null}
-                        {row.flagged ? (
-                          <span
-                            className="flag"
-                            role="img"
-                            aria-label="Flagged"
-                          >
-                            <Icon name="flag" size={14} />
-                          </span>
-                        ) : null}
+                        <TagChips emails={row.all} />
                         {row.email.hasAttachment &&
                         !(wide && row.files.length > 0) ? (
                           <span
@@ -482,13 +526,13 @@ export function MessageList(props: MessageListProps) {
                   ) : null}
                   <IconButton
                     icon="delete"
-                    label={`${inTrash ? 'Delete for good' : 'Delete'}: ${named(row)}`}
-                    title={inTrash ? 'Delete for good' : 'Delete'}
+                    label={`${inTrash ? 'Delete permanently' : 'Delete'}: ${named(row)}`}
+                    title={inTrash ? 'Delete permanently' : 'Delete'}
                     disabled={busy}
                     onClick={() =>
                       void one(
                         () => store.remove(ids(row)),
-                        inTrash ? 'Deleted for good' : 'Moved to the trash',
+                        inTrash ? 'Permanently deleted' : 'Moved to the trash',
                       )
                     }
                   />

@@ -2,9 +2,10 @@
  * The webmail's service worker. It does one thing: when the mail server says
  * mail arrived, it tells the person, whether or not the webmail is open.
  *
- * It holds no sign-in and reads no mail. What a notification says beyond
- * "New mail" comes from a webmail tab that is open and signed in, when there
- * is one; when someone is looking at such a tab, nothing is shown at all.
+ * It holds no sign-in and reads no mail. Who wrote and about what comes with
+ * the word that mail arrived, encrypted by the server to this browser; a
+ * webmail tab that is open and signed in can say the same. When someone is
+ * looking at such a tab, nothing is shown at all.
  */
 
 /** The worker itself. */
@@ -46,6 +47,35 @@ function ask(tabs, changed) {
   });
 }
 
+/** A line of text, if that is what it is. */
+function text(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** What to say of the messages the server said arrived. Null when it said nothing of them. */
+function announce(message) {
+  const listed = message ? message['mailless:arrived'] : undefined;
+  const arrived = (Array.isArray(listed) ? listed : [])
+    .filter((each) => each && typeof each === 'object')
+    .map((each) => ({
+      from: text(each.from) || 'Someone',
+      subject: text(each.subject) || '(no subject)',
+      preview: text(each.preview),
+    }));
+  const [only] = arrived;
+  if (!only) return null;
+  if (arrived.length === 1) {
+    return {
+      title: only.from,
+      body: [only.subject, only.preview].filter(Boolean).join('\n'),
+    };
+  }
+  return {
+    title: 'New messages',
+    body: arrived.map((each) => `${each.from}: ${each.subject}`).join('\n'),
+  };
+}
+
 async function onPush(data) {
   let message = null;
   try {
@@ -69,7 +99,10 @@ async function onPush(data) {
 
   const answers = await ask(tabs, message ? message.changed : undefined);
   if (answers.some((answer) => answer.quiet)) return;
-  const said = answers.find((answer) => typeof answer.title === 'string');
+  // The server knows what arrived; a tab knows it too, when the server did not say.
+  const said =
+    announce(message) ??
+    answers.find((answer) => typeof answer.title === 'string');
   await sw.registration.showNotification(said ? said.title : 'New mail', {
     body: said && typeof said.body === 'string' ? said.body : '',
     icon: new URL('favicon.svg', sw.registration.scope).href,

@@ -7,6 +7,7 @@ import { jmapUrls } from '@mailless/jmap-server/http';
 import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import { S3BlobStore } from '@mailless/storage-s3';
 import type { DynamoDBStreamEvent } from 'aws-lambda';
+import { arrivals } from './push/arrivals.js';
 import { pushChanges } from './push/state-stream.js';
 import { readVapidKeys } from './push/vapid-keys.js';
 
@@ -31,7 +32,7 @@ const jmap = createJmapServer({
       client: DynamoDBDocumentClient.from(new DynamoDBClient({})),
       tableName: required('TABLE_NAME'),
     }),
-    // Pushing only reads metadata; the blob store is required by the interface.
+    // Pushing only reads metadata, what a notification says included; the blob store is required by the interface.
     blobs: new S3BlobStore({
       client: new S3Client({}),
       bucket: required('BUCKET'),
@@ -52,6 +53,7 @@ const jmap = createJmapServer({
 export async function handler(event: DynamoDBStreamEvent): Promise<void> {
   await pushChanges(event, {
     jmap,
+    arrived: (accountId) => arrivals(jmap, accountId),
     log: (entry) => console.log(JSON.stringify(entry)),
   });
 }

@@ -36,6 +36,7 @@ import {
 } from '../lib/contacts';
 import { formatWhen } from '../lib/format';
 import { More } from './reader';
+import { Rail } from './rail';
 import { useMail, useServices, useSynced } from './services';
 
 /** Written to this often, of the messages sent lately, someone is one of those written to often. */
@@ -47,12 +48,14 @@ export interface ContactsPageProps {
   editing: boolean;
   /** Whether the list of address books is open, where it is a drawer. */
   menu: boolean;
+  /** Whether it is down to its icons, on a wide screen: as the mailboxes were left. */
+  folded: boolean;
   onCloseMenu(): void;
 }
 
 /** The address book: who is in it, one of them at a time, and the form to change them. */
 export function ContactsPage(props: ContactsPageProps) {
-  const { cardId, editing, menu, onCloseMenu } = props;
+  const { cardId, editing, menu, folded, onCloseMenu } = props;
   const { store } = useMail();
   const { contacts, people } = store;
   useSynced(contacts.cards);
@@ -110,7 +113,9 @@ export function ContactsPage(props: ContactsPageProps) {
   const open = cardId !== undefined;
 
   const side = (
-    <div className={`side${menu ? ' side-open' : ''}`}>
+    <div
+      className={`side side-books${menu ? ' side-open' : ''}${folded ? ' side-folded' : ''}`}
+    >
       <Link className="button write" to={`/contacts/new${query}`}>
         <Icon name="plus" />
         <span className="write-label">New contact</span>
@@ -130,6 +135,7 @@ export function ContactsPage(props: ContactsPageProps) {
               to="/contacts"
               end
               className={`mailbox${within ? '' : ' active'}`}
+              title="All contacts"
             >
               <Icon name="contacts" size={18} />
               <span className="mailbox-name">All contacts</span>
@@ -140,6 +146,7 @@ export function ContactsPage(props: ContactsPageProps) {
             <Link
               to="/contacts?book=often"
               className={`mailbox${within === 'often' ? ' active' : ''}`}
+              title="Written to often"
             >
               <Icon name="send" size={18} />
               <span className="mailbox-name">Written to often</span>
@@ -155,6 +162,7 @@ export function ContactsPage(props: ContactsPageProps) {
                   <Link
                     to={`/contacts?book=${encodeURIComponent(each.id)}`}
                     className={`mailbox${within === each.id ? ' active' : ''}`}
+                    title={each.name}
                   >
                     <Icon name="folder" size={18} />
                     <span className="mailbox-name">{each.name}</span>
@@ -169,6 +177,7 @@ export function ContactsPage(props: ContactsPageProps) {
           </>
         ) : null}
       </nav>
+      <Rail />
     </div>
   );
 
