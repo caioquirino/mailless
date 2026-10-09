@@ -896,20 +896,67 @@ export class MailStore {
     }
   }
 
-  /** Removes a mailbox, and for good every message that is in no other. */
+  /**
+   * Removes a mailbox. What is in it goes to the trash, where it can still
+   * be had back; what is in another mailbox as well only leaves this one.
+   * Without a trash to put it in, it is removed with the mailbox.
+   */
   async removeMailbox(id: Id): Promise<void> {
-    const response = await this.client.call('Mailbox/set', {
-      destroy: [id],
-      onDestroyRemoveEmails: true,
-    });
-    const error = response.notDestroyed?.[id];
-    await this.refresh();
-    if (error && error.type !== 'notFound') {
+    if (this.mailboxes.values().some((mailbox) => mailbox.parentId === id)) {
       throw new MailError(
-        error.type === 'mailboxHasChild'
-          ? 'There are mailboxes inside this one. Move or delete them first.'
-          : describe(error),
+        'There are mailboxes inside this one. Move or delete them first.',
       );
+    }
+    const trash = this.mailbox('trash');
+    try {
+      // Until it holds nothing: each round takes away what the last one found.
+      for (let round = 0; trash && trash.id !== id && round < 1000; round++) {
+        const batch = this.client.batch();
+        const found = batch.call('Email/query', {
+          filter: { inMailbox: id },
+          limit: CHUNK,
+        });
+        const read = batch.call('Email/get', {
+          '#ids': found.ref('/ids'),
+          properties: ['mailboxIds'],
+        });
+        const result = await batch.send();
+        const emails = result.get(read).list;
+        if (emails.length === 0) break;
+        const response = await this.client.call('Email/set', {
+          update: Object.fromEntries(
+            emails.map((email) => [
+              email.id,
+              Object.keys(email.mailboxIds).length > 1
+                ? { [`mailboxIds/${id}`]: null }
+                : {
+                    mailboxIds: { [trash.id]: true },
+                    // Where it was, though it will not be there to go back to.
+                    [`keywords/${WAS_IN}${id.toLowerCase()}`]: true,
+                  },
+            ]),
+          ),
+        });
+        const refused = Object.values(response.notUpdated ?? {}).find(
+          (error) => error.type !== 'notFound',
+        );
+        if (refused) throw new MailError(describe(refused));
+      }
+      const response = await this.client.call('Mailbox/set', {
+        destroy: [id],
+        // With a trash it is empty by now; without one, this is all there is to do.
+        onDestroyRemoveEmails: !trash,
+      });
+      const error = response.notDestroyed?.[id];
+      if (error && error.type !== 'notFound') {
+        throw new MailError(
+          error.type === 'mailboxHasChild'
+            ? 'There are mailboxes inside this one. Move or delete them first.'
+            : describe(error),
+        );
+      }
+    } finally {
+      await this.refresh().catch(() => undefined);
     }
   }
 

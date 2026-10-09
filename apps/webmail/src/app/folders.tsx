@@ -161,9 +161,8 @@ export function FolderSetting() {
                     {mailbox.totalEmails === 0
                       ? 'It is empty.'
                       : mailbox.totalEmails === 1
-                        ? 'The 1 message in it will be permanently deleted too.'
-                        : `The ${mailbox.totalEmails} messages in it will be permanently deleted too.`}{' '}
-                    This cannot be undone.
+                        ? 'The 1 message in it goes to the Trash.'
+                        : `The ${mailbox.totalEmails} messages in it go to the Trash.`}
                   </p>
                   <div className="row">
                     <Button

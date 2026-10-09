@@ -1823,6 +1823,73 @@ describe('the webmail', () => {
     ).toBeNull();
   });
 
+  it('puts what was in a deleted folder in the trash, from where it can be moved back', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Plans' });
+    await renderApp(backend, '/settings');
+    const settings = await screen.findByRole('region', { name: 'Settings' });
+    await userEvent.click(
+      within(settings).getByRole('button', { name: 'New folder' }),
+    );
+    await userEvent.type(
+      within(settings).getByLabelText('Name of the new folder'),
+      'Clients{Enter}',
+    );
+    await screen.findByText('Clients was made');
+
+    // Something is put in it.
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Inbox/ }),
+    );
+    await userEvent.click(
+      await within(list('Inbox')).findByRole('checkbox', {
+        name: /Select Plans/,
+      }),
+    );
+    await userEvent.selectOptions(
+      within(list('Inbox')).getByRole('combobox'),
+      'Clients',
+    );
+    await screen.findByText('Moved to Clients');
+
+    await userEvent.click(
+      within(await screen.findByRole('banner')).getByRole('link', {
+        name: 'Settings',
+      }),
+    );
+    const again = await screen.findByRole('region', { name: 'Settings' });
+    await userEvent.click(
+      within(again).getByRole('button', { name: 'Delete Clients' }),
+    );
+    const asked = within(again).getByRole('alertdialog', {
+      name: 'Delete Clients',
+    });
+    expect(asked).toHaveTextContent('The 1 message in it goes to the Trash.');
+    await userEvent.click(
+      within(asked).getByRole('button', { name: 'Delete it' }),
+    );
+    expect(await screen.findByText('Clients was deleted')).toBeInTheDocument();
+    expect(
+      within(sidebar()).queryByRole('link', { name: 'Clients' }),
+    ).toBeNull();
+
+    // Not gone: in the trash, and with nowhere of its own left, it goes back to the inbox.
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Trash/ }),
+    );
+    await userEvent.click(
+      await within(list('Trash')).findByRole('checkbox', {
+        name: /Select Plans/,
+      }),
+    );
+    await userEvent.click(
+      within(list('Trash')).getByRole('button', {
+        name: 'Move back to Inbox',
+      }),
+    );
+    expect(await screen.findByText('Moved back to Inbox')).toBeInTheDocument();
+  });
+
   it('folds a part of the menu away, says what waits in it, and remembers', async () => {
     const backend = await fakeBackend();
     await backend.deliver({ subject: 'Spam', mailbox: 'junk' });
