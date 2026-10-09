@@ -184,10 +184,13 @@ export interface JmapEngine {
   /**
    * Tells an account's push subscriptions that data changed. `types` limits
    * the push to the types that changed. Does nothing when push is not enabled.
+   * `extra` is added to the pushes that are encrypted to their receiver, and
+   * to no others.
    */
   pushStateChange(
     accountId: string,
     types?: readonly string[],
+    extra?: Readonly<Record<string, unknown>>,
   ): Promise<PushReport>;
   /** Adds or replaces a method, for capabilities implemented outside any module. */
   registerMethod(name: string, definition: MethodDefinition): void;
@@ -709,9 +712,9 @@ export function createJmapEngine(options: JmapEngineOptions): JmapEngine {
       await prepare(ctx);
     },
 
-    async pushStateChange(accountId, types) {
+    async pushStateChange(accountId, types, extra) {
       if (!push) return { sent: 0, failed: 0, removed: 0 };
-      return pushStateChange(metadata, push, accountId, types);
+      return pushStateChange(metadata, push, accountId, types, extra);
     },
 
     registerMethod(name, definition) {

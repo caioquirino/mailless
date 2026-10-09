@@ -1153,7 +1153,7 @@
       "delete": {
         "operationId": "deleteAccount",
         "tags": ["accounts"],
-        "summary": "Close an account for good",
+        "summary": "Close an account permanently",
         "description": "The user can no longer sign in, the addresses stop delivering, the app passwords are revoked and the account is no longer shared. Its mail is then removed, which takes a few minutes or more; until that is done the account stays listed as \"deleting\", so that its id cannot be given to someone else while its mail still exists. Closing an account that is already \"deleting\" asks for the removal again.",
         "security": [
           {

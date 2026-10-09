@@ -43,6 +43,12 @@ export const CAPABILITY_PRINCIPALS_OWNER =
   'urn:ietf:params:jmap:principals:owner';
 export const CAPABILITY_CONTACTS = 'urn:ietf:params:jmap:contacts';
 export const CAPABILITY_WEBSOCKET = 'urn:ietf:params:jmap:websocket';
+/**
+ * Not an RFC's: the names and colours someone gives to keywords of their own
+ * (Tag/get, Tag/changes, Tag/set). A client that does not know it never names it.
+ */
+export const CAPABILITY_TAGS =
+  'https://github.com/caioquirino/mailless/jmap/tags';
 /** RFC 9749: the key a client gives its push service, so that only this server may push to it. */
 export const CAPABILITY_WEBPUSH_VAPID = 'urn:ietf:params:jmap:webpush-vapid';
 

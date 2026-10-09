@@ -20,6 +20,7 @@ export const ICONS = {
   reply: 'M9 7 4 12l5 5M4 12h10a6 6 0 0 1 6 6',
   'reply-all': 'M7 7 2 12l5 5M12 7l-5 5 5 5M7 12h9a6 6 0 0 1 6 6',
   forward: 'M15 7l5 5-5 5M20 12H10a6 6 0 0 0-6 6',
+  tag: 'M4 4h7l9 9-7 7-9-9V4ZM8.5 8.5h.01',
   flag: 'M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8l-5.4 2.9 1.1-6.1L3.2 9.4l6.1-.8L12 3Z',
   refresh: 'M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5',
   // The gear of Feather Icons (MIT licence), which is drawn the same way as these.

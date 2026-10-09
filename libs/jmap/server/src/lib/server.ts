@@ -17,6 +17,7 @@ import {
   type ImportOptions,
   type MailModuleOptions,
   type ScheduledSendOutcome,
+  tagsModule,
 } from '@mailless/jmap-mail';
 import { sharingModule } from '@mailless/jmap-sharing';
 
@@ -93,7 +94,12 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
   };
   const { contextFor, ...engine } = createJmapEngine({
     ...engineOptions,
-    modules: [mailModule(mail), sharingModule(), contactsModule()],
+    modules: [
+      mailModule(mail),
+      tagsModule(),
+      sharingModule(),
+      contactsModule(),
+    ],
   });
 
   return {

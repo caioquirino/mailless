@@ -265,13 +265,16 @@ async function destroyQuietly(
  * Tells an account's push subscriptions that data changed: each verified
  * subscription gets a StateChange object (RFC 8620 §7.1) with the current
  * state of the types it asked for. `types` limits this to the types that
- * changed; without it every pushed type is included.
+ * changed; without it every pushed type is included. `extra` is what the
+ * host has to add for its own clients, such as what a notification can say:
+ * it goes only to subscriptions that gave keys, encrypted to them.
  */
 export async function pushStateChange(
   store: MetadataStore,
   push: ResolvedPushOptions,
   accountId: string,
   types?: readonly string[],
+  extra?: Readonly<Record<string, unknown>>,
 ): Promise<PushReport> {
   const report: PushReport = { sent: 0, failed: 0, removed: 0 };
   const changedTypes = push.pushedTypes.filter(
@@ -319,6 +322,8 @@ export async function pushStateChange(
         push,
         value,
         {
+          // More than the states only where nobody in between can read it.
+          ...(value.keys ? extra : {}),
           '@type': 'StateChange',
           changed: {
             [accountId]: Object.fromEntries(

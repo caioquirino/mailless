@@ -7,6 +7,7 @@ import {
   CAPABILITY_PRINCIPALS,
   CAPABILITY_QUOTA,
   CAPABILITY_SUBMISSION,
+  CAPABILITY_TAGS,
   CAPABILITY_VACATION,
 } from '@mailless/jmap-core';
 
@@ -28,6 +29,7 @@ const BY_TYPE: Record<string, string> = {
   ShareNotification: CAPABILITY_PRINCIPALS,
   AddressBook: CAPABILITY_CONTACTS,
   ContactCard: CAPABILITY_CONTACTS,
+  Tag: CAPABILITY_TAGS,
 };
 
 /** Copying a blob between accounts is part of the core (RFC 8620 §6.3); the rest of Blob is RFC 9404. */

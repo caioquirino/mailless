@@ -25,3 +25,4 @@ export {
 } from './lib/transport.js';
 // How full a mailbox is, for something that reports on accounts without reading their mail.
 export { storedUsage } from './lib/quota.js';
+export { tagsModule } from './lib/tag.js';

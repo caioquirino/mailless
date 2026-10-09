@@ -3,6 +3,7 @@ import {
   CAPABILITY_MAIL,
   CAPABILITY_BLOB,
   CAPABILITY_CONTACTS,
+  CAPABILITY_TAGS,
   CAPABILITY_MDN,
   CAPABILITY_PRINCIPALS,
   CAPABILITY_QUOTA,
@@ -43,6 +44,7 @@ const USING = [
   CAPABILITY_MDN,
   CAPABILITY_PRINCIPALS,
   CAPABILITY_CONTACTS,
+  CAPABILITY_TAGS,
 ];
 const URLS = {
   api: 'https://jmap.example.com/api',
@@ -4054,6 +4056,7 @@ export function describeJmapConformance(
         'EmailSubmission',
         'Mailbox',
         'Quota',
+        'Tag',
         'Thread',
       ]);
       expect(
@@ -4130,6 +4133,26 @@ export function describeJmapConformance(
         '@type': 'StateChange',
         changed: { [AUTH.accountId]: { Email: expect.any(String) } },
       });
+    });
+
+    it('adds what the host has to say to an encrypted push, and never to one sent in the clear', async () => {
+      const extra = { 'example:arrived': [{ subject: 'Plans' }] };
+      await subscribe({ keys: PUSH_RECEIVER_KEYS });
+      await server.pushStateChange(AUTH.accountId, ['Email'], extra);
+      expect(decryptPush(pushed[0]?.body as Uint8Array)).toEqual({
+        '@type': 'StateChange',
+        changed: { [AUTH.accountId]: { Email: expect.any(String) } },
+        ...extra,
+      });
+
+      pushed.length = 0;
+      await subscribe({ url: 'https://push.example.net/v1/plain' });
+      await server.pushStateChange(AUTH.accountId, ['Email'], extra);
+      const plain = pushed.find(
+        (push) => push.url === 'https://push.example.net/v1/plain',
+      );
+      expect(plain).toBeDefined();
+      expect(decoder.decode(plain?.body)).not.toContain('Plans');
     });
 
     it('never returns the URL or the keys', async () => {
@@ -7647,6 +7670,134 @@ export function describeJmapConformance(
         await as(USER, 'ShareNotification/changes', { sinceState: state }),
       ).toMatchObject({ destroyed: ['sn1'], created: [], updated: [] });
       expect(await ids({})).toEqual(['sn2']);
+    });
+  });
+
+  describe(`${name}: tags`, () => {
+    let h: Harness;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+    });
+
+    it('offers tags under a capability of its own', async () => {
+      const session = h.server.getSession(AUTH);
+      expect(session.capabilities[CAPABILITY_TAGS]).toEqual({});
+      expect(
+        session.accounts[AUTH.accountId]?.accountCapabilities,
+      ).toHaveProperty([CAPABILITY_TAGS]);
+      // Not named, not there: a client that does not know it is not surprised by it.
+      const response = await h.server.handleRequest(
+        {
+          using: [CAPABILITY_CORE],
+          methodCalls: [['Tag/get', { accountId: AUTH.accountId }, 'c']],
+        },
+        AUTH,
+      );
+      expect(response.methodResponses[0]?.[1]).toMatchObject({
+        type: 'unknownMethod',
+      });
+    });
+
+    it('makes a tag, with a keyword of its own that a message can be given', async () => {
+      const { created } = await h.call('Tag/set', {
+        create: { t: { name: '  Work ', color: '#2456c8' } },
+      });
+      expect(created.t).toEqual({
+        id: expect.any(String),
+        keyword: expect.stringMatching(/^mailless-tag-[a-z0-9]+$/),
+        name: 'Work',
+      });
+      const { list, state } = await h.call('Tag/get', { ids: null });
+      expect(list).toEqual([
+        {
+          id: created.t.id,
+          name: 'Work',
+          color: '#2456c8',
+          keyword: created.t.keyword,
+        },
+      ]);
+
+      const { id: emailId } = await h.deliver(await h.mailbox('inbox'));
+      const tagged = await h.call('Email/set', {
+        update: { [emailId]: { [`keywords/${created.t.keyword}`]: true } },
+      });
+      expect(tagged.notUpdated).toBeNull();
+      expect(
+        (
+          await h.call('Email/query', {
+            filter: { hasKeyword: created.t.keyword },
+          })
+        ).ids,
+      ).toEqual([emailId]);
+
+      const changes = await h.call('Tag/changes', { sinceState: state });
+      expect(changes.created).toEqual([]);
+    });
+
+    it('gives a tag another name or colour, and never another keyword', async () => {
+      const { created, newState } = await h.call('Tag/set', {
+        create: { t: { name: 'Work', color: '#2456c8' } },
+      });
+      const { id, keyword } = created.t;
+      const renamed = await h.call('Tag/set', {
+        update: { [id]: { name: 'Office', color: '#1e7b4a' } },
+      });
+      expect(renamed.updated).toEqual({ [id]: null });
+      expect((await h.call('Tag/get', { ids: [id] })).list[0]).toEqual({
+        id,
+        name: 'Office',
+        color: '#1e7b4a',
+        keyword,
+      });
+      expect(
+        (await h.call('Tag/changes', { sinceState: newState })).updated,
+      ).toEqual([id]);
+
+      const refused = await h.call('Tag/set', {
+        update: { [id]: { keyword: '$seen' } },
+      });
+      expect(refused.notUpdated[id]).toMatchObject({
+        type: 'invalidProperties',
+        properties: ['keyword'],
+      });
+    });
+
+    it('refuses a tag with no name, a colour that is none, or the name of another', async () => {
+      await h.call('Tag/set', {
+        create: { t: { name: 'Work', color: '#2456c8' } },
+      });
+      const { notCreated } = await h.call('Tag/set', {
+        create: {
+          none: { name: ' ', color: '#2456c8' },
+          red: { name: 'Red', color: 'red' },
+          twice: { name: 'work', color: '#2456c8' },
+          more: { name: 'More', color: '#2456c8', icon: 'star' },
+        },
+      });
+      expect(notCreated.none).toMatchObject({ properties: ['name'] });
+      expect(notCreated.red).toMatchObject({ properties: ['color'] });
+      expect(notCreated.twice).toMatchObject({ properties: ['name'] });
+      expect(notCreated.more).toMatchObject({ properties: ['icon'] });
+      expect((await h.call('Tag/get', { ids: null })).list).toHaveLength(1);
+    });
+
+    it('removes a tag, and leaves the mail that had it where it is', async () => {
+      const { created } = await h.call('Tag/set', {
+        create: { t: { name: 'Work', color: '#2456c8' } },
+      });
+      const { id: emailId } = await h.deliver(await h.mailbox('inbox'));
+      await h.call('Email/set', {
+        update: { [emailId]: { [`keywords/${created.t.keyword}`]: true } },
+      });
+      const { destroyed, notDestroyed } = await h.call('Tag/set', {
+        destroy: [created.t.id, 'missing'],
+      });
+      expect(destroyed).toEqual([created.t.id]);
+      expect(notDestroyed.missing).toMatchObject({ type: 'notFound' });
+      expect((await h.call('Tag/get', { ids: null })).list).toEqual([]);
+      expect((await h.call('Email/get', { ids: [emailId] })).list).toHaveLength(
+        1,
+      );
     });
   });
 
