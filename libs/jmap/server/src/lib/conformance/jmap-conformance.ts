@@ -8677,6 +8677,84 @@ export function describeJmapConformance(
       expect((await stored(id)).status).toBe('cancelled');
     });
 
+    it('takes in a change to an event from whoever invited, and from nobody else', async () => {
+      const id = (
+        await h.call('CalendarEvent/set', {
+          create: {
+            e: {
+              calendarIds: { [calendarId]: true },
+              uid: 'review@example.org',
+              title: 'Quarterly review',
+              start: '2026-10-12T13:00:00',
+              duration: 'PT1H30M',
+              timeZone: 'Europe/Berlin',
+              replyTo: { imip: 'mailto:marta@example.org' },
+              participants: {
+                '1': person('marta@example.org', { roles: { owner: true } }),
+                '2': person('me@example.com', {
+                  participationStatus: 'accepted',
+                }),
+              },
+            },
+          },
+        })
+      ).created.e.id;
+      const now = (sequence: number, start: string, title: string) =>
+        [
+          'BEGIN:VCALENDAR',
+          'METHOD:REQUEST',
+          'BEGIN:VEVENT',
+          'UID:review@example.org',
+          `SEQUENCE:${sequence}`,
+          `DTSTART:${start}`,
+          'DURATION:PT1H30M',
+          `SUMMARY:${title}`,
+          'LOCATION:Room 4',
+          'ORGANIZER:mailto:marta@example.org',
+          'ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:me@example.com',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n');
+      // Nobody changes what is not theirs.
+      await arrives('mallory@example.org', now(1, '20261013T080000Z', 'Mine'));
+      expect((await stored(id)).title).toBe('Quarterly review');
+
+      // The same time, said on another clock: the answer given stands.
+      await arrives('marta@example.org', now(0, '20261012T110000Z', 'Review'));
+      const renamed = await stored(id);
+      expect(renamed.title).toBe('Review');
+      expect(renamed.locations).toMatchObject({ '1': { name: 'Room 4' } });
+      expect(
+        Object.values<{ email: string; participationStatus?: string }>(
+          renamed.participants,
+        ).find((each) => each.email === 'me@example.com')?.participationStatus,
+      ).toBe('accepted');
+
+      // Another time: it is asked again.
+      await arrives('marta@example.org', now(1, '20261013T080000Z', 'Review'));
+      const moved = await stored(id);
+      expect(moved.sequence).toBe(1);
+      expect(
+        (
+          await h.call('CalendarEvent/get', {
+            ids: [id],
+            properties: ['utcStart'],
+          })
+        ).list[0].utcStart,
+      ).toBe('2026-10-13T08:00:00Z');
+      expect(
+        Object.values<{ email: string; participationStatus?: string }>(
+          moved.participants,
+        ).find((each) => each.email === 'me@example.com')?.participationStatus,
+      ).toBe('needs-action');
+
+      // Older than what is kept: left alone.
+      await arrives('marta@example.org', now(0, '20261020T080000Z', 'Old'));
+      expect((await stored(id)).title).toBe('Review');
+      // Nobody was written to over any of it.
+      expect(h.sent).toEqual([]);
+    });
+
     it('suggests another time to whoever invited, and says no to such a suggestion', async () => {
       // Someone else's event: another time may be suggested for it, and nothing changes by that.
       const theirs = (

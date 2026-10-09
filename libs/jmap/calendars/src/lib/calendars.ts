@@ -760,6 +760,8 @@ async function updateEvent(
   ctx: MethodContext,
   id: string,
   patch: Record<string, unknown>,
+  /** The number of the event is whoever it is from's to count: taken as given, and not counted up here. */
+  theirs = false,
 ): Promise<Record<string, unknown> | null> {
   const one = parseOccurrenceId(id);
   if (one) {
@@ -836,6 +838,7 @@ async function updateEvent(
   // When or where it is has changed: those who answered answered to something
   // else, which a higher number tells their calendars (RFC 5546 §2.1.4).
   if (
+    !theirs &&
     WHEN_AND_WHERE.some((property) => changedProperties.includes(property)) &&
     !changedProperties.includes('sequence')
   ) {
@@ -1716,26 +1719,56 @@ export const proposalMethods: Record<string, MethodHandler> = {
   },
 };
 
+/** What whoever an event is from says of it, and the account takes as said. */
+const SAID_BY_ORGANIZER = [
+  'title',
+  'description',
+  'start',
+  'duration',
+  'timeZone',
+  'showWithoutTime',
+  'locations',
+  'virtualLocations',
+  'status',
+  'recurrenceRules',
+  'recurrenceOverrides',
+];
+
+/** When an event is, on whatever clock it is said: two that are at the same time give the same. */
+const whenOf = (event: Record<string, unknown>) =>
+  [
+    zonedToUtc(
+      String(event['start']),
+      (event['timeZone'] as string | null | undefined) ?? null,
+    ),
+    durationMillis(String(event['duration'] ?? 'PT0S')),
+    event['showWithoutTime'] === true,
+  ].join(' ');
+
 /** An answer someone gave, as this server keeps it. */
 const ANSWERED = ['accepted', 'declined', 'tentative'];
 
 /**
  * Takes in what someone else's calendar says of an event the account has: an
- * answer to an invitation of its own, which is noted on the event, or word
- * that an event it was invited to is off. `sender` is who the message is
- * from: nobody answers for somebody else, and nobody calls off what is not
- * theirs. Returns what was done, or null when it called for nothing.
+ * answer to an invitation of its own, which is noted on the event, word that
+ * an event it was invited to is off, or that it has changed. `sender` is who
+ * the message is from: nobody answers for somebody else, and nobody changes
+ * or calls off what is not theirs. An invitation to an event the account does
+ * not have is left for whoever reads the message. Returns what was done, or
+ * null when it called for nothing.
  */
 export async function applySchedulingMessage(
   ctx: MethodContext,
   calendar: string,
   sender: string,
-): Promise<'answered' | 'cancelled' | null> {
+): Promise<'answered' | 'cancelled' | 'changed' | null> {
   if (calendar.length > MAX_CALENDAR_OCTETS) return null;
   const from = sender.trim().toLowerCase();
   const { method, events } = fromICalendar(calendar);
-  if (method !== 'REPLY' && method !== 'CANCEL') return null;
-  let done: 'answered' | 'cancelled' | null = null;
+  if (method !== 'REPLY' && method !== 'CANCEL' && method !== 'REQUEST') {
+    return null;
+  }
+  let done: 'answered' | 'cancelled' | 'changed' | null = null;
   for (const said of events) {
     // What is said of one time of an event that repeats is left for whoever reads the message.
     if (said['recurrenceId'] !== undefined) continue;
@@ -1754,6 +1787,48 @@ export async function applySchedulingMessage(
       if (record.value['status'] === 'cancelled') continue;
       await updateEvent(ctx, record.id, { status: 'cancelled' });
       done = 'cancelled';
+      continue;
+    }
+    if (method === 'REQUEST') {
+      // Whoever the event is from says how it is now.
+      if (organizerOf(record.value) !== from) continue;
+      const patch: Record<string, unknown> = {};
+      for (const property of SAID_BY_ORGANIZER) {
+        patch[property] = said[property] ?? null;
+      }
+      patch['sequence'] = Number(said['sequence'] ?? 0);
+      const moved = whenOf(said) !== whenOf(record.value);
+      // The account's own answer stands while the event is when it was; to another time, it is asked again.
+      const own = new Set(
+        (await ctx.calendars.scheduling?.addresses(ctx))?.map((each) =>
+          each.email.toLowerCase(),
+        ) ?? [],
+      );
+      const answers = new Map(
+        attendeesOf(record.value).map((each) => [
+          each.email,
+          each.participant['participationStatus'],
+        ]),
+      );
+      if (isPlainObject(said['participants'])) {
+        patch['participants'] = Object.fromEntries(
+          Object.entries(said['participants'] as Record<string, Event>).map(
+            ([key, each]) => {
+              const email = String(each['email'] ?? '').toLowerCase();
+              const answer = answers.get(email);
+              return [
+                key,
+                !moved && own.has(email) && typeof answer === 'string'
+                  ? { ...each, participationStatus: answer }
+                  : each,
+              ];
+            },
+          ),
+        );
+      }
+      if ((await updateEvent(ctx, record.id, patch, true)) !== null) {
+        done = 'changed';
+      }
       continue;
     }
     const theirs = Object.values(
