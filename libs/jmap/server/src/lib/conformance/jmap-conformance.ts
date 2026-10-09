@@ -4,6 +4,7 @@ import {
   CAPABILITY_BLOB,
   CAPABILITY_CONTACTS,
   CAPABILITY_BLOCKED_SENDERS,
+  CAPABILITY_PICTURE_SENDERS,
   CAPABILITY_CALENDAR_PROPOSALS,
   CAPABILITY_CALENDARS,
   CAPABILITY_TAGS,
@@ -48,6 +49,7 @@ const USING = [
   CAPABILITY_PRINCIPALS,
   CAPABILITY_CONTACTS,
   CAPABILITY_BLOCKED_SENDERS,
+  CAPABILITY_PICTURE_SENDERS,
   CAPABILITY_CALENDAR_PROPOSALS,
   CAPABILITY_CALENDARS,
   CAPABILITY_TAGS,
@@ -4065,6 +4067,7 @@ export function describeJmapConformance(
         'EmailDelivery',
         'EmailSubmission',
         'Mailbox',
+        'PictureSender',
         'Quota',
         'Tag',
         'Thread',
@@ -7872,6 +7875,32 @@ export function describeJmapConformance(
       });
       expect((await h.call('BlockedSender/get', { ids: null })).list).toEqual([
         { id: created.a.id, address: 'loud@example.net' },
+      ]);
+    });
+
+    it('keeps the senders whose pictures are shown, under a capability of its own', async () => {
+      const session = h.server.getSession(AUTH);
+      expect(session.capabilities[CAPABILITY_PICTURE_SENDERS]).toEqual({});
+      const { created, notCreated } = await h.call('PictureSender/set', {
+        create: {
+          a: { address: ' News@Example.NET ' },
+          b: { address: '@example.org' },
+          c: { address: 'not an address' },
+        },
+      });
+      expect(created.a.address).toBe('news@example.net');
+      expect(notCreated.c).toMatchObject({ properties: ['address'] });
+      // A list of its own: nobody is blocked by it.
+      expect((await h.call('BlockedSender/get', { ids: null })).list).toEqual(
+        [],
+      );
+      const inbox = await h.mailbox('inbox');
+      expect(
+        (await whereIs((await arrives('news@example.net')).id)).mailboxIds,
+      ).toEqual({ [inbox]: true });
+      await h.call('PictureSender/set', { destroy: [created.a.id] });
+      expect((await h.call('PictureSender/get', { ids: null })).list).toEqual([
+        { id: created.b.id, address: '@example.org' },
       ]);
     });
 

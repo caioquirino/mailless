@@ -16,6 +16,7 @@ import {
 } from '@mailless/jmap-engine';
 import {
   blockedSendersModule,
+  pictureSendersModule,
   calendarParts,
   importMessage,
   mailModule,
@@ -126,6 +127,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       mailModule(mail),
       tagsModule(),
       blockedSendersModule(),
+      pictureSendersModule(),
       sharingModule(),
       contactsModule(),
       calendarsModule(

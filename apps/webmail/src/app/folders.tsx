@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Mailbox } from '@mailless/jmap-core';
 import { Button, Icon, IconButton } from '@mailless/ui';
-import { orderMailboxes } from '../lib/mailboxes';
+import { orderMailboxes, ownFolder } from '../lib/mailboxes';
 import { useMail, useSynced } from './services';
 
 /** What is being done to the folders: nothing, making one, or changing or removing one. */
@@ -26,7 +26,10 @@ export function FolderSetting() {
       // Its own, and inside nothing that every account comes with.
       let top = index;
       while ((all[top]?.depth ?? 0) > 0) top--;
-      return all[top]?.mailbox.role === null && entry.mailbox.role === null;
+      const above = all[top]?.mailbox;
+      return (
+        above !== undefined && ownFolder(above) && ownFolder(entry.mailbox)
+      );
     },
   );
   /** The folders one may be put inside: not itself, and nothing inside it. */

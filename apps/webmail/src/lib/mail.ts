@@ -24,7 +24,7 @@ import { Calendars } from './calendar';
 import { Contacts } from './contacts';
 import { People } from './people';
 import { filterOf, parseSearch } from './search';
-import { Blocked, FirstTimes } from './senders';
+import { Blocked, FirstTimes, Pictures } from './senders';
 import { Tags } from './tags';
 
 /*
@@ -295,6 +295,7 @@ export class MailStore {
   readonly tags: Tags;
   /** The senders whose mail goes to the junk, and whether a message is the first from its sender. */
   readonly blocked: Blocked;
+  readonly pictures: Pictures;
   readonly firstTimes: FirstTimes;
   /**
    * For how long the server will hold a message before sending it, in
@@ -313,6 +314,7 @@ export class MailStore {
     this.calendar = new Calendars(client);
     this.tags = new Tags(client);
     this.blocked = new Blocked(client);
+    this.pictures = new Pictures(client);
     this.firstTimes = new FirstTimes(client);
     this.people = new People(client, this.contacts);
     this.mailboxes = new ObjectCache(client, {
@@ -349,6 +351,7 @@ export class MailStore {
     // What the tags are called, before any list is asked for by one of them.
     await this.tags.start().catch(() => undefined);
     await this.blocked.start().catch(() => undefined);
+    await this.pictures.start().catch(() => undefined);
   }
 
   /** The mailbox with a role: `inbox`, `trash`. */
@@ -443,6 +446,7 @@ export class MailStore {
           ...(this.holdLimit > 0 ? [this.held] : []),
           ...(this.tags.made.isComplete ? [this.tags.made] : []),
           ...(this.blocked.made.isComplete ? [this.blocked.made] : []),
+          ...(this.pictures.made.isComplete ? [this.pictures.made] : []),
           ...this.lists.values(),
         ];
         await sync(this.client, parts);

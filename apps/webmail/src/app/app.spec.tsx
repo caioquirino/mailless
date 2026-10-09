@@ -190,6 +190,55 @@ describe('the webmail', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('remembers whose pictures are always shown', async () => {
+    const backend = await fakeBackend();
+    const news = (subject: string) =>
+      backend.deliver({
+        subject,
+        from: 'Shop <news@shop.example>',
+        html: '<p>Sale</p><img src="https://shop.example/banner.png">',
+        htmlOnly: true,
+      });
+    await news('Monday');
+    await news('Tuesday');
+    await renderApp(backend);
+    await userEvent.click(await screen.findByRole('link', { name: /Monday/ }));
+    const frame = () =>
+      (
+        within(reader()).getByTitle('Message') as HTMLIFrameElement
+      ).getAttribute('srcdoc');
+    await within(reader()).findByTitle('Message');
+    expect(frame()).toContain('img-src data:;');
+    // The sender, or everyone where they write from.
+    expect(
+      within(reader()).getByRole('button', {
+        name: 'Always from news@shop.example',
+      }),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(reader()).getByRole('button', {
+        name: 'Always from @shop.example',
+      }),
+    );
+    expect(
+      await screen.findByText(
+        'Pictures from @shop.example will always be shown',
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(frame()).toContain('img-src data: https: http:;'),
+    );
+
+    // The next one from there is shown with them, unasked.
+    await userEvent.click(await screen.findByRole('link', { name: /Tuesday/ }));
+    await waitFor(() =>
+      expect(frame()).toContain('img-src data: https: http:;'),
+    );
+    expect(
+      within(reader()).queryByRole('button', { name: 'Show pictures' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('acts on one message of a conversation, from the buttons beside it', async () => {
     const backend = await fakeBackend();
     await backend.deliver({

@@ -1,6 +1,7 @@
 import {
   CAPABILITY_BLOB,
   CAPABILITY_BLOCKED_SENDERS,
+  CAPABILITY_PICTURE_SENDERS,
   CAPABILITY_CALENDAR_PROPOSALS,
   CAPABILITY_CALENDARS,
   CAPABILITY_CONTACTS,
@@ -37,6 +38,7 @@ const BY_TYPE: Record<string, string> = {
   CalendarProposal: CAPABILITY_CALENDAR_PROPOSALS,
   Tag: CAPABILITY_TAGS,
   BlockedSender: CAPABILITY_BLOCKED_SENDERS,
+  PictureSender: CAPABILITY_PICTURE_SENDERS,
 };
 
 /** Copying a blob between accounts is part of the core (RFC 8620 §6.3); the rest of Blob is RFC 9404. */

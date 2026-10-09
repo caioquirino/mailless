@@ -32,3 +32,15 @@ export function orderMailboxes(
   add(null, 0);
   return result;
 }
+
+/** The folders every account comes with, and this page has a place for. */
+const GIVEN = ['inbox', 'drafts', 'sent', 'archive', 'junk', 'trash'];
+
+/**
+ * Whether a folder is the person's own to rename, move and remove. One with
+ * a role this page has no place for (another program made it, to keep what
+ * it calls important, say) is theirs as any other: it is a folder like the rest.
+ */
+export function ownFolder(mailbox: { role: string | null }): boolean {
+  return mailbox.role === null || !GIVEN.includes(mailbox.role);
+}

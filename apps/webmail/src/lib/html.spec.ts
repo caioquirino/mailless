@@ -12,6 +12,25 @@ const body = (page: string) =>
   new DOMParser().parseFromString(page, 'text/html').body;
 
 describe('messageDocument', () => {
+  it('shows a message in one set of colours, light or dark as told', () => {
+    const html =
+      '<html><head><style>@media (prefers-color-scheme: dark){p{color:#eee}}' +
+      '@media screen and (prefers-color-scheme:light){p{color:#111}}</style></head>' +
+      '<body><p>Hello</p></body></html>';
+    const light = messageDocument(html, { images: false });
+    // What the message would do on a dark system is never done: the page is white.
+    expect(light).not.toContain('prefers-color-scheme');
+    expect(light).toContain('@media (max-width:0){p{color:#eee}}');
+    expect(light).toContain('@media screen and (min-width:0){p{color:#111}}');
+    expect(light).not.toContain('invert(');
+
+    const dark = messageDocument(html, { images: false, dark: true });
+    expect(dark).not.toContain('prefers-color-scheme');
+    expect(dark).toContain('html{filter:invert(.89) hue-rotate(180deg)');
+    // Pictures are turned back to what they were.
+    expect(dark).toContain('img,video');
+  });
+
   it('takes out everything that could do something', () => {
     const page = messageDocument(
       [

@@ -26,7 +26,7 @@ import type { Mailbox } from '@mailless/jmap-core';
 import { Button, Icon, IconButton, type IconName } from '@mailless/ui';
 import { emptyDraft, resumeDraft } from '../lib/compose';
 import { MailError, MailStore, type Draft, type Held } from '../lib/mail';
-import { orderMailboxes } from '../lib/mailboxes';
+import { orderMailboxes, ownFolder } from '../lib/mailboxes';
 import { answerPushes, Notifications } from '../lib/notifications';
 import { usePreference } from '../lib/preference';
 import { formatSearch, NO_SEARCH } from '../lib/search';
@@ -535,12 +535,11 @@ function Sidebar({
   let hidden: number | null = null;
   ordered.forEach(({ mailbox, depth }, index) => {
     if (depth === 0) {
-      part =
-        mailbox.role === null
-          ? 'folders'
-          : MORE_ROLES.includes(mailbox.role)
-            ? 'more'
-            : 'main';
+      part = ownFolder(mailbox)
+        ? 'folders'
+        : MORE_ROLES.includes(mailbox.role ?? '')
+          ? 'more'
+          : 'main';
     }
     if (hidden !== null && depth > hidden) return;
     hidden = null;
@@ -553,7 +552,8 @@ function Sidebar({
     ordered.reduce((sum, { mailbox }, index) => {
       let top = index;
       while ((ordered[top]?.depth ?? 0) > 0) top--;
-      const role = ordered[top]?.mailbox.role ?? null;
+      const above = ordered[top]?.mailbox;
+      const role = above && !ownFolder(above) ? above.role : null;
       const within = role === null ? 'folders' : 'more';
       return role !== null && !MORE_ROLES.includes(role)
         ? sum

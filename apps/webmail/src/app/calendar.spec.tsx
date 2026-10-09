@@ -93,6 +93,10 @@ describe('the calendar', () => {
       within(form).getByLabelText('Title'),
       'Lunch with Ann',
     );
+    // In the last hour of a day, the hour to come is tomorrow's.
+    fireEvent.change(within(form).getByLabelText('Day'), {
+      target: { value: today },
+    });
     fireEvent.change(within(form).getByLabelText('Starts'), {
       target: { value: '13:00' },
     });

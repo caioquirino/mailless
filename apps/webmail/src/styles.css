@@ -1680,8 +1680,17 @@ a.icon-button {
   background: #fff;
 }
 
+/* Turned over to go with a dark page: before it has loaded, it is not a white flash. */
+.message-frame-dark {
+  background: #1c1c1c;
+}
+
 .images-notice {
   margin-bottom: var(--space-3);
+}
+
+.images-notice .button {
+  margin: 2px var(--space-1) 2px 0;
 }
 
 /* What to know about a sender, above what they wrote. */

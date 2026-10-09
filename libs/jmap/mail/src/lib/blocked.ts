@@ -1,5 +1,6 @@
 import {
   CAPABILITY_BLOCKED_SENDERS,
+  CAPABILITY_PICTURE_SENDERS,
   GetArgumentsSchema,
   SetArgumentsSchema,
   SetFailure,
@@ -33,6 +34,47 @@ import {
 
 export const BLOCKED_SENDER = 'BlockedSender';
 
+/*
+ * Picture senders: the addresses whose mail is shown with its pictures. A
+ * picture kept on another site tells whoever sent it that the message was
+ * opened, and when, and from where: it is loaded for those the person has
+ * said may know. Nothing is done about it here; it is kept so that every
+ * program the person reads mail in knows the same.
+ */
+export const PICTURE_SENDER = 'PictureSender';
+
+/** A list of addresses, and of whole domains, that an account keeps. */
+interface Kind {
+  type: string;
+  capability: string;
+  /** What the account is told its limit is called. */
+  limit: string;
+  /** What to say of an address that is on it already. */
+  already: string;
+  /** What to say when it is full. */
+  full: string;
+  /** What to say when one is changed, which none can be. */
+  fixed: string;
+}
+
+const BLOCKED: Kind = {
+  type: BLOCKED_SENDER,
+  capability: CAPABILITY_BLOCKED_SENDERS,
+  limit: 'maxBlockedSenders',
+  already: 'This address is blocked already',
+  full: 'No more than 500 blocked senders',
+  fixed: 'A blocked sender is removed and added again, not changed',
+};
+
+const PICTURES: Kind = {
+  type: PICTURE_SENDER,
+  capability: CAPABILITY_PICTURE_SENDERS,
+  limit: 'maxPictureSenders',
+  already: 'Pictures from this address are shown already',
+  full: 'No more than 500 senders whose pictures are shown',
+  fixed: 'A sender is removed and added again, not changed',
+};
+
 const MAX_BLOCKED = 500;
 const PROPERTIES = ['id', 'address'];
 /** One mailbox, or with nothing before the `@` everyone at a domain. */
@@ -46,7 +88,8 @@ interface BlockedValue {
 const invalid = (properties: string[], description: string): SetFailure =>
   new SetFailure('invalidProperties', description, { properties });
 
-async function createBlocked(
+async function createListed(
+  kind: Kind,
   ctx: MethodContext,
   input: Record<string, unknown>,
 ): Promise<{ id: string } & Record<string, unknown>> {
@@ -64,46 +107,43 @@ async function createBlocked(
       'An address, or @ and a domain for everyone at it',
     );
   }
-  const all = await ctx.store.list(ctx.auth.accountId, BLOCKED_SENDER);
+  const all = await ctx.store.list(ctx.auth.accountId, kind.type);
   if (
     all.some(
       (record) => (record.value as unknown as BlockedValue).address === address,
     )
   ) {
-    throw invalid(['address'], 'This address is blocked already');
+    throw invalid(['address'], kind.already);
   }
   if (all.length >= MAX_BLOCKED) {
-    throw new SetFailure(
-      'overQuota',
-      `No more than ${MAX_BLOCKED} blocked senders`,
-    );
+    throw new SetFailure('overQuota', kind.full);
   }
   const id = generateId('bs');
   await commit(ctx, [
-    { kind: 'create', type: BLOCKED_SENDER, id, value: { address } },
+    { kind: 'create', type: kind.type, id, value: { address } },
   ]);
   // What was sent in capitals or with space around it is kept without.
   return { id, ...(given === address ? {} : { address }) };
 }
 
-/** An address is what is blocked: another one is another entry. */
-async function updateBlocked(): Promise<null> {
-  throw new SetFailure(
-    'invalidProperties',
-    'A blocked sender is removed and added again, not changed',
-    { properties: ['address'] },
-  );
+/** An address is what is listed: another one is another entry. */
+async function updateListed(kind: Kind): Promise<null> {
+  throw new SetFailure('invalidProperties', kind.fixed, {
+    properties: ['address'],
+  });
 }
 
-async function destroyBlocked(ctx: MethodContext, id: string): Promise<void> {
-  const [record] = await ctx.store.get(ctx.auth.accountId, BLOCKED_SENDER, [
-    id,
-  ]);
+async function destroyListed(
+  kind: Kind,
+  ctx: MethodContext,
+  id: string,
+): Promise<void> {
+  const [record] = await ctx.store.get(ctx.auth.accountId, kind.type, [id]);
   if (!record) throw new SetFailure('notFound');
   await commit(ctx, [
     {
       kind: 'destroy',
-      type: BLOCKED_SENDER,
+      type: kind.type,
       id,
       expectedVersion: record.version,
     },
@@ -131,14 +171,14 @@ export async function senderBlocked(
   );
 }
 
-const blockedMethods: Record<string, MethodHandler> = {
-  'BlockedSender/get': async (rawArgs, ctx) => {
+const methodsOf = (kind: Kind): Record<string, MethodHandler> => ({
+  [`${kind.type}/get`]: async (rawArgs, ctx) => {
     const args = parseArguments(GetArgumentsSchema, rawArgs);
     const accountId = requireAccount(ctx, args.accountId);
     const properties = selectProperties(args.properties, PROPERTIES);
     const { state, records, notFound } = await loadForGet(
       ctx,
-      BLOCKED_SENDER,
+      kind.type,
       args.ids,
     );
     return {
@@ -157,38 +197,45 @@ const blockedMethods: Record<string, MethodHandler> = {
     };
   },
 
-  'BlockedSender/changes': async (rawArgs, ctx) => ({
-    ...toChangesResponse(await standardChanges(ctx, BLOCKED_SENDER, rawArgs)),
+  [`${kind.type}/changes`]: async (rawArgs, ctx) => ({
+    ...toChangesResponse(await standardChanges(ctx, kind.type, rawArgs)),
   }),
 
-  'BlockedSender/set': async (rawArgs, ctx) => ({
+  [`${kind.type}/set`]: async (rawArgs, ctx) => ({
     ...(await standardSet(
       ctx,
       {
-        type: BLOCKED_SENDER,
-        create: createBlocked,
-        update: updateBlocked,
-        destroy: destroyBlocked,
+        type: kind.type,
+        create: (context, input) => createListed(kind, context, input),
+        update: () => updateListed(kind),
+        destroy: (context, id) => destroyListed(kind, context, id),
       },
       parseArguments(SetArgumentsSchema, rawArgs),
     )),
   }),
-};
+});
+
+const moduleOf = (name: string, kind: Kind): JmapModule => ({
+  name,
+  capabilities: { [kind.capability]: {} },
+  accountCapabilities: () => ({
+    [kind.capability]: { [kind.limit]: MAX_BLOCKED },
+  }),
+  methods: Object.fromEntries(
+    Object.entries(methodsOf(kind)).map(([method, handler]) => [
+      method,
+      { capability: kind.capability, handler },
+    ]),
+  ),
+  pushedTypes: [kind.type],
+});
 
 /** Blocked senders for a JMAP server: whose mail is filed as junk when it arrives. */
 export function blockedSendersModule(): JmapModule {
-  return {
-    name: 'blocked-senders',
-    capabilities: { [CAPABILITY_BLOCKED_SENDERS]: {} },
-    accountCapabilities: () => ({
-      [CAPABILITY_BLOCKED_SENDERS]: { maxBlockedSenders: MAX_BLOCKED },
-    }),
-    methods: Object.fromEntries(
-      Object.entries(blockedMethods).map(([name, handler]) => [
-        name,
-        { capability: CAPABILITY_BLOCKED_SENDERS, handler },
-      ]),
-    ),
-    pushedTypes: [BLOCKED_SENDER],
-  };
+  return moduleOf('blocked-senders', BLOCKED);
+}
+
+/** Picture senders for a JMAP server: whose mail is shown with its pictures. */
+export function pictureSendersModule(): JmapModule {
+  return moduleOf('picture-senders', PICTURES);
 }

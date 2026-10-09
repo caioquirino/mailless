@@ -67,6 +67,22 @@ export interface MessageDocumentOptions {
   inline?: Readonly<Record<string, string>>;
   /** Whether what the message quotes of earlier ones is shown. It is, unless told otherwise. */
   quoted?: boolean;
+  /**
+   * Whether the message is shown light on dark, for a page that is dark. Its
+   * colours are all turned over together, so what could be read can still be.
+   */
+  dark?: boolean;
+}
+
+/**
+ * A message's own styles, without what it would do differently on a dark
+ * system: here it is this page that says which of the two the message is
+ * shown in, and half of each cannot be read.
+ */
+function settled(css: string): string {
+  return css
+    .replace(/\(\s*prefers-color-scheme\s*:\s*dark\s*\)/gi, '(max-width:0)')
+    .replace(/\(\s*prefers-color-scheme\s*:\s*light\s*\)/gi, '(min-width:0)');
 }
 
 /** What mail programs wrap an earlier message in when answering it. */
@@ -272,6 +288,9 @@ export function messageDocument(
     }
   }
 
+  for (const style of [...parsed.querySelectorAll('style')]) {
+    style.textContent = settled(style.textContent ?? '');
+  }
   const styles = [...parsed.querySelectorAll('head style')]
     .map((style) => style.outerHTML)
     .join('');
@@ -297,6 +316,11 @@ export function messageDocument(
     '.mailless-leads-to{color:#b3261e !important;font:600 13px/1.4 system-ui,sans-serif !important;background:#fff !important;}',
     '</style>',
     styles,
+    // After the message's own, which it has to hold against. White comes out as
+    // the dark of the page and black as its light; pictures are turned back.
+    options.dark
+      ? '<style>html{filter:invert(.89) hue-rotate(180deg) !important;}img,video,object,embed{filter:invert(1) hue-rotate(180deg) !important;}</style>'
+      : '',
     '</head><body>',
     parsed.body.innerHTML,
     '</body></html>',

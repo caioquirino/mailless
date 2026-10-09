@@ -64,6 +64,12 @@ export const CAPABILITY_TAGS =
  */
 export const CAPABILITY_BLOCKED_SENDERS =
   'https://github.com/caioquirino/mailless/jmap/blocked-senders';
+/**
+ * Not an RFC's: the addresses whose mail is shown with the pictures it keeps
+ * on other sites (PictureSender/get, PictureSender/changes, PictureSender/set).
+ */
+export const CAPABILITY_PICTURE_SENDERS =
+  'https://github.com/caioquirino/mailless/jmap/picture-senders';
 /** RFC 9749: the key a client gives its push service, so that only this server may push to it. */
 export const CAPABILITY_WEBPUSH_VAPID = 'urn:ietf:params:jmap:webpush-vapid';
 

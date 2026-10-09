@@ -29,7 +29,7 @@ import { printMessage, type PicturesShown } from '../lib/print';
 import { Face } from './face';
 import { MoveTo } from './list';
 import { TagChip, TagPicker } from './tags';
-import { cautions } from '../lib/senders';
+import { cautions, pictureChoices } from '../lib/senders';
 import { InvitationCard } from './invitation';
 import { useMail, useServices, useSynced, withUndo } from './services';
 
@@ -466,8 +466,20 @@ interface MessageProps {
 
 function Message(props: MessageProps) {
   const { email, open } = props;
-  const { client } = useServices();
+  const { client, theme } = useServices();
   const { store, compose, act, say, unsend } = useMail();
+  // On a dark page a message is dark too, unless asked for as it was written.
+  const [page, setPage] = useState(() => theme?.shown ?? 'light');
+  useEffect(() => {
+    if (!theme) return;
+    setPage(theme.shown);
+    return theme.subscribe(() => setPage(theme.shown));
+  }, [theme]);
+  const [original, setOriginal] = useState(false);
+  const dark = page === 'dark' && !original;
+  const styled = (email.htmlBody ?? []).some(
+    (part) => part.type === 'text/html',
+  );
   const navigate = useNavigate();
   useSynced(store.identities);
   useSynced(store.held);
@@ -679,6 +691,17 @@ function Message(props: MessageProps) {
         </button>
         {open && !draft ? (
           <span className="message-tools">
+            {page === 'dark' && styled ? (
+              <IconButton
+                icon={original ? 'moon' : 'sun'}
+                label={
+                  original
+                    ? 'Show this message in dark colours'
+                    : 'Show this message in its own colours'
+                }
+                onClick={() => setOriginal(!original)}
+              />
+            ) : null}
             <IconButton
               icon="flag"
               label={
@@ -735,6 +758,7 @@ function Message(props: MessageProps) {
               <InvitationCard email={email} />
               <Body
                 email={email}
+                dark={dark}
                 onShown={(part, pictures) => shown.current.set(part, pictures)}
               />
               <Attachments attachments={listedAttachments(email)} />
@@ -799,9 +823,10 @@ function Message(props: MessageProps) {
 /** What a message says: each part of its body in turn, as it was written. */
 function Body(props: {
   email: Email;
+  dark: boolean;
   onShown(part: string, pictures: PicturesShown): void;
 }) {
-  const { email, onShown } = props;
+  const { email, dark, onShown } = props;
   const parts = (email.htmlBody ?? []).filter(
     (part) => part.type === 'text/html' || part.type === 'text/plain',
   );
@@ -820,6 +845,7 @@ function Body(props: {
               <HtmlPart
                 html={text}
                 email={email}
+                dark={dark}
                 onShown={(pictures) =>
                   onShown(part.partId ?? String(index), pictures)
                 }
@@ -1074,10 +1100,18 @@ function Cautions({ email }: { email: Email }) {
 function HtmlPart(props: {
   html: string;
   email: Email;
+  /** Whether it is shown light on dark, to go with a dark page. */
+  dark: boolean;
   onShown(pictures: PicturesShown): void;
 }) {
-  const { html, email } = props;
-  const [images, setImages] = useState(false);
+  const { html, email, dark } = props;
+  const { store, act, say } = useMail();
+  useSynced(store.pictures.made);
+  const [asked, setAsked] = useState(false);
+  // Those the person said may always know the message was opened, where it is theirs for certain.
+  const always = store.pictures.available ? pictureChoices(email) : [];
+  const images =
+    asked || always.some((each) => store.pictures.showing(each) !== undefined);
   const inline = useInlineImages(email, html);
   const said = useRef(props.onShown);
   said.current = props.onShown;
@@ -1090,8 +1124,8 @@ function HtmlPart(props: {
   const [quoted, setQuoted] = useState(false);
   const quotes = useMemo(() => hasQuotedHtml(html), [html]);
   const page = useMemo(
-    () => messageDocument(html, { images, inline, quoted }),
-    [html, images, inline, quoted],
+    () => messageDocument(html, { images, inline, quoted, dark }),
+    [html, images, inline, quoted, dark],
   );
 
   // The frame is as tall as what is in it, so the page scrolls and the message does not.
@@ -1120,15 +1154,34 @@ function HtmlPart(props: {
           <button
             type="button"
             className="button button-small"
-            onClick={() => setImages(true)}
+            onClick={() => setAsked(true)}
           >
             Show pictures
           </button>
+          {always.map((each) => (
+            <button
+              key={each}
+              type="button"
+              className="button button-small"
+              onClick={() =>
+                void act(() => store.pictures.always(each)).then((worked) => {
+                  if (worked) {
+                    say(
+                      `Pictures from ${each} will always be shown`,
+                      withUndo({ act, say }, () => store.pictures.ask(each)),
+                    );
+                  }
+                })
+              }
+            >
+              Always from {each}
+            </button>
+          ))}
         </p>
       ) : null}
       <iframe
         ref={frame}
-        className="message-frame"
+        className={`message-frame${dark ? ' message-frame-dark' : ''}`}
         title="Message"
         // No script runs in the frame. Links open beside the mail, as pages of their own.
         sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
