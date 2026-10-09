@@ -409,6 +409,14 @@ card must have and the client left out: `uid`, `created`, `updated`.
   invited to is off marks it cancelled. Only from whoever it concerns: nobody
   answers for somebody else, or calls off what is not theirs. An invitation
   that arrives is not put in the calendar until it is answered.
+- Someone invited can suggest another time, and whoever invited can say no
+  to that (RFC 5546: COUNTER and DECLINECOUNTER). JMAP for Calendars has no
+  method for it, so these are this project's, under
+  `https://github.com/caioquirino/mailless/jmap/calendar-proposals`:
+  `CalendarProposal/send` (`eventId`, `start`, and optionally `duration`,
+  `timeZone` and `comment`) and `CalendarProposal/decline` (`eventId`, `to`).
+  Neither changes the event. A suggestion that arrives is read like any
+  calendar file, with `method: "counter"`; taking it up is changing the event.
 - `CalendarEvent/parse` reads the event out of a calendar file (iCalendar),
   such as the one an invitation comes with, without keeping it.
 

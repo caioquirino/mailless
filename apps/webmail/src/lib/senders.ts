@@ -149,6 +149,8 @@ export function cautions(
   known: {
     /** Who the reader writes as. */
     own: readonly EmailAddress[];
+    /** The reader's addresses elsewhere: mail from them bears their name rightly. */
+    others?: readonly string[];
     cards: readonly Card[];
   },
 ): Caution[] {
@@ -164,7 +166,8 @@ export function cautions(
 
   // A name is whatever the sender typed: the address is what tells people apart.
   const name = sender.name?.trim() ?? '';
-  if (name !== '' && !name.includes('@')) {
+  const theirs = (known.others ?? []).some((each) => same(each, sender.email));
+  if (name !== '' && !name.includes('@') && !theirs) {
     if (known.own.some((each) => each.name && same(each.name, name))) {
       found.push({ kind: 'namesake', name, own: true });
     } else {

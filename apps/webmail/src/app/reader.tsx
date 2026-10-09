@@ -959,7 +959,11 @@ function Cautions({ email }: { email: Email }) {
   useSynced(store.blocked.made);
   const sender = email.from?.[0];
   const own = store.identities.values();
-  const found = cautions(email, { own, cards: store.contacts.cards.values() });
+  const found = cautions(email, {
+    own,
+    others: store.contacts.otherAddresses(own),
+    cards: store.contacts.cards.values(),
+  });
   const blocked = sender ? store.blocked.blocking(sender.email) : undefined;
   // Worth asking of what arrived from someone who is not in the address book.
   const stranger =
@@ -1011,10 +1015,33 @@ function Cautions({ email }: { email: Email }) {
           >
             <strong>
               {caution.own
-                ? 'This bears your name, and is not from you.'
+                ? 'This bears your name, and is not from an address you write from here.'
                 : `${caution.name} is in your contacts with another address.`}
             </strong>{' '}
             This message comes from {sender.email}.
+            {caution.own ? (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  className="button button-small"
+                  onClick={() =>
+                    void act(() =>
+                      store.contacts.setOtherAddresses(own, [
+                        ...store.contacts.otherAddresses(own),
+                        sender.email,
+                      ]),
+                    ).then((worked) => {
+                      if (worked) {
+                        say(`${sender.email} is one of your addresses`);
+                      }
+                    })
+                  }
+                >
+                  It is mine
+                </button>
+              </>
+            ) : null}
           </p>
         ),
       )}

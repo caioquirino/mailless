@@ -24,7 +24,9 @@ import {
   type WindowMessage,
 } from '../lib/calendar';
 import { appBaseUrl } from '../lib/config';
-import { ANSWER_WORDS, EventEditor } from './event-editor';
+import { Contacts, cardName, type Card } from '../lib/contacts';
+import { People } from '../lib/people';
+import { ANSWER_WORDS, EventEditor, type Place } from './event-editor';
 import { Rail } from './rail';
 import { useMail, useServices, useSynced, withUndo } from './services';
 
@@ -39,6 +41,20 @@ const AGENDA_DAYS = 60;
 const tinted = (color: string) => ({ '--event': color }) as React.CSSProperties;
 
 const sameDay = (a: Date, b: Date) => dayKey(a) === dayKey(b);
+
+/** Where an event might be: where events have been before, then where the people in the address book are. */
+function placesOf(been: readonly string[], cards: readonly Card[]): Place[] {
+  const known = new Set(been.map((place) => place.toLowerCase()));
+  return [
+    ...been.map((place) => ({ place })),
+    ...cards.flatMap((card) =>
+      Object.values(card.addresses ?? {})
+        .map((address) => address.full?.replace(/\s*\n\s*/g, ', ').trim() ?? '')
+        .filter((place) => place !== '' && !known.has(place.toLowerCase()))
+        .map((place) => ({ place, of: cardName(card) })),
+    ),
+  ];
+}
 
 /** What an event is called where it is shown. */
 const titleOf = (event: Pick<CalendarEvent, 'title'>) =>
@@ -66,6 +82,16 @@ export function CalendarPage(props: CalendarPageProps) {
   useSynced(calendar.calendars);
   useSynced(calendar.events);
   useSynced(calendar);
+  useSynced(store.contacts.cards);
+  // Who an event might be with, and where: the address book, and who was written to.
+  useEffect(() => {
+    void store.people.start(store.mailbox('sent')?.id);
+  }, [store]);
+  const places = useMemo(
+    () => placesOf(calendar.places(), store.contacts.cards.values()),
+    // Asked again when either of them has changed.
+    [calendar, calendar.events.version, store.contacts.cards.version],
+  );
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading');
   /** The event being written here, beside the calendar. */
   const [writing, setWriting] = useState<{
@@ -427,11 +453,34 @@ export function CalendarPage(props: CalendarPageProps) {
             calendars={calendar.all()}
             busy={busy}
             own={calendar.own}
+            suggest={(typed, without) => store.people.find(typed, { without })}
+            places={places}
             onChange={(form) => setWriting({ key: writing.key, form })}
             onSave={(tell) => void save(tell)}
             onClose={() => setWriting(null)}
             onPopOut={popOut}
             onAnswer={(reply) => void answer(reply)}
+            {...(calendar.proposals
+              ? {
+                  onPropose: (from: Date, until: Date, comment: string) => {
+                    const { form } = writing;
+                    void act(() =>
+                      calendar.propose(
+                        form.series?.id ?? (form.id as string),
+                        from,
+                        until,
+                        comment,
+                      ),
+                    ).then((sent) => {
+                      if (sent) {
+                        say(
+                          `${form.invited?.by ?? 'They'} was sent your suggestion`,
+                        );
+                      }
+                    });
+                  },
+                }
+              : {})}
             {...(writing.form.id !== null
               ? { onDelete: (tell: boolean) => void remove(writing.form, tell) }
               : {})}
@@ -1048,6 +1097,15 @@ function Agenda(props: {
 export function EventWindow() {
   const { client } = useServices();
   const calendar = useMemo(() => new Calendars(client), [client]);
+  // The window has no mail of its own: it knows the address book, which is who and where an event might be.
+  const known = useMemo(() => {
+    const contacts = new Contacts(client);
+    return { contacts, people: new People(client, contacts) };
+  }, [client]);
+  useSynced(known.contacts.cards);
+  useEffect(() => {
+    void known.people.start(undefined);
+  }, [known]);
   useSynced(calendar.calendars);
   const key = new URLSearchParams(useLocation().search).get('window') ?? '';
   const [form, setForm] = useState<EventForm | null>(() =>
@@ -1149,6 +1207,8 @@ export function EventWindow() {
         busy={busy}
         failure={failure}
         own={calendar.own}
+        suggest={(typed, without) => known.people.find(typed, { without })}
+        places={placesOf(calendar.places(), known.contacts.cards.values())}
         onChange={setForm}
         onSave={(tell) => void run(() => calendar.save(form, tell))}
         onClose={() => done('closed')}

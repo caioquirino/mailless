@@ -1,5 +1,9 @@
 import { ObjectCache, sync, type JmapClient } from '@mailless/jmap-client';
-import { CAPABILITY_CALENDARS, type Id } from '@mailless/jmap-core';
+import {
+  CAPABILITY_CALENDAR_PROPOSALS,
+  CAPABILITY_CALENDARS,
+  type Id,
+} from '@mailless/jmap-core';
 
 /*
  * The calendar: calendars and the events in them, as the server keeps them
@@ -201,8 +205,14 @@ export interface CalendarEvent {
 
 /** An event read out of a calendar file: what an invitation that came with a message says. */
 export interface Invitation extends CalendarEvent {
-  /** What the file is for: `request` is an invitation, `reply` an answer to one, `cancel` word that it is off. */
+  /**
+   * What the file is for: `request` is an invitation, `reply` an answer to
+   * one, `cancel` word that it is off, `counter` another time suggested for
+   * it, and `declinecounter` a no to such a suggestion.
+   */
   method?: string;
+  /** A word that came with it. */
+  comment?: string;
 }
 
 export class CalendarError extends Error {}
@@ -366,6 +376,8 @@ export interface EventForm {
   place: string;
   /** The others on it: addresses, with commas between them. */
   people: string;
+  /** What each of them is called, by address, where that is known. */
+  names: Record<string, string>;
   /** What each of them answered, by address. Carried along; not something the form changes. */
   answers: Record<string, string>;
   /** The address it is from, of those the person goes by. Empty for the first of them. */
@@ -409,6 +421,19 @@ export function usedParts(form: EventForm): FormPart[] {
     .map(([part]) => part);
 }
 
+/**
+ * The last day a form says, for a span of time. A whole day ends with the
+ * day before the moment it ends at. One with a time ends on the day it
+ * begins, its end being a time of day: past midnight is then the day after.
+ * Only one that lasts longer than a day names another day to end on.
+ */
+function lastDay(start: Date, end: Date, allDay: boolean): string {
+  if (allDay) return dayKey(addDays(end, -1));
+  return end.getTime() - start.getTime() > 86_400_000
+    ? dayKey(end)
+    : dayKey(start);
+}
+
 export function newForm(
   calendarId: Id,
   start: Date,
@@ -420,13 +445,14 @@ export function newForm(
     id: null,
     title: '',
     date: dayKey(start),
-    endDate: dayKey(allDay ? addDays(until, -1) : until),
+    endDate: lastDay(start, until, allDay),
     from: timeOf(start),
     to: timeOf(until),
     allDay,
     calendarId,
     place: '',
     people: '',
+    names: {},
     answers: {},
     as: '',
     invited: null,
@@ -489,13 +515,18 @@ export function formOf(
     id: event.id,
     title: event.title ?? '',
     date: dayKey(start),
-    endDate: dayKey(allDay ? addDays(end, -1) : end),
+    endDate: lastDay(start, end, allDay),
     from: allDay ? '09:00' : timeOf(start),
     to: allDay ? '10:00' : timeOf(end),
     allDay,
     calendarId: Object.keys(event.calendarIds)[0] ?? '',
     place: first(event.locations)?.name ?? '',
     people: others.map((person) => lower(person.email)).join(', '),
+    names: Object.fromEntries(
+      others
+        .filter((person) => person.name)
+        .map((person) => [lower(person.email), person.name as string]),
+    ),
     answers: Object.fromEntries(
       others.map((person) => [
         lower(person.email),
@@ -552,8 +583,7 @@ export function withSpan(form: EventForm, start: Date, end: Date): EventForm {
     ...form,
     allDay: false,
     date: dayKey(start),
-    // Ending at midnight is ending on the day it began.
-    endDate: dayKey(new Date(Math.max(start.getTime(), end.getTime() - 1))),
+    endDate: lastDay(start, end, false),
     from: timeOf(start),
     to: timeOf(end),
   };
@@ -655,6 +685,7 @@ export function eventOf(
                   String(index + 1),
                   {
                     '@type': 'Participant',
+                    ...(form.names[email] ? { name: form.names[email] } : {}),
                     email,
                     sendTo: { imip: `mailto:${email}` },
                     participationStatus: form.answers[email] ?? 'needs-action',
@@ -764,6 +795,8 @@ export class Calendars {
   available = false;
   /** The addresses the person goes by: the first is the one they write from. Known once started. */
   own: Own[] = [];
+  /** Whether another time can be suggested for an event one was invited to. Known once started. */
+  proposals = false;
   private started: Promise<void> | undefined;
 
   constructor(private readonly client: JmapClient) {
@@ -853,6 +886,8 @@ export class Calendars {
   private async load(): Promise<void> {
     const session = await this.client.session();
     this.available = session.capabilities[CAPABILITY_CALENDARS] !== undefined;
+    this.proposals =
+      session.capabilities[CAPABILITY_CALENDAR_PROPOSALS] !== undefined;
     if (!this.available) return;
     const batch = this.client.batch();
     const calendars = this.calendars.loadIn(batch, null);
@@ -1045,6 +1080,53 @@ export class Calendars {
     );
   }
 
+  /**
+   * Suggests another time for an event the person was invited to, to whoever
+   * invited them. Nothing changes by it: it is theirs to take up or not.
+   */
+  async propose(
+    id: Id,
+    start: Date,
+    end: Date,
+    comment: string,
+  ): Promise<void> {
+    const minutes = Math.max(
+      15,
+      Math.round((end.getTime() - start.getTime()) / 60_000),
+    );
+    await this.client.call(
+      'CalendarProposal/send' as never,
+      {
+        eventId: id,
+        start: `${dayKey(start)}T${timeOf(start)}:00`,
+        timeZone: ownTimeZone(),
+        duration: `PT${Math.floor(minutes / 60) ? `${Math.floor(minutes / 60)}H` : ''}${minutes % 60 ? `${minutes % 60}M` : ''}`,
+        ...(comment.trim() ? { comment: comment.trim() } : {}),
+      } as never,
+    );
+  }
+
+  /** Tells someone who suggested another time for an event of the person's own that it stays when it is. */
+  async keepTime(id: Id, to: string): Promise<void> {
+    await this.client.call(
+      'CalendarProposal/decline' as never,
+      { eventId: id, to } as never,
+    );
+  }
+
+  /** Moves an event of the person's own to the time someone suggested for it. */
+  async takeUp(
+    event: CalendarEvent,
+    start: Date,
+    end: Date,
+    tell: boolean,
+  ): Promise<void> {
+    await this.save(
+      withSpan(formOf(event, undefined, this.own), start, end),
+      tell,
+    );
+  }
+
   /** The event a calendar file holds: an invitation that came with a message, for one. Null when it holds none. */
   async parse(blobId: Id): Promise<Invitation | null> {
     const read = (await this.client.call(
@@ -1140,6 +1222,20 @@ export class Calendars {
       const { id: _id, isOrigin: _origin, ...rest } = was;
       await this.set('CalendarEvent', { create: { new: rest } });
     };
+  }
+
+  /** The places events have been at, most often first: where the next one might be too. */
+  places(): string[] {
+    const counts = new Map<string, number>();
+    for (const event of this.events.values()) {
+      for (const place of Object.values(event.locations ?? {})) {
+        const name = place.name?.trim();
+        if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name]) => name);
   }
 
   /** Shows or hides a calendar, on every device. */

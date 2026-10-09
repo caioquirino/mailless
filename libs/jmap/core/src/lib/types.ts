@@ -44,6 +44,13 @@ export const CAPABILITY_PRINCIPALS_OWNER =
 export const CAPABILITY_CONTACTS = 'urn:ietf:params:jmap:contacts';
 /** JMAP for Calendars: calendars, and events as JSCalendar (RFC 8984). */
 export const CAPABILITY_CALENDARS = 'urn:ietf:params:jmap:calendars';
+/**
+ * Not an RFC's: suggesting another time for an event one was invited to, and
+ * saying no to such a suggestion (CalendarProposal/send, /decline). JMAP for
+ * Calendars has the invitation and the answer, and not this.
+ */
+export const CAPABILITY_CALENDAR_PROPOSALS =
+  'https://github.com/caioquirino/mailless/jmap/calendar-proposals';
 export const CAPABILITY_WEBSOCKET = 'urn:ietf:params:jmap:websocket';
 /**
  * Not an RFC's: the names and colours someone gives to keywords of their own

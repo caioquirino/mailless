@@ -379,6 +379,62 @@ export class Contacts {
     }
   }
 
+  /**
+   * The card of the person themselves: the one with an address they write
+   * from on it. It is where their other addresses are kept, as anyone's are.
+   */
+  ownCard(own: readonly { email: string }[]): Card | undefined {
+    return own
+      .map((each) => this.cardFor(each.email))
+      .find((card): card is Card => card !== undefined);
+  }
+
+  /** The person's addresses elsewhere: those on their own card that are not ones they write from here. */
+  otherAddresses(own: readonly { email: string }[]): string[] {
+    const here = new Set(own.map((each) => each.email.toLowerCase()));
+    const card = this.ownCard(own);
+    return card
+      ? cardEmails(card)
+          .map((each) => each.value.trim().toLowerCase())
+          .filter((address) => address !== '' && !here.has(address))
+      : [];
+  }
+
+  /** Says which the person's addresses elsewhere are, on their own card: made when there is none yet. */
+  async setOtherAddresses(
+    own: readonly { email: string; name?: string | null }[],
+    others: readonly string[],
+  ): Promise<void> {
+    const here = new Set(own.map((each) => each.email.toLowerCase()));
+    const wanted = [
+      ...new Set(others.map((address) => address.trim().toLowerCase())),
+    ].filter((address) => address !== '' && !here.has(address));
+    const card = this.ownCard(own);
+    // What the card says of the addresses written from here stays as it is.
+    const kept = Object.entries(card?.emails ?? {}).filter(([, each]) =>
+      here.has((each.address ?? '').toLowerCase()),
+    );
+    const emails = Object.fromEntries([
+      ...kept,
+      ...wanted.map((address, index) => [`other${index + 1}`, { address }]),
+    ]);
+    if (card) {
+      await this.save(card.id, { emails });
+    } else {
+      const [first] = own;
+      const book = this.defaultBook();
+      if (!first || !book) {
+        throw new Error('There is no address book to keep it in.');
+      }
+      await this.save(null, {
+        addressBookIds: { [book.id]: true },
+        ...(first.name ? { name: { full: first.name } } : {}),
+        emails: { own1: { address: first.email }, ...emails },
+      });
+    }
+    await this.refresh();
+  }
+
   /** Brings what is held up to date with what another device changed. */
   async refresh(): Promise<void> {
     if (!this.available || !this.cards.isComplete) return;

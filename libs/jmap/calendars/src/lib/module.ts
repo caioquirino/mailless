@@ -1,4 +1,7 @@
-import { CAPABILITY_CALENDARS } from '@mailless/jmap-core';
+import {
+  CAPABILITY_CALENDAR_PROPOSALS,
+  CAPABILITY_CALENDARS,
+} from '@mailless/jmap-core';
 import type { JmapModule } from '@mailless/jmap-engine';
 import type { Scheduling } from './scheduling.js';
 import {
@@ -6,6 +9,7 @@ import {
   CALENDAR_EVENT,
   calendarMethods,
   prepareCalendars,
+  proposalMethods,
   provisionCalendars,
 } from './calendars.js';
 
@@ -32,19 +36,30 @@ export function calendarsModule(
           : {}),
       };
     },
-    capabilities: { [CAPABILITY_CALENDARS]: {} },
+    capabilities: {
+      [CAPABILITY_CALENDARS]: {},
+      // Suggesting another time is offered where there is a way to send mail.
+      ...(options.scheduling ? { [CAPABILITY_CALENDAR_PROPOSALS]: {} } : {}),
+    },
     accountCapabilities: (access) => ({
       [CAPABILITY_CALENDARS]: {
         maxCalendarsPerEvent: null,
         mayCreateCalendar: !access.isReadOnly,
       },
+      ...(options.scheduling ? { [CAPABILITY_CALENDAR_PROPOSALS]: {} } : {}),
     }),
-    methods: Object.fromEntries(
-      Object.entries(calendarMethods).map(([name, handler]) => [
+    methods: Object.fromEntries([
+      ...Object.entries(calendarMethods).map(([name, handler]) => [
         name,
         { capability: CAPABILITY_CALENDARS, handler },
       ]),
-    ),
+      ...(options.scheduling
+        ? Object.entries(proposalMethods).map(([name, handler]) => [
+            name,
+            { capability: CAPABILITY_CALENDAR_PROPOSALS, handler },
+          ])
+        : []),
+    ]),
     provisionAccount: provisionCalendars,
     // An account older than its calendar gets one the first time it is used.
     prepareAccount: prepareCalendars,

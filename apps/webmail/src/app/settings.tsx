@@ -19,7 +19,7 @@ import { UNDO_SECONDS } from '../lib/undo';
 import { Face } from './face';
 import { FolderSetting } from './folders';
 import { TagSetting } from './tags';
-import { BlockedSetting } from './senders';
+import { BlockedSetting, OwnAddressesSetting } from './senders';
 import { CalendarSetting } from './calendars-setting';
 import { useMail, useServices, useSynced } from './services';
 
@@ -344,6 +344,7 @@ export function SettingsPage() {
         <FolderSetting />
         <TagSetting />
         <CalendarSetting />
+        <OwnAddressesSetting />
         <BlockedSetting />
         <section className="setting" aria-labelledby="setting-account">
           <h2 id="setting-account">Account</h2>

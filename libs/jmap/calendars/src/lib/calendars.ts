@@ -41,7 +41,12 @@ import {
   type StoredRecord,
   type WriteOp,
 } from '@mailless/jmap-engine';
-import { fromICalendar, organizerOf } from './icalendar.js';
+import {
+  attendeesOf,
+  fromICalendar,
+  organizerOf,
+  toICalendar,
+} from './icalendar.js';
 import {
   expand,
   NOT_FOR_ONE,
@@ -50,7 +55,7 @@ import {
   parseOccurrenceId,
   repeats,
 } from './recurrence.js';
-import { messagesFor, type Scheduling } from './scheduling.js';
+import { messagesFor, whenText, type Scheduling } from './scheduling.js';
 import {
   durationMillis,
   isTimeZone,
@@ -1543,6 +1548,147 @@ export const calendarMethods: Record<string, MethodHandler> = {
         event: null,
       }));
     return { list };
+  },
+};
+
+const ProposalSendArgumentsSchema = z.strictObject({
+  accountId: z.string(),
+  /** The event the account was invited to. */
+  eventId: z.string(),
+  /** When it would be instead: on the wall of `timeZone`, or of the event's own. */
+  start: z.string().regex(LOCAL_DATE_TIME),
+  duration: z.string().optional(),
+  timeZone: z.string().nullish(),
+  comment: z.string().max(1000).optional(),
+});
+
+const ProposalDeclineArgumentsSchema = z.strictObject({
+  accountId: z.string(),
+  /** The event, which is the account's own. */
+  eventId: z.string(),
+  /** Whoever suggested another time for it. */
+  to: z.string(),
+});
+
+async function proposalParties(ctx: MethodContext, eventId: string) {
+  const tell = ctx.calendars.scheduling;
+  if (!tell) {
+    throw new MethodError(
+      'invalidArguments',
+      'This server has no way to send mail',
+    );
+  }
+  const [record] = await ctx.store.get(ctx.auth.accountId, CALENDAR_EVENT, [
+    eventId,
+  ]);
+  if (!record) throw new MethodError('invalidArguments', 'No such event');
+  const own = await tell.addresses(ctx);
+  const mine = new Map(own.map((each) => [each.email.toLowerCase(), each]));
+  return {
+    tell,
+    event: record.value,
+    mine,
+    organizer: organizerOf(record.value),
+  };
+}
+
+/**
+ * Suggesting another time (RFC 5546 calls it a counter-proposal). Not part of
+ * JMAP for Calendars, which has the invitation and the answer: these are
+ * under a capability of this project's.
+ */
+export const proposalMethods: Record<string, MethodHandler> = {
+  /** Someone who was invited suggests another time to whoever invited them. Nothing is changed by it. */
+  'CalendarProposal/send': async (rawArgs, ctx) => {
+    const args = parseArguments(ProposalSendArgumentsSchema, rawArgs);
+    const accountId = requireAccount(ctx, args.accountId);
+    const { tell, event, mine, organizer } = await proposalParties(
+      ctx,
+      args.eventId,
+    );
+    const me = attendeesOf(event)
+      .map((each) => mine.get(each.email))
+      .find(Boolean);
+    if (organizer === null || mine.has(organizer) || !me) {
+      throw new MethodError(
+        'invalidArguments',
+        'Another time is suggested for an event one was invited to',
+      );
+    }
+    const zone =
+      args.timeZone === undefined
+        ? ((event['timeZone'] as string | null | undefined) ?? null)
+        : args.timeZone;
+    if (
+      (zone !== null && !isTimeZone(zone)) ||
+      (args.duration !== undefined && durationMillis(args.duration) === null)
+    ) {
+      throw new MethodError('invalidArguments', 'Not a time');
+    }
+    const suggested = {
+      ...event,
+      start: args.start,
+      timeZone: zone,
+      ...(args.duration === undefined ? {} : { duration: args.duration }),
+    };
+    // Said of the event itself, whatever was changed for some of its times.
+    delete (suggested as Record<string, unknown>)['recurrenceOverrides'];
+    const title = String(event['title'] ?? '') || '(no title)';
+    await tell.send(ctx, {
+      from: me,
+      to: [organizer],
+      subject: `Another time suggested: ${title}`,
+      text: [
+        `${me.name || me.email} suggests another time.`,
+        '',
+        title,
+        `Suggested: ${whenText(suggested)}`,
+        `As it stands: ${whenText(event)}`,
+        ...(args.comment?.trim() ? ['', args.comment.trim()] : []),
+        '',
+      ].join('\n'),
+      method: 'COUNTER',
+      calendar: toICalendar(suggested, {
+        method: 'COUNTER',
+        attendee: me.email,
+        ...(args.comment ? { comment: args.comment } : {}),
+      }),
+    });
+    return { accountId, sent: true };
+  },
+
+  /** Whoever invited says the event stays when it is, to someone who suggested another time. */
+  'CalendarProposal/decline': async (rawArgs, ctx) => {
+    const args = parseArguments(ProposalDeclineArgumentsSchema, rawArgs);
+    const accountId = requireAccount(ctx, args.accountId);
+    const { tell, event, mine, organizer } = await proposalParties(
+      ctx,
+      args.eventId,
+    );
+    const to = args.to.trim().toLowerCase();
+    const from = organizer === null ? undefined : mine.get(organizer);
+    if (!from || !attendeesOf(event).some((each) => each.email === to)) {
+      throw new MethodError(
+        'invalidArguments',
+        'A suggestion is answered by whoever the event is from, to someone invited to it',
+      );
+    }
+    const title = String(event['title'] ?? '') || '(no title)';
+    await tell.send(ctx, {
+      from,
+      to: [to],
+      subject: `Time kept: ${title}`,
+      text: [
+        `${from.name || from.email} is keeping the time of this event.`,
+        '',
+        title,
+        `When: ${whenText(event)}`,
+        '',
+      ].join('\n'),
+      method: 'DECLINECOUNTER',
+      calendar: toICalendar(event, { method: 'DECLINECOUNTER', attendee: to }),
+    });
+    return { accountId, sent: true };
   },
 };
 

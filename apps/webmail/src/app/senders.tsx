@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Button, Icon, IconButton } from '@mailless/ui';
 import { useMail, useSynced } from './services';
 
@@ -77,6 +77,106 @@ export function BlockedSetting() {
                     void run(
                       () => store.blocked.unblock(each.address),
                       `${each.address} is no longer blocked`,
+                    )
+                  }
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The person's addresses elsewhere, in the settings: mail from them bears
+ * the person's name rightly, and is not warned of. Kept on their own card in
+ * the address book, where any other program finds them too.
+ */
+export function OwnAddressesSetting() {
+  const { store, act, say } = useMail();
+  useSynced(store.identities);
+  useSynced(store.contacts.cards);
+  const [address, setAddress] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [ready, setReady] = useState(store.contacts.cards.isComplete);
+  useEffect(() => {
+    let current = true;
+    void store.contacts.start().then(
+      () => current && setReady(true),
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [store]);
+  const own = store.identities.values();
+  if (!ready || !store.contacts.available || own.length === 0) return null;
+  const others = store.contacts.otherAddresses(own);
+  const keep = async (wanted: string[], done: string) => {
+    setBusy(true);
+    const worked = await act(() =>
+      store.contacts.setOtherAddresses(own, wanted),
+    );
+    setBusy(false);
+    if (worked) say(done);
+    return worked;
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const wanted = address.trim().toLowerCase();
+    if (busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(wanted)) return;
+    void keep([...others, wanted], `${wanted} is one of your addresses`).then(
+      (worked) => {
+        if (worked) setAddress('');
+      },
+    );
+  };
+  return (
+    <section className="setting" aria-labelledby="setting-own-addresses">
+      <h2 id="setting-own-addresses">Your other addresses</h2>
+      <p className="muted">
+        Addresses of yours at other mail services. Mail from them is from you:
+        it is not warned of as bearing your name from somewhere else. They are
+        kept on your own card in Contacts.
+      </p>
+      <form className="folder-form" onSubmit={submit}>
+        <input
+          type="email"
+          aria-label="Another address of yours"
+          placeholder="you@elsewhere.example"
+          maxLength={320}
+          value={address}
+          onChange={(event) => setAddress(event.target.value)}
+        />
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={busy || address.trim() === ''}
+        >
+          Add address
+        </Button>
+      </form>
+      {others.length === 0 ? (
+        <p className="muted small">You have told of none.</p>
+      ) : (
+        <ul className="folders" aria-label="Your other addresses">
+          {others.map((each) => (
+            <li key={each}>
+              <div className="folder">
+                <Icon name="account" size={18} />
+                <span className="folder-name">
+                  <strong>{each}</strong>
+                </span>
+                <IconButton
+                  icon="delete"
+                  label={`Remove ${each}`}
+                  disabled={busy}
+                  onClick={() =>
+                    void keep(
+                      others.filter((other) => other !== each),
+                      `${each} was removed`,
                     )
                   }
                 />

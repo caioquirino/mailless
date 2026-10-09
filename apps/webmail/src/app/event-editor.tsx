@@ -5,6 +5,7 @@ import {
   REMINDER_CHOICES,
   REPEATS,
   formProblem,
+  formSpan,
   reminderText,
   remindersOf,
   usedParts,
@@ -14,6 +15,15 @@ import {
   type FormPart,
   type Own,
 } from '../lib/calendar';
+import type { Person } from '../lib/people';
+import { Recipients, typed } from './recipients';
+
+/** Somewhere an event might be: a place it was before, or where someone in the address book is. */
+export interface Place {
+  place: string;
+  /** Whose it is, for a place that is someone's address. */
+  of?: string;
+}
 
 /** What someone answered, in a word. */
 export const ANSWER_WORDS: Record<string, string> = {
@@ -28,6 +38,79 @@ const ANSWERS: ReadonlyArray<{ answer: Answer; label: string }> = [
   { answer: 'tentative', label: 'Maybe' },
   { answer: 'declined', label: 'No' },
 ];
+
+/** Another time for an event one was invited to, to send to whoever invited. */
+export function ProposeForm(props: {
+  start: Date;
+  end: Date;
+  busy: boolean;
+  onSend(start: Date, end: Date, comment: string): void;
+  onCancel(): void;
+}) {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const day = (date: Date) =>
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const time = (date: Date) =>
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const [date, setDate] = useState(day(props.start));
+  const [from, setFrom] = useState(time(props.start));
+  const [to, setTo] = useState(time(props.end));
+  const [comment, setComment] = useState('');
+  const at = (clock: string) => new Date(`${date}T${clock}:00`);
+  const start = at(from);
+  let end = at(to);
+  // An end before the start is on the day after.
+  if (end.getTime() <= start.getTime()) {
+    end = new Date(end.getTime() + 86_400_000);
+  }
+  const valid = !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime());
+  return (
+    <div className="propose" role="group" aria-label="Suggest another time">
+      <div className="event-when">
+        <input
+          type="date"
+          aria-label="Suggested day"
+          value={date}
+          onChange={(event) => setDate(event.target.value)}
+        />
+        <input
+          type="time"
+          aria-label="Suggested start"
+          value={from}
+          onChange={(event) => setFrom(event.target.value)}
+        />
+        <span className="muted">–</span>
+        <input
+          type="time"
+          aria-label="Suggested end"
+          value={to}
+          onChange={(event) => setTo(event.target.value)}
+        />
+      </div>
+      <input
+        aria-label="A word to go with it"
+        placeholder="A word to go with it (optional)"
+        maxLength={300}
+        value={comment}
+        onChange={(event) => setComment(event.target.value)}
+      />
+      <div className="row">
+        <Button
+          type="button"
+          size="small"
+          variant="primary"
+          disabled={props.busy || !valid}
+          onClick={() => props.onSend(start, end, comment)}
+        >
+          Send the suggestion
+        </Button>
+        <Button type="button" size="small" onClick={props.onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 /** Yes, maybe, no: the three things to say to an invitation, with the one that was said pressed. */
 export function AnswerButtons(props: {
@@ -102,6 +185,10 @@ export interface EventEditorProps {
   failure?: string | null;
   /** The addresses the person goes by, for who an event with people on it is from. */
   own?: readonly Own[];
+  /** Who what is typed among the people might be the start of: the address book, and who was written to. */
+  suggest?(typed: string, without: readonly string[]): Person[];
+  /** Where it might be, for what is typed as the place to be chosen from. */
+  places?: readonly Place[];
   onChange(form: EventForm): void;
   /** Keeps it. `tell` is whether the people on it are to be told, which is asked each time. */
   onSave(tell: boolean): void;
@@ -110,6 +197,8 @@ export interface EventEditorProps {
   onDelete?(tell: boolean): void;
   /** Answers the invitation the event is, and tells whoever it is from. */
   onAnswer?(answer: Answer): void;
+  /** Suggests another time for it to whoever it is from. Not there where that cannot be done. */
+  onPropose?(start: Date, end: Date, comment: string): void;
   /** Moves the form to a window of its own. Not there where it already is in one. */
   onPopOut?(): void;
 }
@@ -132,6 +221,14 @@ export function EventEditor(props: EventEditorProps) {
   const others =
     form.invited === null && (hadPeople || form.people.trim() !== '');
   const selves = props.own ?? [];
+  /** Whether another time is being written out, to suggest to whoever invited. */
+  const [proposing, setProposing] = useState(false);
+  /** What is being typed after the last of the people, before it is one of them. */
+  const [typing, setTyping] = useState('');
+  const invitees = (typed(form.people) ?? []).map((person) => ({
+    name: form.names[person.email.toLowerCase()] ?? person.name ?? null,
+    email: person.email,
+  }));
   const set = (change: Partial<EventForm>) =>
     props.onChange({ ...form, ...change });
   const calendar = calendars.find((each) => each.id === form.calendarId);
@@ -164,7 +261,7 @@ export function EventEditor(props: EventEditorProps) {
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (busy || problem) return;
+    if (busy || problem || typing.trim() !== '') return;
     rememberParts(open);
     // With others on it, whether to tell them is asked every time.
     if (others) setAsking('save');
@@ -369,13 +466,27 @@ export function EventEditor(props: EventEditorProps) {
           'place',
           'Place',
           'place',
-          <input
-            aria-label="Place"
-            placeholder="Where"
-            maxLength={200}
-            value={form.place}
-            onChange={(event) => set({ place: event.target.value })}
-          />,
+          <>
+            <input
+              aria-label="Place"
+              placeholder="Where"
+              maxLength={200}
+              list="event-places"
+              value={form.place}
+              onChange={(event) => set({ place: event.target.value })}
+            />
+            {/* What the browser offers under the field as it is typed in. */}
+            <datalist id="event-places">
+              {(props.places ?? []).map((each) => (
+                <option
+                  key={`${each.place}|${each.of ?? ''}`}
+                  value={each.place}
+                >
+                  {each.of ?? ''}
+                </option>
+              ))}
+            </datalist>
+          </>,
         )}
         {form.invited ? (
           <div className="event-invited">
@@ -392,6 +503,27 @@ export function EventEditor(props: EventEditorProps) {
                 onAnswer={props.onAnswer}
               />
             ) : null}
+            {props.onPropose && !proposing ? (
+              <button
+                type="button"
+                className="button button-small"
+                onClick={() => setProposing(true)}
+              >
+                Suggest another time
+              </button>
+            ) : null}
+            {props.onPropose && proposing ? (
+              <ProposeForm
+                start={formSpan(form).start}
+                end={formSpan(form).end}
+                busy={busy}
+                onCancel={() => setProposing(false)}
+                onSend={(start, end, comment) => {
+                  setProposing(false);
+                  props.onPropose?.(start, end, comment);
+                }}
+              />
+            ) : null}
           </div>
         ) : (
           field(
@@ -399,11 +531,38 @@ export function EventEditor(props: EventEditorProps) {
             'People',
             'contacts',
             <div className="event-people">
-              <input
-                aria-label="People"
-                placeholder="Addresses, with commas between them"
-                value={form.people}
-                onChange={(event) => set({ people: event.target.value })}
+              <Recipients
+                id="event-people"
+                label="People"
+                className="event-recipients"
+                value={{ list: invitees, typing }}
+                suggest={(text) =>
+                  props.suggest?.(text, [
+                    ...invitees.map((each) => each.email),
+                    ...selves.map((each) => each.email),
+                  ]) ?? []
+                }
+                onChange={(value) => {
+                  setTyping(value.typing);
+                  const list = value.list.map((each) => ({
+                    ...each,
+                    email: each.email.trim().toLowerCase(),
+                  }));
+                  set({
+                    people: [...new Set(list.map((each) => each.email))].join(
+                      ', ',
+                    ),
+                    // Someone chosen from those known is known by name; someone typed is their address.
+                    names: Object.fromEntries(
+                      list
+                        .map((each) => [
+                          each.email,
+                          each.name?.trim() || form.names[each.email] || '',
+                        ])
+                        .filter(([, name]) => name !== ''),
+                    ),
+                  });
+                }}
               />
               {Object.keys(form.answers).length > 0 ? (
                 <ul className="event-answers" aria-label="What they answered">
@@ -607,7 +766,11 @@ export function EventEditor(props: EventEditorProps) {
             </Button>
           ) : null}
           <span className="event-foot-gap">
-            {problem && form.title !== '' ? (
+            {typing.trim() !== '' ? (
+              <span className="muted small">
+                “{typing.trim()}” is not an address yet.
+              </span>
+            ) : problem && form.title !== '' ? (
               <span className="muted small">{problem}</span>
             ) : null}
           </span>

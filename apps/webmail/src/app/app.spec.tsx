@@ -306,7 +306,9 @@ describe('the webmail', () => {
       ),
     ).toBeInTheDocument();
     expect(
-      within(reader()).getByText('This bears your name, and is not from you.'),
+      within(reader()).getByText(
+        'This bears your name, and is not from an address you write from here.',
+      ),
     ).toBeInTheDocument();
 
     // The first there is from someone says so; the next from them does not.
@@ -324,6 +326,67 @@ describe('the webmail', () => {
       ).not.toBeInTheDocument(),
     );
     expect(within(reader()).queryByText(/forged/)).not.toBeInTheDocument();
+  });
+
+  it('is told which other addresses are the reader’s own, and stops warning of them', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({
+      subject: 'Note to self',
+      from: 'Ann <ann@elsewhere.example>',
+      text: 'Remember the milk',
+    });
+    await renderApp(backend);
+    await userEvent.click(
+      await screen.findByRole('link', { name: /Note to self/ }),
+    );
+    const warning = await within(reader()).findByText(
+      'This bears your name, and is not from an address you write from here.',
+    );
+    await userEvent.click(
+      within(warning.closest('p') as HTMLElement).getByRole('button', {
+        name: 'It is mine',
+      }),
+    );
+    expect(
+      await screen.findByText('ann@elsewhere.example is one of your addresses'),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(reader()).queryByText(/This bears your name/),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      within(reader()).queryByText(/This is the first message/),
+    ).not.toBeInTheDocument();
+
+    // It is in the settings, where another is added and one is taken off.
+    await userEvent.click(
+      screen.getAllByRole('link', { name: 'Settings' })[0] as HTMLElement,
+    );
+    const settings = await screen.findByRole('region', { name: 'Settings' });
+    const mine = await within(settings).findByRole('list', {
+      name: 'Your other addresses',
+    });
+    expect(mine).toHaveTextContent('ann@elsewhere.example');
+    await userEvent.type(
+      within(settings).getByLabelText('Another address of yours'),
+      'Ann@Work.example',
+    );
+    await userEvent.click(
+      within(settings).getByRole('button', { name: 'Add address' }),
+    );
+    expect(
+      await within(mine).findByText('ann@work.example'),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      within(mine).getByRole('button', {
+        name: 'Remove ann@elsewhere.example',
+      }),
+    );
+    await waitFor(() =>
+      expect(mine).not.toHaveTextContent('ann@elsewhere.example'),
+    );
+    expect(mine).toHaveTextContent('ann@work.example');
   });
 
   it('remembers who sent what is reported as junk, and forgets when it is moved back', async () => {

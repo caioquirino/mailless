@@ -9,7 +9,23 @@ import { durationMillis, isTimeZone, zonedToUtc } from './time.js';
  */
 
 /** What a message that carries an event is for (RFC 5546). */
-export type Method = 'REQUEST' | 'REPLY' | 'CANCEL' | 'PUBLISH';
+export type Method =
+  | 'REQUEST'
+  | 'REPLY'
+  | 'CANCEL'
+  | 'PUBLISH'
+  /** Someone invited suggests another time, and whoever invited says no to that. */
+  | 'COUNTER'
+  | 'DECLINECOUNTER';
+
+const METHODS: readonly string[] = [
+  'REQUEST',
+  'REPLY',
+  'CANCEL',
+  'PUBLISH',
+  'COUNTER',
+  'DECLINECOUNTER',
+];
 
 type Event = Record<string, unknown>;
 
@@ -273,6 +289,8 @@ export interface WriteOptions {
   method?: Method;
   /** For a reply: the one of those invited who answers. */
   attendee?: string;
+  /** A word to go with it: why another time is suggested, say. */
+  comment?: string;
   now?: Date;
 }
 
@@ -288,6 +306,14 @@ export function toICalendar(event: Event, options: WriteOptions = {}): string {
     ...(options.method ? [`METHOD:${options.method}`] : []),
     ...eventLines(event, stamp, only),
   ];
+  if (options.comment?.trim()) {
+    // Inside the event, before it ends.
+    lines.splice(
+      lines.length - 1,
+      0,
+      `COMMENT:${escape(options.comment.trim())}`,
+    );
+  }
   // What was changed for one of its times is an event of its own, that says which time it is.
   const overrides = isObject(event['recurrenceOverrides'])
     ? event['recurrenceOverrides']
@@ -550,6 +576,8 @@ function readEvent(lines: readonly Line[]): Event | null {
       '1': { '@type': 'VirtualLocation', uri: link.value.trim() },
     };
   }
+  const comment = one('COMMENT');
+  if (comment?.value) event['comment'] = unescape(comment.value);
   const status = one('STATUS')?.value.trim().toUpperCase();
   if (status === 'CANCELLED') event['status'] = 'cancelled';
   else if (status === 'TENTATIVE') event['status'] = 'tentative';
@@ -696,11 +724,8 @@ export function fromICalendar(text: string): Read {
   }
   return {
     method:
-      method === 'REQUEST' ||
-      method === 'REPLY' ||
-      method === 'CANCEL' ||
-      method === 'PUBLISH'
-        ? method
+      method !== undefined && METHODS.includes(method)
+        ? (method as Method)
         : null,
     events: whole,
   };

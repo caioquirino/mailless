@@ -4,6 +4,7 @@ import {
   CAPABILITY_BLOB,
   CAPABILITY_CONTACTS,
   CAPABILITY_BLOCKED_SENDERS,
+  CAPABILITY_CALENDAR_PROPOSALS,
   CAPABILITY_CALENDARS,
   CAPABILITY_TAGS,
   CAPABILITY_MDN,
@@ -47,6 +48,7 @@ const USING = [
   CAPABILITY_PRINCIPALS,
   CAPABILITY_CONTACTS,
   CAPABILITY_BLOCKED_SENDERS,
+  CAPABILITY_CALENDAR_PROPOSALS,
   CAPABILITY_CALENDARS,
   CAPABILITY_TAGS,
 ];
@@ -8675,6 +8677,78 @@ export function describeJmapConformance(
       expect((await stored(id)).status).toBe('cancelled');
     });
 
+    it('suggests another time to whoever invited, and says no to such a suggestion', async () => {
+      // Someone else's event: another time may be suggested for it, and nothing changes by that.
+      const theirs = (
+        await h.call('CalendarEvent/set', {
+          create: {
+            e: {
+              calendarIds: { [calendarId]: true },
+              uid: 'review@example.org',
+              title: 'Quarterly review',
+              start: '2026-10-12T13:00:00',
+              duration: 'PT1H30M',
+              timeZone: 'Europe/Berlin',
+              replyTo: { imip: 'mailto:marta@example.org' },
+              participants: {
+                marta: person('marta@example.org', { roles: { owner: true } }),
+                me: person('me@example.com'),
+              },
+            },
+          },
+        })
+      ).created.e.id;
+      expect(
+        await h.call('CalendarProposal/send', {
+          eventId: theirs,
+          start: '2026-10-13T10:00:00',
+          comment: 'I am away on the 12th',
+        }),
+      ).toMatchObject({ sent: true });
+      expect(h.sent).toHaveLength(1);
+      expect(h.sent[0]?.envelope).toEqual({
+        mailFrom: 'me@example.com',
+        rcptTo: ['marta@example.org'],
+      });
+      expect(h.sent[0]?.message).toContain(
+        'Subject: Another time suggested: Quarterly review',
+      );
+      expect(h.sent[0]?.message).toContain('method=COUNTER');
+      const suggestion = carried(h.sent[0]?.message ?? '');
+      expect(suggestion).toContain('METHOD:COUNTER');
+      // Berlin is two hours ahead of UTC in October.
+      expect(suggestion).toContain('DTSTART:20261013T080000Z');
+      expect(suggestion).toContain('COMMENT:I am away on the 12th');
+      expect(suggestion.match(/^ATTENDEE.*$/gm)).toHaveLength(1);
+      expect((await stored(theirs)).start).toBe('2026-10-12T13:00:00');
+
+      // One's own event: it is for the others to suggest, and for oneself to say no.
+      const own = (
+        await h.call('CalendarEvent/set', { create: { e: lunch() } })
+      ).created.e.id;
+      await h.fail('CalendarProposal/send', {
+        eventId: own,
+        start: '2026-10-16T13:00:00',
+      });
+      await h.fail('CalendarProposal/decline', {
+        eventId: own,
+        to: 'stranger@example.org',
+      });
+      await h.fail('CalendarProposal/decline', {
+        eventId: theirs,
+        to: 'marta@example.org',
+      });
+      await h.call('CalendarProposal/decline', {
+        eventId: own,
+        to: 'Ann@example.net',
+      });
+      expect(h.sent[1]?.envelope.rcptTo).toEqual(['ann@example.net']);
+      expect(h.sent[1]?.message).toContain('Subject: Time kept: Lunch');
+      expect(carried(h.sent[1]?.message ?? '')).toContain(
+        'METHOD:DECLINECOUNTER',
+      );
+    });
+
     it('reads the event out of a calendar file, without keeping it', async () => {
       const { blobId } = await h.server.upload(
         AUTH,
@@ -8696,6 +8770,37 @@ export function describeJmapConformance(
         ),
         'text/calendar',
       );
+      // A suggestion of another time is read as one, with the word that goes with it.
+      const { blobId: counter } = await h.server.upload(
+        AUTH,
+        AUTH.accountId,
+        encoder.encode(
+          [
+            'BEGIN:VCALENDAR',
+            'METHOD:COUNTER',
+            'BEGIN:VEVENT',
+            'UID:lunch@example.com',
+            'DTSTART:20261016T120000Z',
+            'DTEND:20261016T130000Z',
+            'ORGANIZER:mailto:me@example.com',
+            'ATTENDEE;PARTSTAT=TENTATIVE:mailto:ann@example.net',
+            'COMMENT:Friday suits me better',
+            'END:VEVENT',
+            'END:VCALENDAR',
+          ].join('\r\n'),
+        ),
+        'text/calendar',
+      );
+      expect(
+        (await h.call('CalendarEvent/parse', { blobIds: [counter] })).parsed[
+          counter
+        ],
+      ).toMatchObject({
+        method: 'counter',
+        comment: 'Friday suits me better',
+        utcStart: '2026-10-16T12:00:00Z',
+        utcEnd: '2026-10-16T13:00:00Z',
+      });
       const notOne = await h.upload('Subject: not a calendar\r\n\r\nHello');
       const { parsed, notParsable, notFound } = await h.call(
         'CalendarEvent/parse',
