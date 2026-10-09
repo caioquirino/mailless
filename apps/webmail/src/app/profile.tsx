@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router';
 import { Button, Icon } from '@mailless/ui';
 import { Face } from './face';
 import { formatSize } from '../lib/format';
@@ -114,6 +115,15 @@ export function ProfileMenu() {
             </div>
           ) : null}
           <div className="profile-links">
+            {/* On a phone the bar at the top has no room for it: it is here instead. */}
+            <Link
+              className="profile-link profile-settings"
+              to="/settings"
+              onClick={() => setOpen(false)}
+            >
+              <Icon name="settings" />
+              Settings
+            </Link>
             {config.accountUrl ? (
               <a className="profile-link" href={config.accountUrl}>
                 <Icon name="account" />

@@ -32,6 +32,7 @@ import { answerPushes, Notifications } from '../lib/notifications';
 import { usePreference } from '../lib/preference';
 import { MessageList } from './list';
 import { ProfileMenu } from './profile';
+import { PullMark, usePull } from './pull';
 import { Reader } from './reader';
 import { SearchBar } from './search';
 import { SettingsPage } from './settings';
@@ -255,6 +256,10 @@ export function MailShell() {
     },
     [store, act, compose],
   );
+  // Pulled down on a phone: what changed is asked for, and the page stays as it is.
+  const pull = usePull(() =>
+    act(() => Promise.all([store.refresh(), store.contacts.refresh()])),
+  );
   const mail = useMemo<Mail>(
     () => ({ store, compose, act, say, unsend, notifications }),
     [store, compose, act, say, unsend, notifications],
@@ -304,7 +309,8 @@ export function MailShell() {
     <MailProvider value={mail}>
       <div className="shell">
         <TopBar onMenu={toggleMenu} />
-        <div className="body">
+        <div className="body" {...pull.touch}>
+          <PullMark pull={pull} />
           <Rail />
           {inContacts ? null : (
             <Sidebar open={menu} folded={folded} onClose={closeMenu} />
@@ -404,7 +410,7 @@ function TopBar({ onMenu }: { onMenu(): void }) {
       <div className="topbar-user">
         <NavLink
           to="/settings"
-          className="icon-button"
+          className="icon-button topbar-settings"
           aria-label="Settings"
           title="Settings"
         >

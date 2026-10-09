@@ -1040,6 +1040,58 @@ describe('the webmail', () => {
     );
   });
 
+  it('has the settings in the account menu too, for a phone with no room for them in the bar', async () => {
+    const backend = await fakeBackend();
+    await renderApp(backend);
+    await screen.findByRole('region', { name: 'Inbox' });
+
+    await userEvent.click(screen.getByRole('button', { name: /^Account: / }));
+    const account = screen.getByRole('dialog', { name: 'Account' });
+    await userEvent.click(
+      within(account).getByRole('link', { name: 'Settings' }),
+    );
+    expect(
+      await screen.findByRole('region', { name: 'Settings' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Account' })).toBeNull();
+  });
+
+  it('checks for new mail when the page is pulled down, without loading it again', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Plans' });
+    await renderApp(backend);
+    const inbox = await screen.findByRole('region', { name: 'Inbox' });
+    await within(inbox).findByText('Plans');
+    await backend.deliver({ subject: 'Just in' });
+    const finger = (clientY: number) => ({
+      touches: [{ clientX: 100, clientY }],
+    });
+
+    // Not far enough: nothing is asked.
+    fireEvent.touchStart(inbox, finger(100));
+    fireEvent.touchMove(inbox, finger(160));
+    fireEvent.touchEnd(inbox);
+    expect(screen.queryByText('Checking for new mail…')).toBeNull();
+
+    // Where the list has been scrolled, a finger drawn down only scrolls it back.
+    inbox.scrollTop = 40;
+    fireEvent.touchStart(inbox, finger(100));
+    fireEvent.touchMove(inbox, finger(400));
+    fireEvent.touchEnd(inbox);
+    expect(screen.queryByText('Checking for new mail…')).toBeNull();
+    expect(within(inbox).queryByText('Just in')).not.toBeInTheDocument();
+
+    inbox.scrollTop = 0;
+    fireEvent.touchStart(inbox, finger(100));
+    fireEvent.touchMove(inbox, finger(400));
+    fireEvent.touchEnd(inbox);
+    expect(screen.getByText('Checking for new mail…')).toBeInTheDocument();
+    expect(await within(inbox).findByText('Just in')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText('Checking for new mail…')).toBeNull(),
+    );
+  });
+
   it('sends at once where the server cannot hold a message', async () => {
     const backend = await fakeBackend();
     await renderApp(backend);

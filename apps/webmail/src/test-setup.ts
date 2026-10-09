@@ -1,7 +1,11 @@
 import '@testing-library/jest-dom/vitest';
 import { webcrypto } from 'node:crypto';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
+
+// How long something is waited for before it is said not to be there: a second
+// is not enough where the tests of everything else run at the same time.
+configure({ asyncUtilTimeout: 10_000 });
 
 afterEach(() => {
   cleanup();

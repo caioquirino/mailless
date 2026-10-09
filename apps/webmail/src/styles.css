@@ -57,6 +57,13 @@ input[type='checkbox'] {
 
 /* ------------------------------------------------------------ layout */
 
+/* Nothing of the page itself scrolls, so a pull at the top of a list is ours
+   to answer: the browser does not load the page again for it. */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
 .shell {
   display: flex;
   flex-direction: column;
@@ -141,6 +148,11 @@ input[type='checkbox'] {
 .profile {
   position: relative;
   margin-left: var(--space-1);
+}
+
+/* In the bar at the top where there is room for it; here only on a phone. */
+.profile-link.profile-settings {
+  display: none;
 }
 
 .profile-button {
@@ -594,6 +606,7 @@ a.icon-button {
   background: var(--surface);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .list {
@@ -857,6 +870,31 @@ a.icon-button {
   text-decoration: none;
 }
 
+/* The whole line opens the conversation: beside the box that selects it, around
+   what is attached, and out to both edges. */
+.row-link::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+}
+
+/* Above within the line only: the bar over the list still passes over all of it. */
+.row-item {
+  isolation: isolate;
+}
+
+/* What the line holds that is pressed for itself stays above that. */
+.row-item .check,
+.row-item .file,
+.row-actions {
+  z-index: 1;
+}
+
+.row-item .check,
+.row-item .file {
+  position: relative;
+}
+
 .row-text {
   display: grid;
   flex: 1;
@@ -952,10 +990,16 @@ a.icon-button {
 /* The messages in the middle of a long conversation, as a count on the line they would be on. */
 .tucked {
   position: relative;
+  /* Its lines go behind its count, and behind nothing else. */
+  isolation: isolate;
   display: flex;
   height: 3rem;
   align-items: center;
   border-bottom: 1px solid var(--line);
+}
+
+.tucked:hover {
+  background: var(--hover);
 }
 
 .tucked::before,
@@ -963,7 +1007,15 @@ a.icon-button {
   position: absolute;
   right: 0;
   left: 0;
+  z-index: -1;
   border-top: 1px solid var(--line);
+  content: '';
+}
+
+/* The whole line is the button, not only the count on it. */
+.tucked-count::after {
+  position: absolute;
+  inset: 0;
   content: '';
 }
 
@@ -976,8 +1028,6 @@ a.icon-button {
 }
 
 .tucked-count {
-  position: relative;
-  z-index: 1;
   display: grid;
   place-items: center;
   width: 2.5rem;
@@ -1821,6 +1871,51 @@ a.icon-button {
   text-align: right;
 }
 
+/* -------------------------------------------------------------- pull */
+
+/* Comes down from under the bar at the top as the page is pulled. */
+.pull-mark {
+  position: fixed;
+  top: 1.5rem;
+  left: 50%;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  box-shadow: var(--shadow-raised);
+  pointer-events: none;
+}
+
+.pull-ready,
+.pull-working {
+  color: var(--accent);
+}
+
+.pull-icon {
+  display: grid;
+}
+
+@keyframes pull-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pull-working {
+    transition: transform 160ms ease-out;
+  }
+
+  .pull-working .pull-icon {
+    animation: pull-turn 800ms linear infinite;
+  }
+}
+
 /* ------------------------------------------------------------- toast */
 
 .toast {
@@ -1923,9 +2018,43 @@ a.icon-button {
 
 /* One thing at a time: the list, or the conversation chosen from it. */
 @media (max-width: 48rem) {
+  /* Under a thumb: fewer things in the bar, each of them bigger and further apart. */
   .topbar {
-    gap: var(--space-1);
+    gap: var(--space-2);
+    height: 4rem;
     padding: 0 var(--space-2);
+  }
+
+  .menu-button {
+    width: 3rem;
+    height: 3rem;
+    color: var(--text);
+  }
+
+  .topbar-settings {
+    display: none;
+  }
+
+  .profile-link.profile-settings {
+    display: flex;
+  }
+
+  .search {
+    height: 3rem;
+    padding-left: var(--space-3);
+  }
+
+  .search-button {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .profile {
+    margin-left: 0;
+  }
+
+  .profile-button {
+    padding: 6px;
   }
 
   .brand,
@@ -2714,7 +2843,7 @@ a.button.write {
   /* Across the page, under the bar the search is in. */
   .search-panel {
     position: fixed;
-    top: 3.75rem;
+    top: 4rem;
     right: var(--space-2);
     left: var(--space-2);
   }
@@ -2741,4 +2870,151 @@ a.button.write {
 .avatar-photo {
   display: block;
   object-fit: cover;
+}
+
+/* -------------------------------------------------- under a finger */
+
+/* A finger is wider than a pointer and lands less exactly: on a phone what is
+   pressed is at least 2.75rem (44px) across, and has room around it. Last in
+   the file, so that it has the last word. */
+@media (max-width: 48rem) {
+  /* Smaller than this, an iPhone zooms the page in on whatever is typed in. */
+  input:not([type='checkbox'], [type='radio']),
+  select,
+  textarea,
+  .select-small,
+  .editor-text {
+    font-size: 1rem;
+  }
+
+  .icon-button,
+  .compose-head .icon-button,
+  .contacts-clear {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .button {
+    min-height: 2.75rem;
+  }
+
+  .button-small {
+    min-height: 2.5rem;
+    padding-inline: var(--space-3);
+  }
+
+  /* The mailboxes, in the drawer. */
+  .mailboxes {
+    gap: 2px;
+  }
+
+  .mailbox {
+    height: 3rem;
+    font-size: 1rem;
+  }
+
+  /* What can be done with a list, or with the conversation being read. */
+  .toolbar,
+  .reader .toolbar {
+    gap: var(--space-2);
+    min-height: 3.5rem;
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .toolbar .check {
+    margin-right: 0;
+  }
+
+  /* The box that selects: small to look at, with as much to press around it as a button has. */
+  input[type='checkbox'] {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .check {
+    justify-content: center;
+    align-self: stretch;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .row-item {
+    gap: var(--space-1);
+    padding: 0 var(--space-3) 0 var(--space-2);
+  }
+
+  .file {
+    min-height: 2.25rem;
+  }
+
+  /* What opens from a button: each line of it tall enough to press without its neighbour. */
+  .more-menu {
+    max-height: 70dvh;
+    overflow-y: auto;
+  }
+
+  .more-choice {
+    min-height: 3rem;
+    font-size: 1rem;
+  }
+
+  .suggestions {
+    right: var(--space-2);
+    left: var(--space-2);
+    width: auto;
+  }
+
+  .suggestion {
+    min-height: 3rem;
+  }
+
+  .search-word,
+  .search-checks label,
+  .contact-mail-row {
+    min-height: 2.75rem;
+  }
+
+  .search-word {
+    align-items: center;
+  }
+
+  /* Writing: who it goes to, the tools of the editor and its emoji. */
+  .chip,
+  .search-token {
+    height: 2.25rem;
+  }
+
+  .chip-remove {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  .editor-tools {
+    gap: var(--space-1);
+  }
+
+  .editor-tool {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+
+  .emoji-grid {
+    grid-template-columns: repeat(auto-fill, minmax(2.75rem, 1fr));
+  }
+
+  .emoji-choice {
+    height: 2.75rem;
+  }
+
+  .picture-handle {
+    right: -10px;
+    bottom: -10px;
+    width: 20px;
+    height: 20px;
+  }
+
+  /* What was just done is said above the bar along the bottom and the button to write, not over them. */
+  .toast {
+    bottom: 9rem;
+  }
 }
