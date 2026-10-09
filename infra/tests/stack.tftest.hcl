@@ -73,6 +73,19 @@ mock_provider "aws" {
     }
   }
 
+  override_resource {
+    target = aws_acm_certificate.mta_sts
+    values = {
+      arn = "arn:aws:acm:eu-west-1:123456789012:certificate/mock-mta-sts"
+      domain_validation_options = [{
+        domain_name           = "mta-sts.example.com"
+        resource_record_name  = "_validation.mta-sts.example.com."
+        resource_record_type  = "CNAME"
+        resource_record_value = "_value.acm-validations.aws."
+      }]
+    }
+  }
+
   # ARNs that IAM policies reference, so the policies can be inspected while planning.
   mock_resource "aws_s3_bucket" {
     defaults = {
@@ -1046,8 +1059,8 @@ run "with_hosted_zone_and_activation" {
   }
 
   assert {
-    condition     = length(aws_route53_record.mail) == 7
-    error_message = "Every mail DNS record must be created in the hosted zone."
+    condition     = length(aws_route53_record.mail) == 8
+    error_message = "Every mail DNS record must be created in the hosted zone, the one that says there is a TLS policy among them."
   }
 
   assert {
@@ -1065,6 +1078,117 @@ run "with_hosted_zone_and_activation" {
     condition     = output.auth.base_url == "https://auth.example.com" && output.auth.passkey_enrolment_url == "https://auth.example.com/passkeys/add"
     error_message = "The sign-in pages must be on auth.<domain> when the zone is managed here."
   }
+}
+
+run "mail_to_the_domain_is_kept_to_tls" {
+  command = plan
+
+  variables {
+    route53_zone_id = "Z0123456789ABCDEFGHIJ"
+  }
+
+  # Enforced unless said otherwise: to our inbound server and no other, over TLS.
+  assert {
+    condition = (
+      data.archive_file.mta_sts[0].source != null &&
+      local.mta_sts_policy == "version: STSv1\r\nmode: enforce\r\nmx: inbound-smtp.eu-west-1.amazonaws.com\r\nmax_age: 604800\r\n"
+    )
+    error_message = "The policy must be enforced, name the inbound server and hold for a week."
+  }
+
+  assert {
+    condition = (
+      output.dns_records["mta_sts"].name == "_mta-sts.example.com" &&
+      startswith(output.dns_records["mta_sts"].value, "v=STSv1; id=")
+    )
+    error_message = "A record must say that there is a policy, with an id that follows it."
+  }
+
+  # Served from the one name senders look at, to anyone, and by a function that can do nothing else.
+  assert {
+    condition = (
+      aws_apigatewayv2_domain_name.mta_sts[0].domain_name == "mta-sts.example.com" &&
+      aws_apigatewayv2_route.mta_sts[0].route_key == "GET /.well-known/mta-sts.txt" &&
+      aws_apigatewayv2_route.mta_sts[0].authorization_type == "NONE" &&
+      length(aws_route53_record.mta_sts) == 2
+    )
+    error_message = "The policy must be served from mta-sts.<domain>, without signing in."
+  }
+
+  assert {
+    condition     = length(data.aws_iam_policy_document.mta_sts[0].statement) == 1 && data.aws_iam_policy_document.mta_sts[0].statement[0].sid == "Logs"
+    error_message = "The function that hands out the policy may write its log and nothing else."
+  }
+
+  # Nobody is asked for reports until there is somewhere to send them.
+  assert {
+    condition     = !contains(keys(output.dns_records), "tls_reports") && output.dns_records["dmarc"].value == "v=DMARC1; p=quarantine"
+    error_message = "No reports may be asked for without an address for them."
+  }
+}
+
+run "tls_policy_can_be_tried_first_or_left_out" {
+  command = plan
+
+  variables {
+    route53_zone_id = "Z0123456789ABCDEFGHIJ"
+    mta_sts_mode    = "testing"
+  }
+
+  assert {
+    condition     = strcontains(local.mta_sts_policy, "mode: testing") && strcontains(local.mta_sts_policy, "max_age: 86400")
+    error_message = "A policy being tried must say so, and be held to for a day only."
+  }
+}
+
+run "no_tls_policy_without_a_zone_or_when_declined" {
+  command = plan
+
+  variables {
+    mta_sts_mode = "enforce"
+  }
+
+  # Without the zone there is no certificate for the name the policy is served from.
+  assert {
+    condition     = !contains(keys(output.dns_records), "mta_sts") && length(aws_lambda_function.mta_sts) == 0
+    error_message = "No policy may be announced that cannot be served."
+  }
+}
+
+run "rejects_an_unknown_tls_policy_mode" {
+  command = plan
+
+  variables {
+    mta_sts_mode = "strict"
+  }
+
+  expect_failures = [var.mta_sts_mode]
+}
+
+run "reports_go_to_an_address_when_one_is_given" {
+  command = plan
+
+  variables {
+    mail_report_address = "reports@example.com"
+  }
+
+  assert {
+    condition = (
+      output.dns_records["dmarc"].value == "v=DMARC1; p=quarantine; rua=mailto:reports@example.com" &&
+      output.dns_records["tls_reports"] == { name = "_smtp._tls.example.com", type = "TXT", value = "v=TLSRPTv1; rua=mailto:reports@example.com" }
+    )
+    error_message = "Both kinds of report must be asked for, at the address given."
+  }
+}
+
+run "rejects_a_report_address_that_is_not_one" {
+  command = plan
+
+  variables {
+    mail_report_address = "reports"
+  }
+
+  expect_failures = [var.mail_report_address]
 }
 
 run "sign_in_hostname_can_be_chosen" {
@@ -1147,6 +1271,15 @@ run "identity_closed_sign_up_with_passkeys" {
       aws_cognito_user_pool_client.jmap.explicit_auth_flows == toset(["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"])
     )
     error_message = "Unexpected app client configuration."
+  }
+
+  # A second step for whoever sets one up, and for nobody who has not.
+  assert {
+    condition = (
+      aws_cognito_user_pool.main.mfa_configuration == "OPTIONAL" &&
+      aws_cognito_user_pool.main.software_token_mfa_configuration[0].enabled
+    )
+    error_message = "A code from an authenticator app must be something a user can turn on, and not something asked of everyone."
   }
 
   # A passkey may replace the password, which stays: it is how a new user gets in to enrol one.

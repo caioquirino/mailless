@@ -35,7 +35,17 @@ locals {
 resource "aws_cognito_user_pool" "main" {
   name                = var.name
   deletion_protection = "ACTIVE"
-  mfa_configuration   = "OFF"
+
+  # A second step for whoever wants one: a code from an authenticator app,
+  # asked for after the password. It is set up in the admin interface, under
+  # "My account": the sign-in pages ask for the code and do not offer to set
+  # it up. Someone who turns it on signs in by password and code from then on,
+  # and is not offered their passkeys, which stand in for both already.
+  mfa_configuration = "OPTIONAL"
+
+  software_token_mfa_configuration {
+    enabled = true
+  }
 
   username_configuration {
     case_sensitive = false

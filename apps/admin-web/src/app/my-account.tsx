@@ -12,6 +12,7 @@ import {
   formatDate,
 } from './components';
 import { useServices } from './services';
+import { Authenticator } from './authenticator';
 
 export function MyAccountPage({ me }: { me: Me }) {
   return (
@@ -63,6 +64,9 @@ export function MyAccountPage({ me }: { me: Me }) {
       </Section>
       {me.capabilities.changeOwnPassword ? <ChangePassword /> : null}
       {me.capabilities.manageOwnPasskeys ? <Passkeys /> : null}
+      {me.capabilities.manageOwnAuthenticator ? (
+        <Authenticator username={me.username} />
+      ) : null}
       {me.account?.status === 'active' ? <AppPasswords /> : null}
     </>
   );

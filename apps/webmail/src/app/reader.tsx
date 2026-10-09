@@ -29,6 +29,7 @@ import { printMessage, type PicturesShown } from '../lib/print';
 import { Face } from './face';
 import { MoveTo } from './list';
 import { TagChip, TagPicker } from './tags';
+import { cautions } from '../lib/senders';
 import { useMail, useServices, useSynced, withUndo } from './services';
 
 /** A picture that came with a message is not shown in it when it is larger than this. */
@@ -42,6 +43,18 @@ export interface ReaderProps {
   back: string;
   /** What that list is called: "Inbox". */
   backTo: string;
+}
+
+/** The way to take something back, and with it what was done beside it. */
+function undoing(
+  back: (() => Promise<void>) | null,
+  also?: () => Promise<void>,
+): (() => Promise<void>) | null {
+  if (!also) return back;
+  return async () => {
+    await back?.();
+    await also();
+  };
 }
 
 export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
@@ -60,6 +73,7 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
     false,
   );
   const conversation = store.conversation(threadId, mailbox);
+  useSynced(store.blocked.made);
   /** Whether the tags of the conversation are being chosen. */
   const [tagging, setTagging] = useState(false);
   useSynced(store.tags.made);
@@ -152,15 +166,35 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
   );
   const firstTucked = conversation.findIndex((email) => tucked.has(email.id));
 
-  const leave = async (action: () => Promise<unknown>, done: string) => {
+  const leave = async (
+    action: () => Promise<unknown>,
+    done: string,
+    also?: () => Promise<void>,
+  ) => {
     setBusy(true);
     const mark = store.mark();
     const worked = await act(action);
     setBusy(false);
     if (!worked) return;
-    say(done, withUndo({ act, say }, store.undoSince(mark)));
+    say(done, withUndo({ act, say }, undoing(store.undoSince(mark), also)));
     void navigate(back);
   };
+
+  // Out of the junk by hand says its sender is wanted: they are blocked no more.
+  const unblocked =
+    mailbox?.role === 'junk'
+      ? [
+          ...new Set(
+            within.flatMap((email) => {
+              const address = email.from?.[0]?.email.toLowerCase();
+              return address &&
+                store.blocked.blocking(address)?.address === address
+                ? [address]
+                : [];
+            }),
+          ),
+        ]
+      : [];
 
   return (
     <section
@@ -206,7 +240,24 @@ export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
             icon="inbox"
             disabled={busy}
             onClick={() =>
-              void leave(() => store.restore(scope), `Moved back to ${wasIn}`)
+              void leave(
+                async () => {
+                  await store.restore(scope);
+                  for (const address of unblocked) {
+                    await store.blocked.unblock(address);
+                  }
+                },
+                unblocked.length > 0
+                  ? `Moved back to ${wasIn}. ${unblocked.join(' and ')} is no longer blocked.`
+                  : `Moved back to ${wasIn}`,
+                unblocked.length > 0
+                  ? async () => {
+                      for (const address of unblocked) {
+                        await store.blocked.block(address);
+                      }
+                    }
+                  : undefined,
+              )
             }
           >
             Move back to {wasIn}
@@ -399,8 +450,15 @@ interface MessageProps {
   onToggle(): void;
   /** This message and those after it in the conversation. */
   fromHere: readonly string[];
-  /** Does something after which the conversation is left, and says it was done. */
-  leave(action: () => Promise<unknown>, done: string): Promise<void>;
+  /**
+   * Does something after which the conversation is left, and says it was
+   * done. `also` takes back what was done beside it, when that is undone.
+   */
+  leave(
+    action: () => Promise<unknown>,
+    done: string,
+    also?: () => Promise<void>,
+  ): Promise<void>;
   /** Whether it is the only message of the conversation: without it, nothing is left to read. */
   alone: boolean;
 }
@@ -428,13 +486,31 @@ function Message(props: MessageProps) {
   const shown = useRef(new Map<string, PicturesShown>());
 
   /** Takes this one message away. The rest of the conversation stays open. */
-  const away = (action: () => Promise<unknown>, done: string) => {
-    if (props.alone) return void props.leave(action, done);
+  const away = (
+    action: () => Promise<unknown>,
+    done: string,
+    also?: () => Promise<void>,
+  ) => {
+    if (props.alone) return void props.leave(action, done, also);
     const mark = store.mark();
     void act(action).then((worked) => {
-      if (worked) say(done, withUndo({ act, say }, store.undoSince(mark)));
+      if (worked) {
+        say(done, withUndo({ act, say }, undoing(store.undoSince(mark), also)));
+      }
     });
   };
+  useSynced(store.blocked.made);
+  const own =
+    sender !== undefined &&
+    identities.some(
+      (identity) => identity.email.toLowerCase() === sender.email.toLowerCase(),
+    );
+  const blocked = sender ? store.blocked.blocking(sender.email) : undefined;
+  const blockable = store.blocked.available && sender !== undefined && !own;
+  // Reporting junk remembers who sent it. Not someone in the address book:
+  // one slip would hide everything a friend writes.
+  const remembers =
+    blockable && !blocked && !store.contacts.cardFor(sender.email);
   const choices: Array<Choice | null | false> = [
     canSend && {
       label: 'Reply',
@@ -477,7 +553,17 @@ function Message(props: MessageProps) {
       !email.mailboxIds[junk.id] && {
         label: 'Report as junk',
         icon: 'junk',
-        act: () => away(() => store.move([email.id], junk.id), 'Moved to Junk'),
+        act: () =>
+          away(
+            async () => {
+              await store.move([email.id], junk.id);
+              if (remembers) await store.blocked.block(sender.email);
+            },
+            remembers
+              ? `Moved to Junk. More from ${sender.email} will go there too.`
+              : 'Moved to Junk',
+            remembers ? () => store.blocked.unblock(sender.email) : undefined,
+          ),
       },
     junk !== undefined &&
       !email.mailboxIds[junk.id] && {
@@ -493,6 +579,34 @@ function Message(props: MessageProps) {
             'Reported as phishing, and moved to Junk',
           ),
       },
+    blockable &&
+      (blocked
+        ? {
+            label: `Stop blocking ${blocked.address}`,
+            icon: 'junk' as const,
+            act: () =>
+              void act(() => store.blocked.unblock(blocked.address)).then(
+                (worked) => {
+                  if (worked) say(`${blocked.address} is no longer blocked`);
+                },
+              ),
+          }
+        : {
+            label: `Block ${sender.email}`,
+            icon: 'junk' as const,
+            act: () =>
+              void act(() => store.blocked.block(sender.email)).then(
+                (worked) => {
+                  if (!worked) return;
+                  say(
+                    `More from ${sender.email} will go to Junk`,
+                    withUndo({ act, say }, () =>
+                      store.blocked.unblock(sender.email),
+                    ),
+                  );
+                },
+              ),
+          }),
     sender !== undefined && {
       label: `Add ${who} to contacts`,
       icon: 'contacts',
@@ -614,6 +728,7 @@ function Message(props: MessageProps) {
               <> · Bcc: {formatAddresses(email.bcc)}</>
             ) : null}
           </p>
+          <Cautions email={email} />
           {loaded ? (
             <>
               <Body
@@ -832,6 +947,99 @@ function useInlineImages(email: Email, html: string): Record<string, string> {
     };
   }, [client, wanted]);
   return images;
+}
+
+/** What there is to know about who a message is from, before believing it. */
+function Cautions({ email }: { email: Email }) {
+  const { store, act, say } = useMail();
+  useSynced(store.identities);
+  useSynced(store.contacts.cards);
+  useSynced(store.blocked.made);
+  const sender = email.from?.[0];
+  const own = store.identities.values();
+  const found = cautions(email, { own, cards: store.contacts.cards.values() });
+  const blocked = sender ? store.blocked.blocking(sender.email) : undefined;
+  // Worth asking of what arrived from someone who is not in the address book.
+  const stranger =
+    sender !== undefined &&
+    !email.keywords['$draft'] &&
+    !own.some(
+      (each) => each.email.toLowerCase() === sender.email.toLowerCase(),
+    ) &&
+    !store.contacts.cardFor(sender.email);
+  const [first, setFirst] = useState(false);
+  useEffect(() => {
+    setFirst(false);
+    if (!stranger) return undefined;
+    let current = true;
+    void store.firstTimes.of(email).then((is) => {
+      if (current) setFirst(is);
+    });
+    return () => {
+      current = false;
+    };
+    // The message is what is asked about: another one is another question.
+  }, [store, email.id, stranger]);
+  if (!sender) return null;
+
+  return (
+    <>
+      {found.map((caution) =>
+        caution.kind === 'forged' ? (
+          <p key="forged" className="notice notice-error caution" role="note">
+            <strong>This message may be forged.</strong> It did not pass the
+            check that it comes from {caution.domain}, or it was reported as
+            phishing. Be careful with its links and with what is attached.
+          </p>
+        ) : caution.kind === 'unverified' ? (
+          <p
+            key="unverified"
+            className="notice notice-warning caution"
+            role="note"
+          >
+            <strong>Nothing confirms where this comes from.</strong> It says{' '}
+            {caution.domain}, and neither that domain nor the server that sent
+            it vouches for it. Be careful if it asks for something.
+          </p>
+        ) : (
+          <p
+            key="namesake"
+            className="notice notice-warning caution"
+            role="note"
+          >
+            <strong>
+              {caution.own
+                ? 'This bears your name, and is not from you.'
+                : `${caution.name} is in your contacts with another address.`}
+            </strong>{' '}
+            This message comes from {sender.email}.
+          </p>
+        ),
+      )}
+      {blocked ? (
+        <p className="notice caution small" role="note">
+          You blocked {blocked.address}: what it sends goes to Junk.{' '}
+          <button
+            type="button"
+            className="button button-small"
+            onClick={() =>
+              void act(() => store.blocked.unblock(blocked.address)).then(
+                (worked) => {
+                  if (worked) say(`${blocked.address} is no longer blocked`);
+                },
+              )
+            }
+          >
+            Stop blocking
+          </button>
+        </p>
+      ) : first ? (
+        <p className="notice caution small" role="note">
+          This is the first message you have from {sender.email}.
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 function HtmlPart(props: {

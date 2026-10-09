@@ -71,6 +71,42 @@ variable "dmarc_policy" {
   }
 }
 
+variable "mail_report_address" {
+  description = <<-EOT
+    Where other mail services send their daily reports about the domain: who
+    sent mail in its name and whether it passed (DMARC), and how delivery to
+    it over TLS went (TLS reporting). The reports are files for a program to
+    read, several a day, so give an address kept for them. Null asks for no
+    reports. An address at another domain has to say that it accepts them
+    (RFC 7489, section 7.1), which this stack cannot do for it.
+  EOT
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.mail_report_address == null ? true : can(regex("^[^@\\s,;!]+@[^@\\s,;!]+$", var.mail_report_address))
+    error_message = "mail_report_address must be an email address or null."
+  }
+}
+
+variable "mta_sts_mode" {
+  description = <<-EOT
+    What other mail servers are told about sending to the domain over TLS
+    (MTA-STS): "enforce" has them hold mail back sooner than send it in the
+    clear or to a server that is not ours, "testing" has them only report
+    what would have been held back, and null publishes nothing. Only used
+    when route53_zone_id is set: the policy is served from mta-sts.<domain>,
+    which needs a certificate.
+  EOT
+  type        = string
+  default     = "enforce"
+
+  validation {
+    condition     = var.mta_sts_mode == null ? true : contains(["enforce", "testing"], var.mta_sts_mode)
+    error_message = "mta_sts_mode must be enforce, testing or null."
+  }
+}
+
 variable "alarm_email" {
   description = "Address that is told when bounce or complaint rates climb, or when mail could not be processed. AWS sends a confirmation link to it first. Leave null to have the alarms visible in CloudWatch only."
   type        = string

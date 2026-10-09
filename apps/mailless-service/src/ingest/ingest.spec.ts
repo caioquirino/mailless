@@ -18,7 +18,14 @@ const directory = await InMemoryDirectory.from({
 function sesEvent(
   messageId: string,
   recipients: string[],
-  verdicts: { spam?: string; virus?: string } = {},
+  verdicts: {
+    spam?: string;
+    virus?: string;
+    spf?: string;
+    dkim?: string;
+    dmarc?: string;
+    dmarcPolicy?: string;
+  } = {},
 ): SESEvent {
   return {
     Records: [
@@ -31,6 +38,12 @@ function sesEvent(
             recipients,
             spamVerdict: { status: verdicts.spam ?? 'PASS' },
             virusVerdict: { status: verdicts.virus ?? 'PASS' },
+            spfVerdict: { status: verdicts.spf ?? 'PASS' },
+            dkimVerdict: { status: verdicts.dkim ?? 'PASS' },
+            dmarcVerdict: { status: verdicts.dmarc ?? 'PASS' },
+            ...(verdicts.dmarcPolicy
+              ? { dmarcPolicy: verdicts.dmarcPolicy }
+              : {}),
           },
         },
       },
@@ -137,6 +150,65 @@ describe('ingest', () => {
     );
     expect(await emails('acc-me')).toHaveLength(1);
     expect(await emails('acc-team')).toHaveLength(1);
+  });
+
+  it('sets aside mail that fails its domain’s own check, when the domain asks for that', async () => {
+    store('f1');
+    await run(
+      sesEvent('f1', ['me@example.com'], {
+        dmarc: 'FAIL',
+        dmarcPolicy: 'reject',
+      }),
+    );
+    expect(await emails('acc-me')).toMatchObject([
+      { roles: ['junk'], keywords: { $junk: true, $phishing: true } },
+    ]);
+  });
+
+  it('delivers mail that fails a check its domain only watches, with a warning on it', async () => {
+    store('f2');
+    await run(
+      sesEvent('f2', ['me@example.com'], {
+        dmarc: 'FAIL',
+        dmarcPolicy: 'none',
+      }),
+    );
+    expect(await emails('acc-me')).toMatchObject([
+      { roles: ['inbox'], keywords: { $phishing: true } },
+    ]);
+  });
+
+  it('marks mail nothing vouches for, and no other', async () => {
+    store('f3');
+    await run(
+      sesEvent('f3', ['me@example.com'], {
+        spf: 'FAIL',
+        dkim: 'GRAY',
+        dmarc: 'GRAY',
+      }),
+    );
+    expect(await emails('acc-me')).toMatchObject([
+      { roles: ['inbox'], keywords: { 'mailless-unverified': true } },
+    ]);
+
+    // Signed by nobody, and sent from where its envelope says: something vouches for it.
+    store('f4');
+    await run(
+      sesEvent('f4', ['alias@example.com'], { dkim: 'GRAY', dmarc: 'GRAY' }),
+    );
+    // The checks did not run: nothing is known, and nothing is said.
+    store('f5');
+    await run(
+      sesEvent('f5', ['me@example.com'], {
+        spf: 'DISABLED',
+        dkim: 'DISABLED',
+        dmarc: 'DISABLED',
+      }),
+    );
+    const marked = (await emails('acc-me')).filter(
+      (email) => Object.keys(email.keywords as object).length > 0,
+    );
+    expect(marked).toHaveLength(1);
   });
 
   it('files spam under Junk with the $junk keyword', async () => {

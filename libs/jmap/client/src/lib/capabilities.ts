@@ -1,5 +1,6 @@
 import {
   CAPABILITY_BLOB,
+  CAPABILITY_BLOCKED_SENDERS,
   CAPABILITY_CONTACTS,
   CAPABILITY_CORE,
   CAPABILITY_MAIL,
@@ -30,6 +31,7 @@ const BY_TYPE: Record<string, string> = {
   AddressBook: CAPABILITY_CONTACTS,
   ContactCard: CAPABILITY_CONTACTS,
   Tag: CAPABILITY_TAGS,
+  BlockedSender: CAPABILITY_BLOCKED_SENDERS,
 };
 
 /** Copying a blob between accounts is part of the core (RFC 8620 §6.3); the rest of Blob is RFC 9404. */

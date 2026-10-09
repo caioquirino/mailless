@@ -1,6 +1,6 @@
 import { SetFailure } from '@mailless/jmap-core';
 import type { JmapServer } from '@mailless/jmap-server';
-import type { SESEvent, SESEventRecord } from 'aws-lambda';
+import type { SESEvent, SESEventRecord, SESReceipt } from 'aws-lambda';
 
 /** Where SES leaves raw messages before they are imported. */
 export interface InboundStore {
@@ -25,6 +25,37 @@ export type IngestOutcome =
   | 'discarded-virus'
   | 'invalid-message'
   | 'missing-object';
+
+/**
+ * Whether the sender is who the message says: what the receiving side's
+ * checks of it came to (SPF, DKIM and DMARC), in one word.
+ *
+ * - `failed`: the domain in the From line publishes how its mail is signed,
+ *   and this message is not signed so. It is what forged mail looks like.
+ * - `unverified`: nothing vouches for the message, and the domain asks for
+ *   nothing. Not a sign of forgery, and no reason to believe the From line.
+ * - `ok`: something vouches for it, or the checks did not run.
+ */
+export type SenderCheck = 'ok' | 'unverified' | 'failed';
+
+/** On mail that claims a sender its domain does not vouch for (the IANA keyword for it). */
+export const PHISHING = '$phishing';
+/** On mail nothing vouches for. Ours: there is no registered keyword for it. */
+export const UNVERIFIED = 'mailless-unverified';
+
+const vouchesNot = (verdict: { status: string } | undefined): boolean =>
+  verdict?.status === 'FAIL' || verdict?.status === 'GRAY';
+
+export function senderCheck(
+  receipt: Pick<SESReceipt, 'spfVerdict' | 'dkimVerdict' | 'dmarcVerdict'>,
+): SenderCheck {
+  if (receipt.dmarcVerdict?.status === 'FAIL') return 'failed';
+  return receipt.dmarcVerdict?.status === 'GRAY' &&
+    vouchesNot(receipt.spfVerdict) &&
+    vouchesNot(receipt.dkimVerdict)
+    ? 'unverified'
+    : 'ok';
+}
 
 function toUtcDate(timestamp: string): string | undefined {
   const date = new Date(timestamp);
@@ -60,7 +91,18 @@ async function ingestRecord(
   const raw = await deps.inbound.get(messageId);
   if (!raw) return 'missing-object';
 
-  const isSpam = receipt.spamVerdict.status === 'FAIL';
+  const sender = senderCheck(receipt);
+  // A domain that says what to do with mail forged in its name is taken at
+  // its word: set aside. One that only wants to be told is shown with a warning.
+  const forged =
+    sender === 'failed' &&
+    (receipt.dmarcPolicy === 'quarantine' || receipt.dmarcPolicy === 'reject');
+  const isSpam = receipt.spamVerdict.status === 'FAIL' || forged;
+  const keywords: Record<string, true> = {
+    ...(isSpam ? { $junk: true } : {}),
+    ...(sender === 'failed' ? { [PHISHING]: true } : {}),
+    ...(sender === 'unverified' ? { [UNVERIFIED]: true } : {}),
+  };
   const receivedAt = toUtcDate(mail.timestamp);
 
   for (const [accountId, username] of accounts) {
@@ -70,7 +112,7 @@ async function ingestRecord(
       await deps.jmap.importMessage(auth, raw, {
         mailboxRole: isSpam ? 'junk' : 'inbox',
         delivery: true,
-        ...(isSpam ? { keywords: { $junk: true as const } } : {}),
+        ...(Object.keys(keywords).length > 0 ? { keywords } : {}),
         ...(receivedAt ? { receivedAt } : {}),
         // SES retries failed invocations; the key makes a repeat a no-op for accounts already done.
         idempotencyKey: `ses:${messageId}`,

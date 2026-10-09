@@ -3,6 +3,7 @@ import {
   CAPABILITY_MAIL,
   CAPABILITY_BLOB,
   CAPABILITY_CONTACTS,
+  CAPABILITY_BLOCKED_SENDERS,
   CAPABILITY_TAGS,
   CAPABILITY_MDN,
   CAPABILITY_PRINCIPALS,
@@ -44,6 +45,7 @@ const USING = [
   CAPABILITY_MDN,
   CAPABILITY_PRINCIPALS,
   CAPABILITY_CONTACTS,
+  CAPABILITY_BLOCKED_SENDERS,
   CAPABILITY_TAGS,
 ];
 const URLS = {
@@ -4050,6 +4052,7 @@ export function describeJmapConformance(
         ).sort(),
       ).toEqual([
         'AddressBook',
+        'BlockedSender',
         'ContactCard',
         'Email',
         'EmailDelivery',
@@ -7798,6 +7801,95 @@ export function describeJmapConformance(
       expect((await h.call('Email/get', { ids: [emailId] })).list).toHaveLength(
         1,
       );
+    });
+  });
+
+  describe(`${name}: blocked senders`, () => {
+    let h: Harness;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+    });
+    const arrives = (from: string) =>
+      h.server.importMessage(
+        AUTH,
+        new TextEncoder().encode(
+          [
+            `From: Someone <${from}>`,
+            'To: user@example.com',
+            'Subject: Hello',
+            '',
+            'Hello',
+            '',
+          ].join('\r\n'),
+        ),
+        { mailboxRole: 'inbox', delivery: true },
+      );
+    const whereIs = async (id: string) => {
+      const [email] = (
+        await h.call('Email/get', {
+          ids: [id],
+          properties: ['mailboxIds', 'keywords'],
+        })
+      ).list;
+      return email;
+    };
+
+    it('offers blocked senders under a capability of its own', async () => {
+      const session = h.server.getSession(AUTH);
+      expect(session.capabilities[CAPABILITY_BLOCKED_SENDERS]).toEqual({});
+      expect(
+        session.accounts[AUTH.accountId]?.accountCapabilities,
+      ).toHaveProperty([CAPABILITY_BLOCKED_SENDERS]);
+    });
+
+    it('keeps an address in small letters, once', async () => {
+      const { created, notCreated } = await h.call('BlockedSender/set', {
+        create: {
+          a: { address: ' Loud@Example.NET ' },
+          b: { address: 'not an address' },
+          c: { address: '@example.org', more: true },
+        },
+      });
+      expect(created.a.address).toBe('loud@example.net');
+      expect(notCreated.b).toMatchObject({ properties: ['address'] });
+      expect(notCreated.c).toMatchObject({ properties: ['more'] });
+      const again = await h.call('BlockedSender/set', {
+        create: { a: { address: 'loud@example.net' } },
+      });
+      expect(again.notCreated.a).toMatchObject({ type: 'invalidProperties' });
+      const changed = await h.call('BlockedSender/set', {
+        update: { [created.a.id]: { address: 'other@example.net' } },
+      });
+      expect(changed.notUpdated[created.a.id]).toMatchObject({
+        type: 'invalidProperties',
+      });
+      expect((await h.call('BlockedSender/get', { ids: null })).list).toEqual([
+        { id: created.a.id, address: 'loud@example.net' },
+      ]);
+    });
+
+    it('files what a blocked address or domain sends as junk, and only that', async () => {
+      const inbox = await h.mailbox('inbox');
+      const junk = await h.mailbox('junk');
+      const { created } = await h.call('BlockedSender/set', {
+        create: {
+          one: { address: 'loud@example.net' },
+          all: { address: '@example.org' },
+        },
+      });
+
+      const fromOne = await whereIs((await arrives('Loud@example.net')).id);
+      expect(fromOne.mailboxIds).toEqual({ [junk]: true });
+      expect(fromOne.keywords).toEqual({ $junk: true });
+      const fromAll = await whereIs((await arrives('anyone@example.org')).id);
+      expect(fromAll.mailboxIds).toEqual({ [junk]: true });
+      const other = await whereIs((await arrives('quiet@example.net')).id);
+      expect(other.mailboxIds).toEqual({ [inbox]: true });
+      expect(other.keywords).toEqual({});
+
+      await h.call('BlockedSender/set', { destroy: [created.one.id] });
+      const later = await whereIs((await arrives('loud@example.net')).id);
+      expect(later.mailboxIds).toEqual({ [inbox]: true });
     });
   });
 

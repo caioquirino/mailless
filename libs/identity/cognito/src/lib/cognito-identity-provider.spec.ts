@@ -50,6 +50,7 @@ describe('CognitoIdentityProvider', () => {
       changeOwnPassword: true,
       manageOwnPasskeys: true,
       removePasskeysOfOthers: false,
+      manageOwnAuthenticator: true,
     });
   });
 
@@ -202,6 +203,61 @@ describe('CognitoIdentityProvider', () => {
     await expect(provider.signOutEverywhere('ann')).rejects.toMatchObject({
       name: 'InternalErrorException',
     });
+  });
+
+  it('sets up an authenticator app with the user’s own token, and asks for its code only once confirmed', async () => {
+    const { provider, sent } = setup({
+      GetUser: [
+        () => ({ Username: 'ann' }),
+        () => ({ Username: 'ann', UserMFASettingList: ['SOFTWARE_TOKEN_MFA'] }),
+      ],
+      AssociateSoftwareToken: () => ({ SecretCode: 'JBSWY3DP' }),
+      VerifySoftwareToken: [
+        () => {
+          throw failure('CodeMismatchException');
+        },
+        () => ({ Status: 'SUCCESS' }),
+      ],
+    });
+    expect(await provider.ownAuthenticator('token-1')).toEqual({
+      enabled: false,
+    });
+    expect(await provider.beginOwnAuthenticator('token-1')).toEqual({
+      secret: 'JBSWY3DP',
+    });
+    expect(
+      await refusal(() =>
+        provider.confirmOwnAuthenticator('token-1', '000000'),
+      ),
+    ).toBe('invalidCode');
+    // A code that was refused turns nothing on.
+    expect(sent.some(({ name }) => name === 'SetUserMFAPreference')).toBe(
+      false,
+    );
+    await provider.confirmOwnAuthenticator('token-1', '123456');
+    expect(await provider.ownAuthenticator('token-1')).toEqual({
+      enabled: true,
+    });
+    await provider.removeOwnAuthenticator('token-1');
+
+    expect(sent.slice(-4).map(({ name, input }) => [name, input])).toEqual([
+      ['VerifySoftwareToken', { AccessToken: 'token-1', UserCode: '123456' }],
+      [
+        'SetUserMFAPreference',
+        {
+          AccessToken: 'token-1',
+          SoftwareTokenMfaSettings: { Enabled: true, PreferredMfa: true },
+        },
+      ],
+      ['GetUser', { AccessToken: 'token-1' }],
+      [
+        'SetUserMFAPreference',
+        {
+          AccessToken: 'token-1',
+          SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false },
+        },
+      ],
+    ]);
   });
 
   it('acts on a user’s own credentials with the user’s own token', async () => {

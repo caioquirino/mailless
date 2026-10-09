@@ -15,6 +15,8 @@ export interface IdentityUnderTest {
   signIn(username: string, password: string): Promise<string | undefined>;
   /** A signed-in user adds a passkey, and its id is returned. */
   enrolPasskey(accessToken: string, name: string): Promise<string>;
+  /** The code an authenticator app shows now for a secret. */
+  authenticatorCode(secret: string): Promise<string>;
 }
 
 async function refusal(
@@ -184,6 +186,39 @@ export function describeIdentityContract(
         'notFound',
       );
       expect(await provider.listOwnPasskeys(bob)).toHaveLength(1);
+    });
+
+    it('asks for a code from an authenticator app once one was confirmed, and not before', async () => {
+      if (!provider.capabilities.manageOwnAuthenticator) return;
+      await provider.createUser('ann');
+      await provider.setPassword('ann', PASSWORD);
+      const token = (await under.signIn('ann', PASSWORD)) as string;
+      expect(await provider.ownAuthenticator(token)).toEqual({
+        enabled: false,
+      });
+
+      const { secret } = await provider.beginOwnAuthenticator(token);
+      expect(secret).toEqual(expect.any(String));
+      // Having the secret is not having shown that the app has it.
+      expect(await provider.ownAuthenticator(token)).toEqual({
+        enabled: false,
+      });
+      expect(
+        await refusal(() => provider.confirmOwnAuthenticator(token, 'wrong')),
+      ).toBe('invalidCode');
+      await provider.confirmOwnAuthenticator(
+        token,
+        await under.authenticatorCode(secret),
+      );
+      expect(await provider.ownAuthenticator(token)).toEqual({ enabled: true });
+
+      await provider.removeOwnAuthenticator(token);
+      expect(await provider.ownAuthenticator(token)).toEqual({
+        enabled: false,
+      });
+      expect(await refusal(() => provider.ownAuthenticator('no token'))).toBe(
+        'notAuthorized',
+      );
     });
 
     it('ends every session of a user when asked', async () => {

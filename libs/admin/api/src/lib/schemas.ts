@@ -82,6 +82,7 @@ export const CapabilitiesSchema = z
     changeOwnPassword: z.boolean(),
     manageOwnPasskeys: z.boolean(),
     removePasskeysOfOthers: z.boolean(),
+    manageOwnAuthenticator: z.boolean(),
   })
   .openapi('Capabilities');
 
@@ -112,6 +113,33 @@ export const PasskeySchema = z
     createdAt: z.string().nullable(),
   })
   .openapi('Passkey');
+
+export const AuthenticatorSchema = z
+  .object({
+    enabled: z.boolean().openapi({
+      description:
+        'Whether a code from an authenticator app is asked for at sign-in.',
+    }),
+  })
+  .openapi('Authenticator');
+
+export const AuthenticatorSecretSchema = z
+  .object({
+    secret: z.string().openapi({
+      description:
+        'What to put in the authenticator app (RFC 6238, in base 32). Shown once.',
+    }),
+  })
+  .openapi('AuthenticatorSecret');
+
+export const AuthenticatorCodeSchema = z
+  .object({
+    code: z
+      .string()
+      .regex(/^[0-9]{6}$/)
+      .openapi({ description: 'The six digits the app shows now.' }),
+  })
+  .openapi('AuthenticatorCode');
 
 export const AppPasswordSchema = z
   .object({

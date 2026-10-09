@@ -49,6 +49,12 @@ export const CAPABILITY_WEBSOCKET = 'urn:ietf:params:jmap:websocket';
  */
 export const CAPABILITY_TAGS =
   'https://github.com/caioquirino/mailless/jmap/tags';
+/**
+ * Not an RFC's: the addresses whose mail is filed as junk when it arrives
+ * (BlockedSender/get, BlockedSender/changes, BlockedSender/set).
+ */
+export const CAPABILITY_BLOCKED_SENDERS =
+  'https://github.com/caioquirino/mailless/jmap/blocked-senders';
 /** RFC 9749: the key a client gives its push service, so that only this server may push to it. */
 export const CAPABILITY_WEBPUSH_VAPID = 'urn:ietf:params:jmap:webpush-vapid';
 

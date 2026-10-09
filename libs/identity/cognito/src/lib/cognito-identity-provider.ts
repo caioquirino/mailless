@@ -9,10 +9,14 @@ import {
   AdminRemoveUserFromGroupCommand,
   AdminSetUserPasswordCommand,
   AdminUserGlobalSignOutCommand,
+  AssociateSoftwareTokenCommand,
   ChangePasswordCommand,
   DeleteWebAuthnCredentialCommand,
+  GetUserCommand,
   ListUsersCommand,
   ListWebAuthnCredentialsCommand,
+  SetUserMFAPreferenceCommand,
+  VerifySoftwareTokenCommand,
   type CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider';
 import {
@@ -40,6 +44,8 @@ const MEANINGS: Record<string, IdentityErrorCode> = {
   NotAuthorizedException: 'notAuthorized',
   UserNotConfirmedException: 'notAuthorized',
   PasswordResetRequiredException: 'notAuthorized',
+  CodeMismatchException: 'invalidCode',
+  EnableSoftwareTokenMFAException: 'invalidCode',
   LimitExceededException: 'rateLimited',
   TooManyRequestsException: 'rateLimited',
   InvalidParameterException: 'invalid',
@@ -50,6 +56,7 @@ const MESSAGES: Record<IdentityErrorCode, string> = {
   notFound: 'There is no such user, role or passkey',
   invalidPassword: 'The password does not meet the password policy',
   notAuthorized: 'The token or the current password was not accepted',
+  invalidCode: 'The code is not the one the authenticator app shows now',
   rateLimited: 'Too many attempts; try again later',
   unsupported: 'Not supported',
   invalid: 'The request was not valid',
@@ -80,6 +87,8 @@ export class CognitoIdentityProvider implements IdentityProvider {
     manageOwnPasskeys: true,
     // Cognito has no call by which an administrator removes another user's passkey.
     removePasskeysOfOthers: false,
+    // Needs a user pool where a second factor is optional, and a token with the scope for it.
+    manageOwnAuthenticator: true,
   };
 
   private readonly client: Pick<CognitoIdentityProviderClient, 'send'>;
@@ -291,6 +300,66 @@ export class CognitoIdentityProvider implements IdentityProvider {
         new DeleteWebAuthnCredentialCommand({
           AccessToken: accessToken,
           CredentialId: id,
+        }),
+      ),
+    );
+  }
+
+  async ownAuthenticator(accessToken: string): Promise<{ enabled: boolean }> {
+    const user = await translated(() =>
+      this.client.send(new GetUserCommand({ AccessToken: accessToken })),
+    );
+    return {
+      enabled: (user.UserMFASettingList ?? []).includes('SOFTWARE_TOKEN_MFA'),
+    };
+  }
+
+  async beginOwnAuthenticator(
+    accessToken: string,
+  ): Promise<{ secret: string }> {
+    const answer = await translated(() =>
+      this.client.send(
+        new AssociateSoftwareTokenCommand({ AccessToken: accessToken }),
+      ),
+    );
+    if (!answer.SecretCode) {
+      throw new IdentityError('unsupported', MESSAGES.unsupported);
+    }
+    return { secret: answer.SecretCode };
+  }
+
+  async confirmOwnAuthenticator(
+    accessToken: string,
+    code: string,
+  ): Promise<void> {
+    const answer = await translated(() =>
+      this.client.send(
+        new VerifySoftwareTokenCommand({
+          AccessToken: accessToken,
+          UserCode: code,
+        }),
+      ),
+    );
+    if (answer.Status !== 'SUCCESS') {
+      throw new IdentityError('invalidCode', MESSAGES.invalidCode);
+    }
+    // Verified is not yet asked for: that is said apart.
+    await translated(() =>
+      this.client.send(
+        new SetUserMFAPreferenceCommand({
+          AccessToken: accessToken,
+          SoftwareTokenMfaSettings: { Enabled: true, PreferredMfa: true },
+        }),
+      ),
+    );
+  }
+
+  async removeOwnAuthenticator(accessToken: string): Promise<void> {
+    await translated(() =>
+      this.client.send(
+        new SetUserMFAPreferenceCommand({
+          AccessToken: accessToken,
+          SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false },
         }),
       ),
     );

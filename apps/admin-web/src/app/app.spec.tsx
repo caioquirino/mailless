@@ -241,6 +241,62 @@ describe('my account', () => {
     expect(visited.at(-1)).toContain('https://auth.example.com/passkeys/add?');
   });
 
+  it('sets up an authenticator app: the secret to scan or type, then a code from it', async () => {
+    const backend = fakeBackend();
+    await renderApp(backend, '/');
+    const user = userEvent.setup();
+    const section = (
+      await screen.findByRole('heading', { name: 'Authenticator app' })
+    ).closest('section') as HTMLElement;
+    expect(
+      await within(section).findByText(/No code is asked for/),
+    ).toBeInTheDocument();
+
+    await user.click(
+      within(section).getByRole('button', { name: 'Set up an authenticator' }),
+    );
+    // In fours, as it is easiest to type; and as a picture to scan.
+    expect(
+      await within(section).findByText(
+        'JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByRole('img', {
+        name: 'Code to scan with the authenticator app',
+      }),
+    ).toBeInTheDocument();
+
+    const code = within(section).getByLabelText('Code from the app');
+    await user.type(code, '000000');
+    await user.click(within(section).getByRole('button', { name: 'Turn on' }));
+    expect(await within(section).findByRole('alert')).toHaveTextContent(
+      'The code is not the one the authenticator app shows now',
+    );
+    expect(backend.state.authenticator).toBe(false);
+
+    await user.clear(code);
+    await user.type(code, '123 456');
+    await user.click(within(section).getByRole('button', { name: 'Turn on' }));
+    expect(
+      await within(section).findByText(
+        /A code from your authenticator app is asked for/,
+      ),
+    ).toBeInTheDocument();
+    expect(backend.state.authenticator).toBe(true);
+    // The secret is not kept on the page once it has done its work.
+    expect(within(section).queryByText(/JBSW/)).not.toBeInTheDocument();
+
+    await user.click(within(section).getByRole('button', { name: 'Turn off' }));
+    await user.click(
+      screen.getByRole('button', { name: 'Stop asking for a code' }),
+    );
+    expect(
+      await within(section).findByText(/No code is asked for/),
+    ).toBeInTheDocument();
+    expect(backend.state.authenticator).toBe(false);
+  });
+
   it('offers no app passwords to a user without a mailbox', async () => {
     await renderApp(fakeBackend({ mailbox: false }), '/');
     expect(

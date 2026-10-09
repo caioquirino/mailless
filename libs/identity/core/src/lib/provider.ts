@@ -33,6 +33,11 @@ export interface IdentityCapabilities {
   manageOwnPasskeys: boolean;
   /** An administrator can remove the passkeys of another user. */
   removePasskeysOfOthers: boolean;
+  /**
+   * A signed-in user can ask to be asked, after their password, for a code
+   * from an authenticator app (a time-based one-time password, RFC 6238).
+   */
+  manageOwnAuthenticator: boolean;
 }
 
 export interface IdentityProvider {
@@ -68,6 +73,20 @@ export interface IdentityProvider {
   ): Promise<void>;
   listOwnPasskeys(accessToken: string): Promise<Passkey[]>;
   removeOwnPasskey(accessToken: string, id: string): Promise<void>;
+  /** Whether a code from an authenticator app is asked for when they sign in. */
+  ownAuthenticator(accessToken: string): Promise<{ enabled: boolean }>;
+  /**
+   * The secret to put in an authenticator app. Nothing is asked for at
+   * sign-in until a code made from it has been confirmed.
+   */
+  beginOwnAuthenticator(accessToken: string): Promise<{ secret: string }>;
+  /**
+   * A code from the app that was given the secret: from now on one is asked
+   * for at every sign-in. Fails with `invalidCode`.
+   */
+  confirmOwnAuthenticator(accessToken: string, code: string): Promise<void>;
+  /** No code is asked for any more. */
+  removeOwnAuthenticator(accessToken: string): Promise<void>;
 }
 
 export type IdentityErrorCode =
@@ -77,6 +96,8 @@ export type IdentityErrorCode =
   | 'invalidPassword'
   /** The token or the current password was not accepted. */
   | 'notAuthorized'
+  /** The code from an authenticator app was not the one expected. */
+  | 'invalidCode'
   | 'rateLimited'
   /** The provider cannot do this at all; see its capabilities. */
   | 'unsupported'

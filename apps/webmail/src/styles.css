@@ -1635,6 +1635,11 @@ a.icon-button {
   margin-bottom: var(--space-3);
 }
 
+/* What to know about a sender, above what they wrote. */
+.caution {
+  margin: 0 0 var(--space-3);
+}
+
 .attachments {
   display: flex;
   flex-wrap: wrap;

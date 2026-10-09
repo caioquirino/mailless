@@ -357,3 +357,37 @@ input[aria-invalid='true'] {
   margin: 0;
   font-size: 0.875rem;
 }
+
+/* Setting up an authenticator app: the code to scan, the key to type, the code to give back. */
+.authenticator-setup ol {
+  margin: 0 0 var(--space-4);
+  padding-left: 1.25rem;
+}
+
+.authenticator-setup li {
+  margin-bottom: var(--space-4);
+}
+
+.authenticator-setup label {
+  display: block;
+  margin-bottom: var(--space-2);
+}
+
+.authenticator-setup input {
+  width: 9rem;
+  font-size: 1.15rem;
+  letter-spacing: 0.15em;
+}
+
+.scan-code {
+  display: block;
+  width: 11rem;
+  height: 11rem;
+  margin: var(--space-3) 0;
+  border-radius: 6px;
+}
+
+.authenticator-key {
+  margin-top: var(--space-2);
+  max-width: 26rem;
+}

@@ -4,6 +4,7 @@ import {
   hasRemoteImages,
   inlineImageIds,
   messageDocument,
+  misleadingLink,
   textOfHtml,
 } from './html';
 
@@ -59,6 +60,47 @@ describe('messageDocument', () => {
     const images = [...body(page).querySelectorAll('img')];
     expect(images[0]?.getAttribute('src')).toBe('data:image/png;base64,AAAA');
     expect(images[1]?.hasAttribute('src')).toBe(false);
+  });
+});
+
+describe('a link that is not what it shows', () => {
+  it('is one that shows a site and leads to another', () => {
+    expect(
+      misleadingLink('https://evil.example/login', 'www.bank.example'),
+    ).toBe('evil.example');
+    expect(
+      misleadingLink('https://evil.example/', 'https://bank.example/account'),
+    ).toBe('evil.example');
+    // The same site, a part of it, or words that are no address at all.
+    expect(
+      misleadingLink('https://www.bank.example/a', 'bank.example'),
+    ).toBeNull();
+    expect(
+      misleadingLink('https://mail.bank.example/a', 'bank.example/login'),
+    ).toBeNull();
+    expect(misleadingLink('https://evil.example/', 'Click here')).toBeNull();
+    expect(
+      misleadingLink('mailto:ann@bank.example', 'other.example'),
+    ).toBeNull();
+  });
+
+  it('is one whose site is written in look-alike letters', () => {
+    expect(misleadingLink('https://xn--pple-43d.com/', 'Sign in')).toBe(
+      'xn--pple-43d.com',
+    );
+  });
+
+  it('is said beside the link, in the message', () => {
+    const page = messageDocument(
+      '<a href="https://evil.example/x">bank.example</a> and <a href="https://good.example/">good.example</a>',
+      { images: false },
+    );
+    const [bad, good] = [...body(page).querySelectorAll('a')];
+    expect(bad?.nextElementSibling?.textContent).toBe(
+      ' [this link goes to evil.example]',
+    );
+    expect(bad?.getAttribute('title')).toBe('https://evil.example/x');
+    expect(good?.nextElementSibling).toBeNull();
   });
 });
 

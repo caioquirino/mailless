@@ -10,6 +10,8 @@ interface StoredUser extends IdentityUser {
   password: string | null;
   passwordIsTemporary: boolean;
   passkeys: Passkey[];
+  /** The secret of their authenticator app, and whether a code from it was confirmed. */
+  authenticator: { secret: string; confirmed: boolean } | null;
   sessions: number;
 }
 
@@ -30,10 +32,13 @@ export class InMemoryIdentityProvider implements IdentityProvider {
     changeOwnPassword: true,
     manageOwnPasskeys: true,
     removePasskeysOfOthers: false,
+    manageOwnAuthenticator: true,
   };
 
   private readonly users = new Map<string, StoredUser>();
   private readonly tokens = new Map<string, string>();
+  /** Secrets handed out and not confirmed yet, by user. */
+  private readonly pending = new Map<string, string>();
   private readonly roles: readonly string[];
   private readonly minimumPasswordLength: number;
   private readonly now: () => Date;
@@ -107,6 +112,16 @@ export class InMemoryIdentityProvider implements IdentityProvider {
     return user?.enabled ? InMemoryIdentityProvider.describe(user) : undefined;
   }
 
+  /**
+   * Stands in for an authenticator app: the code it shows for a secret. Not
+   * a real one, which changes with the time.
+   */
+  static authenticatorCode(secret: string): string {
+    let sum = 0;
+    for (const letter of secret) sum = (sum * 31 + letter.charCodeAt(0)) % 1e6;
+    return String(sum).padStart(6, '0');
+  }
+
   /** Stands in for the provider's page where a signed-in user adds a passkey. */
   enrolPasskey(accessToken: string, name: string | null = null): Passkey {
     const user = this.fromToken(accessToken);
@@ -148,6 +163,7 @@ export class InMemoryIdentityProvider implements IdentityProvider {
       password: null,
       passwordIsTemporary: false,
       passkeys: [],
+      authenticator: null,
       sessions: 0,
     };
     this.users.set(username, user);
@@ -228,5 +244,43 @@ export class InMemoryIdentityProvider implements IdentityProvider {
       throw new IdentityError('notFound', 'There is no such passkey');
     }
     user.passkeys = remaining;
+  }
+
+  async ownAuthenticator(accessToken: string): Promise<{ enabled: boolean }> {
+    return {
+      enabled: this.fromToken(accessToken).authenticator?.confirmed === true,
+    };
+  }
+
+  async beginOwnAuthenticator(
+    accessToken: string,
+  ): Promise<{ secret: string }> {
+    const user = this.fromToken(accessToken);
+    // A new secret each time, and what was confirmed stays until this one is.
+    const secret = `SECRET${++this.issued}`;
+    this.pending.set(user.username, secret);
+    return { secret };
+  }
+
+  async confirmOwnAuthenticator(
+    accessToken: string,
+    code: string,
+  ): Promise<void> {
+    const user = this.fromToken(accessToken);
+    const secret = this.pending.get(user.username);
+    if (
+      secret === undefined ||
+      code !== InMemoryIdentityProvider.authenticatorCode(secret)
+    ) {
+      throw new IdentityError('invalidCode', 'The code is not the right one');
+    }
+    this.pending.delete(user.username);
+    user.authenticator = { secret, confirmed: true };
+  }
+
+  async removeOwnAuthenticator(accessToken: string): Promise<void> {
+    const user = this.fromToken(accessToken);
+    this.pending.delete(user.username);
+    user.authenticator = null;
   }
 }

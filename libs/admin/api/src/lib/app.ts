@@ -25,6 +25,9 @@ import {
   NewAppPasswordSchema,
   NewLabelSchema,
   PasskeySchema,
+  AuthenticatorCodeSchema,
+  AuthenticatorSchema,
+  AuthenticatorSecretSchema,
   SetPasswordSchema,
   SetShareSchema,
   UpdateAccountSchema,
@@ -108,6 +111,7 @@ const STATUS: Record<string, ApiError['status']> = {
   notFound: 404,
   invalid: 400,
   invalidPassword: 422,
+  invalidCode: 422,
   // The caller is signed in; it is what they offered (a current password) that was refused.
   notAuthorized: 403,
   rateLimited: 429,
@@ -398,6 +402,120 @@ export function createAdminApi(options: AdminApiOptions): OpenAPIHono<Env> {
         c.req.valid('param').passkeyId,
       );
       audit(caller, 'removeMyPasskey', caller.username);
+      return c.body(null, 204);
+    },
+  );
+
+  const requireAuthenticator = () => {
+    if (!identity.capabilities.manageOwnAuthenticator) {
+      throw new ApiError(
+        501,
+        'unsupported',
+        'Set up an authenticator app with the identity provider',
+      );
+    }
+  };
+
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/me/authenticator',
+      operationId: 'getMyAuthenticator',
+      tags: ['me'],
+      summary:
+        'Whether the signed-in user is asked for a code from an authenticator app',
+      security,
+      responses: {
+        200: json(AuthenticatorSchema, 'Whether a code is asked for.'),
+        ...REFUSALS,
+        501: errorResponse('The identity provider cannot do this.'),
+      },
+    }),
+    async (c) => {
+      requireAuthenticator();
+      return c.json(
+        await identity.ownAuthenticator(c.get('caller').token),
+        200,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'post',
+      path: '/me/authenticator',
+      operationId: 'beginMyAuthenticator',
+      tags: ['me'],
+      summary: 'Start setting up an authenticator app',
+      description:
+        'Gives the secret to put in the app. Nothing is asked for at sign-in until a code made from it is confirmed.',
+      security,
+      responses: {
+        200: json(AuthenticatorSecretSchema, 'The secret, shown once.'),
+        ...REFUSALS,
+        429: errorResponse('Too many attempts.'),
+        501: errorResponse('The identity provider cannot do this.'),
+      },
+    }),
+    async (c) => {
+      requireAuthenticator();
+      const caller = c.get('caller');
+      const { secret } = await identity.beginOwnAuthenticator(caller.token);
+      audit(caller, 'beginMyAuthenticator', caller.username);
+      return c.json({ secret }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'post',
+      path: '/me/authenticator/confirm',
+      operationId: 'confirmMyAuthenticator',
+      tags: ['me'],
+      summary: 'Finish setting up an authenticator app',
+      description:
+        'From now on a code from the app is asked for after the password, at every sign-in.',
+      security,
+      request: { body: body(AuthenticatorCodeSchema) },
+      responses: {
+        ...NO_CONTENT,
+        ...REFUSALS,
+        422: errorResponse('The code is not the one the app shows now.'),
+        429: errorResponse('Too many attempts.'),
+        501: errorResponse('The identity provider cannot do this.'),
+      },
+    }),
+    async (c) => {
+      requireAuthenticator();
+      const caller = c.get('caller');
+      await identity.confirmOwnAuthenticator(
+        caller.token,
+        c.req.valid('json').code,
+      );
+      audit(caller, 'confirmMyAuthenticator', caller.username);
+      return c.body(null, 204);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'delete',
+      path: '/me/authenticator',
+      operationId: 'removeMyAuthenticator',
+      tags: ['me'],
+      summary: 'Stop asking the signed-in user for a code',
+      security,
+      responses: {
+        ...NO_CONTENT,
+        ...REFUSALS,
+        501: errorResponse('The identity provider cannot do this.'),
+      },
+    }),
+    async (c) => {
+      requireAuthenticator();
+      const caller = c.get('caller');
+      await identity.removeOwnAuthenticator(caller.token);
+      audit(caller, 'removeMyAuthenticator', caller.username);
       return c.body(null, 204);
     },
   );

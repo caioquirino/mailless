@@ -76,6 +76,9 @@ export function fakeBackend(
     tokenRequests: [] as Array<Record<string, string>>,
     calls: [] as Recorded[],
     passkeys: [] as Passkey[],
+    /** Whether a code from an authenticator app is asked for, and the code it would show. */
+    authenticator: false,
+    authenticatorCode: '123456',
     appPasswords: [] as AppPassword[],
     accounts: new Map<string, AccountDetail>([
       [
@@ -110,6 +113,7 @@ export function fakeBackend(
         changeOwnPassword: true,
         manageOwnPasskeys: true,
         removePasskeysOfOthers: false,
+        manageOwnAuthenticator: true,
       },
       passkeyEnrolmentUrl: CONFIG.passkeyEnrolmentUrl,
     };
@@ -139,6 +143,27 @@ export function fakeBackend(
           'A password has at least 14 characters',
         );
       }
+      return json(204);
+    }
+    if (path === '/me/authenticator' && method === 'GET') {
+      return json(200, { enabled: state.authenticator });
+    }
+    if (path === '/me/authenticator' && method === 'POST') {
+      return json(200, { secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP' });
+    }
+    if (path === '/me/authenticator/confirm') {
+      if ((body as { code: string }).code !== state.authenticatorCode) {
+        return refusal(
+          422,
+          'invalidCode',
+          'The code is not the one the authenticator app shows now',
+        );
+      }
+      state.authenticator = true;
+      return json(204);
+    }
+    if (path === '/me/authenticator' && method === 'DELETE') {
+      state.authenticator = false;
       return json(204);
     }
     if (path === '/me/passkeys') return json(200, state.passkeys);

@@ -20,6 +20,7 @@ import {
   type SetResponse,
 } from '@mailless/jmap-core';
 import { z } from 'zod';
+import { senderBlocked } from './blocked.js';
 import { usedOctets } from './quota.js';
 import { buildDraft } from './draft.js';
 import { sendVacationReply } from './vacation.js';
@@ -1028,8 +1029,8 @@ export async function importMessage(
   const already = await existing();
   if (already) return already;
 
-  const mailboxIds = await resolveMailboxIds(ctx, options);
-  const keywords = normaliseKeywords(options.keywords ?? {});
+  let mailboxIds = await resolveMailboxIds(ctx, options);
+  let keywords = normaliseKeywords(options.keywords ?? {});
 
   let parsed;
   try {
@@ -1039,6 +1040,13 @@ export async function importMessage(
       throw new SetFailure('invalidEmail', error.message);
     }
     throw error;
+  }
+
+  // Mail from someone the account wants none from is filed as junk, wherever
+  // it was headed. It is kept: whoever wrote is told nothing by it.
+  if (options.delivery && (await senderBlocked(ctx, parsed.metadata.from))) {
+    mailboxIds = await resolveMailboxIds(ctx, { mailboxRole: 'junk' });
+    keywords = normaliseKeywords({ ...keywords, $junk: true });
   }
 
   // Mail arriving from outside is never turned away for lack of room: the

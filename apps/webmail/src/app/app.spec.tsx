@@ -235,6 +235,7 @@ describe('the webmail', () => {
       'Mark unread from here',
       'Report as junk',
       'Report phishing',
+      'Block carol@example.com',
       'Add Carol to contacts',
       'Print',
       'Download message',
@@ -258,6 +259,168 @@ describe('the webmail', () => {
       await within(
         await screen.findByRole('region', { name: 'Junk' }),
       ).findByText('Re: Plans'),
+    ).toBeInTheDocument();
+  });
+
+  it('says what there is to know about a sender before they are believed', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({
+      subject: 'Your account',
+      from: 'The Bank <alerts@bank.example>',
+      text: 'Confirm your password',
+      keywords: { $phishing: true },
+    });
+    await backend.deliver({
+      subject: 'Hello there',
+      from: 'Ann <ann@elsewhere.example>',
+      text: 'It is me',
+      keywords: { 'mailless-unverified': true },
+    });
+    await backend.deliver({
+      subject: 'Picnic',
+      from: 'Bob <bob@example.com>',
+      text: 'Thursday?',
+    });
+    await backend.deliver({
+      subject: 'Dinner',
+      from: 'Bob <bob@example.com>',
+      text: 'Or Friday?',
+    });
+    await renderApp(backend);
+
+    await userEvent.click(
+      await screen.findByRole('link', { name: /Your account/ }),
+    );
+    expect(
+      await within(reader()).findByText('This message may be forged.'),
+    ).toBeInTheDocument();
+    expect(
+      within(reader()).getByText(/comes from bank\.example/),
+    ).toBeInTheDocument();
+
+    // It bears the name the reader writes under, from an address that is not theirs.
+    await userEvent.click(screen.getByRole('link', { name: /Hello there/ }));
+    expect(
+      await within(reader()).findByText(
+        'Nothing confirms where this comes from.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(reader()).getByText('This bears your name, and is not from you.'),
+    ).toBeInTheDocument();
+
+    // The first there is from someone says so; the next from them does not.
+    await userEvent.click(screen.getByRole('link', { name: /Picnic/ }));
+    expect(
+      await within(reader()).findByText(
+        'This is the first message you have from bob@example.com.',
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('link', { name: /Dinner/ }));
+    await within(reader()).findByText('Or Friday?');
+    await waitFor(() =>
+      expect(
+        within(reader()).queryByText(/This is the first message/),
+      ).not.toBeInTheDocument(),
+    );
+    expect(within(reader()).queryByText(/forged/)).not.toBeInTheDocument();
+  });
+
+  it('remembers who sent what is reported as junk, and forgets when it is moved back', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({
+      subject: 'Buy now',
+      from: 'Loud <loud@shop.example>',
+      text: 'Cheap things',
+    });
+    await renderApp(backend);
+    const blocked = async () =>
+      (
+        (await backend.server.handleRequest(
+          {
+            using: [
+              'urn:ietf:params:jmap:core',
+              'https://github.com/caioquirino/mailless/jmap/blocked-senders',
+            ],
+            methodCalls: [
+              ['BlockedSender/get', { accountId: 'ann', ids: null }, 'c'],
+            ],
+          },
+          { accountId: 'ann', username: 'ann@example.com' },
+        )) as unknown as {
+          methodResponses: [string, { list: { address: string }[] }][];
+        }
+      ).methodResponses[0]?.[1].list.map((each) => each.address);
+
+    await userEvent.click(await screen.findByRole('link', { name: /Buy now/ }));
+    await within(reader()).findByText('Cheap things');
+    await userEvent.click(
+      within(reader()).getByRole('button', { name: 'More for this message' }),
+    );
+    await userEvent.click(
+      screen.getByRole('menuitem', { name: 'Report as junk' }),
+    );
+    expect(
+      await screen.findByText(
+        'Moved to Junk. More from loud@shop.example will go there too.',
+      ),
+    ).toBeInTheDocument();
+    await waitFor(async () =>
+      expect(await blocked()).toEqual(['loud@shop.example']),
+    );
+
+    // What they send next is filed as junk by the server, and never reaches the inbox.
+    await backend.deliver({
+      subject: 'Buy more',
+      from: 'Loud <loud@shop.example>',
+      text: 'Cheaper things',
+    });
+    await userEvent.click(
+      within(sidebar()).getByRole('link', { name: /Junk/ }),
+    );
+    const junk = await screen.findByRole('region', { name: 'Junk' });
+    await userEvent.click(
+      await within(junk).findByRole('link', { name: /Buy more/ }),
+    );
+    expect(
+      await within(reader()).findByText(/You blocked loud@shop\.example/),
+    ).toBeInTheDocument();
+
+    // Moved back by hand, its sender is wanted again.
+    await userEvent.click(
+      within(reader()).getByRole('button', { name: 'Move back to Inbox' }),
+    );
+    expect(
+      await screen.findByText(
+        'Moved back to Inbox. loud@shop.example is no longer blocked.',
+      ),
+    ).toBeInTheDocument();
+    await waitFor(async () => expect(await blocked()).toEqual([]));
+  });
+
+  it('keeps the blocked senders in the settings, where one is added or taken off', async () => {
+    const backend = await fakeBackend();
+    await renderApp(backend, '/settings');
+    const settings = await screen.findByRole('region', { name: 'Settings' });
+    expect(
+      await within(settings).findByText('Nobody is blocked.'),
+    ).toBeInTheDocument();
+    await userEvent.type(
+      within(settings).getByLabelText('Address or domain to block'),
+      '@Shop.example',
+    );
+    await userEvent.click(
+      within(settings).getByRole('button', { name: 'Block' }),
+    );
+    const all = await within(settings).findByRole('list', {
+      name: 'Blocked senders',
+    });
+    expect(within(all).getByText('@shop.example')).toBeInTheDocument();
+    await userEvent.click(
+      within(all).getByRole('button', { name: 'Stop blocking @shop.example' }),
+    );
+    expect(
+      await within(settings).findByText('Nobody is blocked.'),
     ).toBeInTheDocument();
   });
 

@@ -41,11 +41,16 @@ locals {
     # authentication. Everything this stack sends is DKIM-signed, so it passes.
     var.dmarc_policy == null ? {} : {
       dmarc = {
-        name  = "_dmarc.${var.domain}"
-        type  = "TXT"
-        value = "v=DMARC1; p=${var.dmarc_policy}"
+        name = "_dmarc.${var.domain}"
+        type = "TXT"
+        value = join("", [
+          "v=DMARC1; p=${var.dmarc_policy}",
+          # Who sent mail in the domain's name, and whether it passed: told once a day, when asked for.
+          var.mail_report_address == null ? "" : "; rua=mailto:${var.mail_report_address}",
+        ])
       }
     },
+    local.transport_dns_records,
     # Where the domain's logo is, for mail programs that show one. No certificate goes with it (a=).
     local.logo_published ? {
       bimi = {

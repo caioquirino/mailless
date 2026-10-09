@@ -29,6 +29,37 @@ const REMOVED = [
 /** Addresses a link may lead to. Anything else is not a link. */
 const LINK = /^(https?:|mailto:|tel:|#)/i;
 
+/** What a link shows, when what it shows is itself the address of a site. */
+const SHOWN_SITE =
+  /^(?:https?:\/\/)?(?:[^\s/@]+@)?((?:[a-z0-9-]+\.)+[a-z][a-z0-9-]+)(?::\d+)?(?:[/?#]\S*)?$/i;
+
+const bare = (host: string): string => host.toLowerCase().replace(/^www\./, '');
+
+/** Whether two sites are one, or one a part of the other: `example.com` and `mail.example.com`. */
+const sameSite = (a: string, b: string): boolean =>
+  a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+
+/**
+ * Where a link really leads, when that is not what it gives itself out to
+ * lead to: it shows one site's address and goes to another's, or its site is
+ * written in letters made to look like other letters. Null for a link that
+ * hides nothing.
+ */
+export function misleadingLink(href: string, shown: string): string | null {
+  let host: string;
+  try {
+    const url = new URL(href);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    host = bare(url.hostname);
+  } catch {
+    return null;
+  }
+  // Letters of other alphabets in a site's name are kept by browsers in this form.
+  if (host.split('.').some((label) => label.startsWith('xn--'))) return host;
+  const site = SHOWN_SITE.exec(shown.trim())?.[1];
+  return site !== undefined && !sameSite(bare(site), host) ? host : null;
+}
+
 export interface MessageDocumentOptions {
   /** Whether pictures kept on other sites are loaded. Loading one tells its sender the message was opened. */
   images: boolean;
@@ -218,6 +249,15 @@ export function messageDocument(
         // Links open beside the mail, and say nothing of where they were followed from.
         element.setAttribute('target', '_blank');
         element.setAttribute('rel', 'noopener noreferrer');
+        // Where it leads, for whoever rests the pointer on it.
+        element.setAttribute('title', href.trim());
+        const leadsTo = misleadingLink(href.trim(), element.textContent ?? '');
+        if (leadsTo !== null && element.tagName === 'A') {
+          const warning = parsed.createElement('span');
+          warning.className = 'mailless-leads-to';
+          warning.textContent = ` [this link goes to ${leadsTo}]`;
+          element.after(warning);
+        }
       }
     }
     if (element.tagName === 'FORM') element.removeAttribute('action');
@@ -254,6 +294,7 @@ export function messageDocument(
     'table{max-width:100%;}',
     'pre{white-space:pre-wrap;}',
     'blockquote{margin:0 0 0 .5em;padding-left:.75em;border-left:2px solid #c3c9d4;color:#5d6676;}',
+    '.mailless-leads-to{color:#b3261e !important;font:600 13px/1.4 system-ui,sans-serif !important;background:#fff !important;}',
     '</style>',
     styles,
     '</head><body>',

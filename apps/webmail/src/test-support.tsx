@@ -147,13 +147,15 @@ export async function fakeBackend(options: { holds?: boolean } = {}) {
     options: MessageOptions & {
       mailbox?: string;
       seen?: boolean;
+      /** What the server marked on it as it arrived. */
+      keywords?: Record<string, true>;
       /** The whole message as it travels, for what the options cannot say. */
       raw?: string;
     } = {},
   ) => {
     sequence++;
     const when = new Date(Date.UTC(2026, 0, 5, 9, sequence));
-    const { mailbox, seen, raw, ...message } = options;
+    const { mailbox, seen, keywords, raw, ...message } = options;
     const imported = await server.importMessage(
       AUTH,
       new TextEncoder().encode(
@@ -169,7 +171,9 @@ export async function fakeBackend(options: { holds?: boolean } = {}) {
         // As mail from outside, which is what moves the state clients watch for new mail.
         delivery: true,
         receivedAt: when.toISOString().replace('.000', ''),
-        ...(seen ? { keywords: { $seen: true } } : {}),
+        ...(seen || keywords
+          ? { keywords: { ...keywords, ...(seen ? { $seen: true } : {}) } }
+          : {}),
       },
     );
     return imported.id;

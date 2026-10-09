@@ -8,6 +8,7 @@ import {
   type StorageAdapter,
 } from '@mailless/jmap-engine';
 import {
+  blockedSendersModule,
   importMessage,
   mailModule,
   recordDelivery,
@@ -97,6 +98,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     modules: [
       mailModule(mail),
       tagsModule(),
+      blockedSendersModule(),
       sharingModule(),
       contactsModule(),
     ],

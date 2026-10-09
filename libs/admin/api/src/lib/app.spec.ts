@@ -185,6 +185,7 @@ describe('admin API', () => {
           changeOwnPassword: true,
           manageOwnPasskeys: true,
           removePasskeysOfOthers: false,
+          manageOwnAuthenticator: true,
         },
         passkeyEnrolmentUrl: 'https://auth.example.com/passkeys/add',
       });
@@ -228,6 +229,53 @@ describe('admin API', () => {
       ).toBe(204);
       expect((await t.call(ann, 'GET', '/me/passkeys')).body).toEqual([]);
       expect((await t.call(admin, 'GET', '/me/passkeys')).body).toHaveLength(1);
+    });
+
+    it('sets up an authenticator app for the caller, and takes it off again', async () => {
+      expect((await t.call(ann, 'GET', '/me/authenticator')).body).toEqual({
+        enabled: false,
+      });
+      const begun = await t.call(ann, 'POST', '/me/authenticator');
+      expect(begun.status).toBe(200);
+      const { secret } = begun.body;
+      expect(
+        (
+          await t.call(ann, 'POST', '/me/authenticator/confirm', {
+            code: '000000',
+          })
+        ).status,
+      ).toBe(422);
+      expect(
+        (await t.call(ann, 'POST', '/me/authenticator/confirm', { code: 'x' }))
+          .status,
+      ).toBe(400);
+      expect(
+        (
+          await t.call(ann, 'POST', '/me/authenticator/confirm', {
+            code: InMemoryIdentityProvider.authenticatorCode(secret),
+          })
+        ).status,
+      ).toBe(204);
+      expect((await t.call(ann, 'GET', '/me/authenticator')).body).toEqual({
+        enabled: true,
+      });
+      // Hers, and nobody else's.
+      expect((await t.call(admin, 'GET', '/me/authenticator')).body).toEqual({
+        enabled: false,
+      });
+      // The record says that it happened, and nothing of the secret.
+      expect(t.audit.map((entry) => entry.action)).toEqual([
+        'beginMyAuthenticator',
+        'confirmMyAuthenticator',
+      ]);
+      expect(JSON.stringify(t.audit)).not.toContain(secret);
+
+      expect((await t.call(ann, 'DELETE', '/me/authenticator')).status).toBe(
+        204,
+      );
+      expect((await t.call(ann, 'GET', '/me/authenticator')).body).toEqual({
+        enabled: false,
+      });
     });
 
     it('makes app passwords for the caller’s own mailbox, shown once', async () => {

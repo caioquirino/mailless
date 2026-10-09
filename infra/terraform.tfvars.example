@@ -21,6 +21,14 @@ activate_receipt_rule_set = false
 # auth.<domain>; the domain itself must have an A record.
 # auth_hostname = "auth.example.com"
 
+# Where other mail services send daily reports about the domain (DMARC and
+# TLS). Files for a program to read: give an address kept for them.
+# mail_report_address = "reports@example.com"
+
+# What senders are told about TLS, with route53_zone_id set: "enforce" (the
+# default), "testing" to only be told what would have been held back, or null.
+# mta_sts_mode = "testing"
+
 # For running the admin interface on your own machine against this stack.
 # admin_extra_callback_urls = ["http://localhost:5173/admin/callback"]
 

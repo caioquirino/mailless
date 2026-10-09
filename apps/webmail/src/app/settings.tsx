@@ -19,6 +19,7 @@ import { UNDO_SECONDS } from '../lib/undo';
 import { Face } from './face';
 import { FolderSetting } from './folders';
 import { TagSetting } from './tags';
+import { BlockedSetting } from './senders';
 import { useMail, useServices, useSynced } from './services';
 
 /** Turning notifications on and off, for wherever there is a switch for it. */
@@ -341,6 +342,7 @@ export function SettingsPage() {
         <PictureSetting />
         <FolderSetting />
         <TagSetting />
+        <BlockedSetting />
         <section className="setting" aria-labelledby="setting-account">
           <h2 id="setting-account">Account</h2>
           {config.accountUrl ? (

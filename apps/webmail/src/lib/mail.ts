@@ -23,6 +23,7 @@ import { bodiesOf } from './compose';
 import { Contacts } from './contacts';
 import { People } from './people';
 import { filterOf, parseSearch } from './search';
+import { Blocked, FirstTimes } from './senders';
 import { Tags } from './tags';
 
 /*
@@ -289,6 +290,9 @@ export class MailStore {
   /** The address book. Fetched when it is first looked at, or a message first written. */
   readonly contacts: Contacts;
   readonly tags: Tags;
+  /** The senders whose mail goes to the junk, and whether a message is the first from its sender. */
+  readonly blocked: Blocked;
+  readonly firstTimes: FirstTimes;
   /**
    * For how long the server will hold a message before sending it, in
    * seconds. Nought when it cannot, or when this account cannot send.
@@ -304,6 +308,8 @@ export class MailStore {
   constructor(readonly client: JmapClient) {
     this.contacts = new Contacts(client);
     this.tags = new Tags(client);
+    this.blocked = new Blocked(client);
+    this.firstTimes = new FirstTimes(client);
     this.people = new People(client, this.contacts);
     this.mailboxes = new ObjectCache(client, {
       type: 'Mailbox',
@@ -338,6 +344,7 @@ export class MailStore {
     this.holdLimit = Number.isFinite(most) && most > 0 ? most : 0;
     // What the tags are called, before any list is asked for by one of them.
     await this.tags.start().catch(() => undefined);
+    await this.blocked.start().catch(() => undefined);
   }
 
   /** The mailbox with a role: `inbox`, `trash`. */
@@ -431,6 +438,7 @@ export class MailStore {
           this.threads,
           ...(this.holdLimit > 0 ? [this.held] : []),
           ...(this.tags.made.isComplete ? [this.tags.made] : []),
+          ...(this.blocked.made.isComplete ? [this.blocked.made] : []),
           ...this.lists.values(),
         ];
         await sync(this.client, parts);

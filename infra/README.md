@@ -55,6 +55,11 @@ a whole-domain address (`*@<domain>`) may send from any address at the domain.
   that fails authentication. If the domain also sends through another service
   that does not sign with DKIM, set `dmarc_policy = "none"` or `null` first,
   or that mail may land in spam.
+- **Reports.** Set `mail_report_address` to be told, once a day by each large
+  mail service, who sent mail in your domain's name and whether it passed
+  (DMARC), and how delivery to you over TLS went. The reports are files for a
+  program to read, so give an address kept for them. Nothing is asked for
+  until you do.
 - **Bounces and complaints.** Mail is sent through a configuration set that
   reports what became of each message. The outcome per recipient is stored on
   the sent message as its JMAP `deliveryStatus`, where a client can show it.
@@ -213,6 +218,13 @@ and used. `terraform output auth` gives their addresses.
 - Without a zone, the pages are on a hostname Cognito provides and passkeys
   are bound to that hostname. Moving to a hostname of your own later means
   every passkey has to be enrolled again.
+
+A second step is there for whoever wants one: a six-digit code from an
+authenticator app, asked for after the password. Each user turns it on for
+themselves in the admin interface, under "My account", where the code to scan
+is shown: the sign-in pages ask for the code and do not offer to set it up.
+While it is on, that user signs in by password and code, and is not offered
+their passkeys. Mail apps are not affected: they use app passwords.
 
 Members of the `MAILLESS_ADMIN` group may manage accounts in the admin
 interface. The first administrator is made from here, and so is anyone who
@@ -483,13 +495,38 @@ The account's own password over HTTP Basic is refused.
 
 Things to know:
 
-- **No multi-factor authentication yet.** The account password opens only
-  the sign-in pages, where a passkey can be used instead.
+- **A second step is each user's choice.** The account password opens only
+  the sign-in pages, where a passkey can be used instead, or a code from an
+  authenticator app asked for after it (see "Sign-in pages and passkeys").
 - **Sizes.** A request body can be at most 5 MB and an upload 4 MB, because of
   Lambda's limits. Downloads have no such limit: large ones are redirected to
   a private, signed S3 link that is valid for five minutes.
 - **Without Route53** there is no `mail.<domain>`: the API is served on the
   address API Gateway generates, shown in `api_url`.
+
+### What is done about unwanted and forged mail
+
+Mail on its way in is checked by SES, and filed by what the checks came to:
+
+| What SES found                                            | What happens                                                |
+| --------------------------------------------------------- | ----------------------------------------------------------- |
+| A virus                                                   | Discarded.                                                  |
+| Spam                                                      | Filed in Junk, with the `$junk` keyword.                    |
+| Failed DMARC, and its domain asks to quarantine or reject | Filed in Junk, with `$junk` and `$phishing`.                |
+| Failed DMARC, and its domain only asks to be told         | Delivered, with `$phishing`: the webmail warns above it.    |
+| No DMARC policy, and neither SPF nor DKIM passed          | Delivered, with `mailless-unverified`: the webmail says so. |
+| From an address or a domain the account has blocked       | Filed in Junk, with `$junk`. The sender is not told.        |
+
+Blocked senders are each account's own (`BlockedSender` in JMAP, under a
+capability of this project's; the webmail keeps them in its settings, and
+reporting a message as junk adds who sent it).
+
+Mail on its way to the domain is kept to TLS. The receipt rule refuses
+anything else, and with `route53_zone_id` set the domain says so to senders
+beforehand (MTA-STS): a policy at `https://mta-sts.<domain>` that names the
+inbound server, so that a sender holds mail back sooner than hand it to
+another server or send it in the clear. `mta_sts_mode = "testing"` has senders
+only report what they would have held back; `null` publishes nothing.
 
 ## Checking it works
 

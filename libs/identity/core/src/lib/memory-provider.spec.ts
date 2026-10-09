@@ -7,5 +7,7 @@ describeIdentityContract('in-memory', async () => {
     provider,
     signIn: async (username, password) => provider.signIn(username, password),
     enrolPasskey: async (token, name) => provider.enrolPasskey(token, name).id,
+    authenticatorCode: async (secret) =>
+      InMemoryIdentityProvider.authenticatorCode(secret),
   };
 });
