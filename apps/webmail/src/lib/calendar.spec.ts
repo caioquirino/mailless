@@ -259,6 +259,98 @@ describe('an event that repeats, in the form', () => {
   });
 });
 
+describe('an event with other people on it', () => {
+  const own = [
+    { email: 'Caio@example.com', name: 'Caio' },
+    { email: 'c@work.example' },
+  ];
+  const form = () => ({
+    ...newForm('cal', at('2026-10-15', '13:00')),
+    title: 'Lunch',
+    people: 'Ann@example.net, bob@example.net',
+  });
+
+  it('is from the person who writes it, who is on it too', () => {
+    const event = eventOf(
+      { ...form(), answers: { 'ann@example.net': 'accepted' } },
+      'UTC',
+      own,
+    );
+    expect(event).toMatchObject({
+      replyTo: { imip: 'mailto:caio@example.com' },
+      participants: {
+        me: {
+          name: 'Caio',
+          email: 'caio@example.com',
+          participationStatus: 'accepted',
+          roles: { owner: true, attendee: true },
+        },
+        // What someone answered is kept when the event is written again.
+        '1': { email: 'ann@example.net', participationStatus: 'accepted' },
+        '2': {
+          email: 'bob@example.net',
+          participationStatus: 'needs-action',
+          expectReply: true,
+        },
+      },
+    });
+    expect(
+      eventOf({ ...form(), as: 'c@work.example' }, 'UTC', own),
+    ).toMatchObject({ replyTo: { imip: 'mailto:c@work.example' } });
+    // With nobody else on it, it is from nobody and nobody is on it.
+    expect(eventOf({ ...form(), people: '' }, 'UTC', own)).toMatchObject({
+      participants: null,
+      replyTo: null,
+    });
+  });
+
+  it('is read back as theirs to change, or as an invitation to answer', () => {
+    const base = {
+      id: 'e1',
+      calendarIds: { cal: true as const },
+      start: '2026-10-15T13:00:00',
+      duration: 'PT1H',
+      timeZone: 'UTC',
+      utcStart: '2026-10-15T13:00:00Z',
+      utcEnd: '2026-10-15T14:00:00Z',
+    };
+    const mine = formOf(
+      {
+        ...base,
+        ...(eventOf(form(), 'UTC', own) as object),
+      } as CalendarEvent,
+      undefined,
+      own,
+    );
+    expect(mine).toMatchObject({
+      people: 'ann@example.net, bob@example.net',
+      as: 'caio@example.com',
+      invited: null,
+    });
+
+    const theirs = formOf(
+      {
+        ...base,
+        replyTo: { imip: 'mailto:marta@example.org' },
+        participants: {
+          m: { email: 'marta@example.org', roles: { owner: true } },
+          c: { email: 'caio@example.com', participationStatus: 'tentative' },
+          j: { email: 'jonas@example.org', participationStatus: 'accepted' },
+        },
+      },
+      undefined,
+      own,
+    );
+    expect(theirs.invited).toEqual({
+      by: 'marta@example.org',
+      answer: 'tentative',
+    });
+    // Who else is on it is not the person's to say: nothing is said of it.
+    expect(eventOf(theirs, 'UTC', own)).not.toHaveProperty('participants');
+    expect(eventOf(theirs, 'UTC', own)).not.toHaveProperty('replyTo');
+  });
+});
+
 describe('reminders', () => {
   it('are said in words', () => {
     expect(reminderText(0)).toBe('When it starts');

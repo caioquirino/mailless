@@ -8020,7 +8020,11 @@ export function describeJmapConformance(
           missing: { title: 'x' },
         },
       });
-      expect(updated[created.id]).toEqual({ updated: expect.any(String) });
+      // When it is has changed: it is another thing for anyone invited to answer to.
+      expect(updated[created.id]).toEqual({
+        updated: expect.any(String),
+        sequence: 1,
+      });
       expect(notUpdated.missing).toMatchObject({ type: 'notFound' });
       const [changed] = (
         await h.call('CalendarEvent/get', {
@@ -8407,6 +8411,309 @@ export function describeJmapConformance(
         'nobody',
       );
       expect(name).toBe('error');
+    });
+  });
+
+  describe(`${name}: invitations`, () => {
+    let h: Harness;
+    let calendarId: string;
+    beforeEach(async () => {
+      h = await createHarness(factory);
+      calendarId = (await h.call('Calendar/get', { ids: null })).list[0].id;
+    });
+    const person = (email: string, more: Json = {}) => ({
+      '@type': 'Participant',
+      email,
+      sendTo: { imip: `mailto:${email}` },
+      participationStatus: 'needs-action',
+      roles: { attendee: true },
+      ...more,
+    });
+    /** An event of the account's own, with two people asked. */
+    const lunch = (more: Json = {}) => ({
+      calendarIds: { [calendarId]: true },
+      uid: 'lunch@example.com',
+      title: 'Lunch',
+      start: '2026-10-15T13:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Lisbon',
+      replyTo: { imip: 'mailto:me@example.com' },
+      participants: {
+        me: person('me@example.com', {
+          participationStatus: 'accepted',
+          roles: { owner: true, attendee: true },
+        }),
+        ann: person('ann@example.net'),
+        bob: person('bob@example.net'),
+      },
+      ...more,
+    });
+    /** The calendar a message that was sent carries. */
+    const carried = (message: string) => {
+      const found =
+        /text\/calendar[^\n]*\r\n[^\n]*\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/.exec(
+          message,
+        );
+      return (
+        decoder
+          .decode(
+            Uint8Array.from(
+              atob((found?.[1] ?? '').replace(/\s/g, '')),
+              (letter) => letter.charCodeAt(0),
+            ),
+          )
+          // A long line goes on, on the next, after a space.
+          .replace(/\r\n /g, '')
+      );
+    };
+    /** A message from someone's calendar, as it arrives. */
+    const arrives = (from: string, calendar: string) =>
+      h.server.importMessage(
+        AUTH,
+        encoder.encode(
+          [
+            `From: ${from}`,
+            'To: me@example.com',
+            'Subject: About the lunch',
+            'MIME-Version: 1.0',
+            'Content-Type: text/calendar; charset=utf-8; method=REPLY',
+            '',
+            calendar,
+          ].join('\r\n'),
+        ),
+        { mailboxRole: 'inbox', delivery: true },
+      );
+    const stored = async (id: string) =>
+      (await h.call('CalendarEvent/get', { ids: [id] })).list[0];
+
+    it('tells those invited when an event is made, and nobody unless asked to', async () => {
+      await h.call('CalendarEvent/set', {
+        create: { quiet: lunch({ uid: 'q' }) },
+      });
+      expect(h.sent).toEqual([]);
+
+      await h.call('CalendarEvent/set', {
+        create: { e: lunch() },
+        sendSchedulingMessages: true,
+      });
+      expect(h.sent).toHaveLength(1);
+      const [{ message, envelope }] = h.sent as [Harness['sent'][number]];
+      // To the others, and not to whoever it is from.
+      expect(envelope).toEqual({
+        mailFrom: 'me@example.com',
+        rcptTo: ['ann@example.net', 'bob@example.net'],
+      });
+      expect(message).toContain('From: "Me Myself" <me@example.com>');
+      expect(message).toContain('Subject: Invitation: Lunch');
+      expect(message).toContain('text/calendar; charset=utf-8; method=REQUEST');
+      expect(message).toContain('filename="invite.ics"');
+      const calendar = carried(message);
+      expect(calendar).toContain('METHOD:REQUEST');
+      expect(calendar).toContain('UID:lunch@example.com');
+      expect(calendar).toContain('DTSTART:20261015T120000Z');
+      expect(calendar).toContain('ORGANIZER:mailto:me@example.com');
+      expect(calendar).toContain(
+        'ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:ann@example.net',
+      );
+    });
+
+    it('tells them when it changes, and tells whoever is taken off, or everyone, that it is off', async () => {
+      const { id } = (
+        await h.call('CalendarEvent/set', { create: { e: lunch() } })
+      ).created.e;
+      await h.call('CalendarEvent/set', {
+        update: {
+          [id]: { start: '2026-10-15T14:00:00', 'participants/bob': null },
+        },
+        sendSchedulingMessages: true,
+      });
+      expect(h.sent.map((each) => each.envelope.rcptTo)).toEqual([
+        ['ann@example.net'],
+        ['bob@example.net'],
+      ]);
+      const [update, dropped] = h.sent as [
+        Harness['sent'][number],
+        Harness['sent'][number],
+      ];
+      expect(update.message).toContain('Subject: Updated invitation: Lunch');
+      // Another time is another thing to answer to.
+      expect(carried(update.message)).toContain('SEQUENCE:1');
+      expect(carried(update.message)).toContain('DTSTART:20261015T130000Z');
+      expect(dropped.message).toContain('Subject: Cancelled: Lunch');
+      expect(carried(dropped.message)).toContain('METHOD:CANCEL');
+      expect(carried(dropped.message)).toContain('STATUS:CANCELLED');
+
+      await h.call('CalendarEvent/set', {
+        destroy: [id],
+        sendSchedulingMessages: true,
+      });
+      expect(h.sent[2]?.envelope.rcptTo).toEqual(['ann@example.net']);
+      expect(carried(h.sent[2]?.message ?? '')).toContain('METHOD:CANCEL');
+      expect(carried(h.sent[2]?.message ?? '')).toContain('SEQUENCE:2');
+    });
+
+    it('notes what each of them answers, when their answer arrives by mail', async () => {
+      const { id } = (
+        await h.call('CalendarEvent/set', { create: { e: lunch() } })
+      ).created.e;
+      const answer = (who: string, said: string, sequence = 0) =>
+        [
+          'BEGIN:VCALENDAR',
+          'METHOD:REPLY',
+          'BEGIN:VEVENT',
+          'UID:lunch@example.com',
+          `SEQUENCE:${sequence}`,
+          'DTSTART:20261015T120000Z',
+          'ORGANIZER:mailto:me@example.com',
+          `ATTENDEE;PARTSTAT=${said}:mailto:${who}`,
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n');
+      await arrives(
+        'Ann <ann@example.net>',
+        answer('ann@example.net', 'ACCEPTED'),
+      );
+      // Nobody answers for somebody else.
+      await arrives(
+        'mallory@example.org',
+        answer('bob@example.net', 'DECLINED'),
+      );
+      expect((await stored(id)).participants).toMatchObject({
+        ann: { participationStatus: 'accepted' },
+        bob: { participationStatus: 'needs-action' },
+      });
+
+      // An answer to how the event was before it changed is no answer to how it is.
+      await h.call('CalendarEvent/set', {
+        update: { [id]: { start: '2026-10-16T13:00:00' } },
+      });
+      await arrives(
+        'bob@example.net',
+        answer('bob@example.net', 'TENTATIVE', 0),
+      );
+      expect((await stored(id)).participants.bob.participationStatus).toBe(
+        'needs-action',
+      );
+      await arrives(
+        'bob@example.net',
+        answer('bob@example.net', 'TENTATIVE', 1),
+      );
+      expect((await stored(id)).participants.bob.participationStatus).toBe(
+        'tentative',
+      );
+      // The messages themselves are mail like any other.
+      expect((await h.call('Email/query', {})).ids).toHaveLength(4);
+    });
+
+    it('answers whoever invited, and takes their word that it is off', async () => {
+      const invitation = {
+        calendarIds: { [calendarId]: true },
+        uid: 'review@example.org',
+        title: 'Quarterly review',
+        start: '2026-10-12T13:00:00',
+        duration: 'PT1H30M',
+        timeZone: 'Europe/Berlin',
+        replyTo: { imip: 'mailto:marta@example.org' },
+        participants: {
+          marta: person('marta@example.org', { roles: { owner: true } }),
+          me: person('me@example.com', { participationStatus: 'accepted' }),
+        },
+      };
+      const { id } = (
+        await h.call('CalendarEvent/set', {
+          create: { e: invitation },
+          sendSchedulingMessages: true,
+        })
+      ).created.e;
+      expect(h.sent).toHaveLength(1);
+      expect(h.sent[0]?.envelope).toEqual({
+        mailFrom: 'me@example.com',
+        rcptTo: ['marta@example.org'],
+      });
+      expect(h.sent[0]?.message).toContain(
+        'Subject: Accepted: Quarterly review',
+      );
+      const reply = carried(h.sent[0]?.message ?? '');
+      expect(reply).toContain('METHOD:REPLY');
+      // Only the one who answers is said anything of.
+      expect(reply.match(/^ATTENDEE.*$/gm)).toEqual([
+        'ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:me@example.com',
+      ]);
+
+      // Changing the answer says so; changing something of one's own does not.
+      await h.call('CalendarEvent/set', {
+        update: {
+          [id]: { 'participants/me/participationStatus': 'tentative' },
+        },
+        sendSchedulingMessages: true,
+      });
+      await h.call('CalendarEvent/set', {
+        update: { [id]: { description: 'Bring the numbers' } },
+        sendSchedulingMessages: true,
+      });
+      expect(
+        h.sent.map((each) => /Subject: (.*)\r/.exec(each.message)?.[1]),
+      ).toEqual(['Accepted: Quarterly review', 'Maybe: Quarterly review']);
+
+      const off = (sequence: number) =>
+        [
+          'BEGIN:VCALENDAR',
+          'METHOD:CANCEL',
+          'BEGIN:VEVENT',
+          'UID:review@example.org',
+          `SEQUENCE:${sequence}`,
+          'DTSTART:20261012T110000Z',
+          'ORGANIZER:mailto:marta@example.org',
+          'STATUS:CANCELLED',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n');
+      // Nobody calls off what is not theirs.
+      await arrives('mallory@example.org', off(1));
+      expect((await stored(id)).status).toBeUndefined();
+      await arrives('marta@example.org', off(1));
+      expect((await stored(id)).status).toBe('cancelled');
+    });
+
+    it('reads the event out of a calendar file, without keeping it', async () => {
+      const { blobId } = await h.server.upload(
+        AUTH,
+        AUTH.accountId,
+        encoder.encode(
+          [
+            'BEGIN:VCALENDAR',
+            'METHOD:REQUEST',
+            'BEGIN:VEVENT',
+            'UID:review@example.org',
+            'SUMMARY:Quarterly review',
+            'DTSTART;TZID=Europe/Berlin:20261012T130000',
+            'DTEND;TZID=Europe/Berlin:20261012T143000',
+            'ORGANIZER;CN=Marta:mailto:marta@example.org',
+            'ATTENDEE;RSVP=TRUE:mailto:me@example.com',
+            'END:VEVENT',
+            'END:VCALENDAR',
+          ].join('\r\n'),
+        ),
+        'text/calendar',
+      );
+      const notOne = await h.upload('Subject: not a calendar\r\n\r\nHello');
+      const { parsed, notParsable, notFound } = await h.call(
+        'CalendarEvent/parse',
+        { blobIds: [blobId, notOne, 'missing'] },
+      );
+      expect(parsed[blobId]).toMatchObject({
+        id: blobId,
+        method: 'request',
+        uid: 'review@example.org',
+        title: 'Quarterly review',
+        start: '2026-10-12T13:00:00',
+        timeZone: 'Europe/Berlin',
+        duration: 'PT1H30M',
+        replyTo: { imip: 'mailto:marta@example.org' },
+      });
+      expect(notParsable).toEqual([notOne]);
+      expect(notFound).toEqual(['missing']);
+      expect((await h.call('CalendarEvent/query', {})).ids).toEqual([]);
     });
   });
 

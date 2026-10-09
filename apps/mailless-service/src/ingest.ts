@@ -64,6 +64,15 @@ const jmap = createJmapServer({
       await directory.addressesOf(auth.accountId),
       (await directory.account(auth.accountId))?.name,
     ),
+  // An answer to an invitation, or word that an event is off, that could not
+  // be taken in. The kind of failure only: nothing of whose calendar or what event.
+  onSchedulingError: (error) =>
+    console.log(
+      JSON.stringify({
+        event: 'scheduling',
+        error: (error as { name?: string }).name ?? 'Error',
+      }),
+    ),
   // The outcome only: who wrote, and to whom, stays out of the logs.
   onAutoReply: (outcome, error) => {
     if (outcome === 'disabled') return;

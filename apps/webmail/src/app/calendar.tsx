@@ -17,13 +17,14 @@ import {
   weekStart,
   withSpan,
   weekTitle,
+  type Answer,
   type CalendarEvent,
   type EventForm,
   type Shown,
   type WindowMessage,
 } from '../lib/calendar';
 import { appBaseUrl } from '../lib/config';
-import { EventEditor } from './event-editor';
+import { ANSWER_WORDS, EventEditor } from './event-editor';
 import { Rail } from './rail';
 import { useMail, useServices, useSynced, withUndo } from './services';
 
@@ -151,17 +152,34 @@ export function CalendarPage(props: CalendarPageProps) {
     }
     write(newForm(into.id, from, end, allDay));
   };
-  const save = async () => {
+  const save = async (tell: boolean) => {
     if (!writing) return;
     setBusy(true);
     const { form } = writing;
-    const kept = await act(() => calendar.save(form));
+    const kept = await act(() => calendar.save(form, tell));
     setBusy(false);
     if (!kept) return;
     setWriting(null);
-    say(form.id === null ? 'Added to the calendar' : 'Saved');
+    say(
+      `${form.id === null ? 'Added to the calendar' : 'Saved'}${tell ? '. The people on it were told.' : ''}`,
+    );
   };
-  const remove = async (form: EventForm) => {
+  const answer = async (reply: Answer) => {
+    if (!writing?.form.invited) return;
+    const { key, form } = writing;
+    setBusy(true);
+    const told = await act(() =>
+      calendar.answer(form.series?.id ?? (form.id as string), reply),
+    );
+    setBusy(false);
+    if (!told || !form.invited) return;
+    setWriting({
+      key,
+      form: { ...form, invited: { ...form.invited, answer: reply } },
+    });
+    say(`${form.invited.by} was told: ${ANSWER_WORDS[reply]?.toLowerCase()}`);
+  };
+  const remove = async (form: EventForm, tell: boolean) => {
     if (form.id === null) return;
     setBusy(true);
     let back: (() => Promise<void>) | null = null;
@@ -172,14 +190,16 @@ export function CalendarPage(props: CalendarPageProps) {
           ...(form.series ? { baseEventId: form.series.id } : {}),
         },
         form.series?.all ?? false,
+        tell,
       );
     });
     setBusy(false);
     if (!gone) return;
     setWriting(null);
     say(
-      `${form.title.trim() || 'The event'} was deleted`,
-      withUndo({ act, say }, back),
+      `${form.title.trim() || 'The event'} was deleted${tell ? ', and the others were told' : ''}`,
+      // What was said to the others cannot be unsaid: only what was not said is taken back.
+      tell ? {} : withUndo({ act, say }, back),
     );
   };
   /** An event to change: one of the times of one that repeats knows the event it is a time of. */
@@ -188,6 +208,7 @@ export function CalendarPage(props: CalendarPageProps) {
       formOf(
         event,
         event.baseEventId ? calendar.events.get(event.baseEventId) : undefined,
+        calendar.own,
       ),
     );
   const popOut = () => {
@@ -232,7 +253,7 @@ export function CalendarPage(props: CalendarPageProps) {
     const whole = event.baseEventId
       ? calendar.events.get(event.baseEventId)
       : undefined;
-    const before = formOf(event, whole);
+    const before = formOf(event, whole, calendar.own);
     const moved = await act(() => calendar.save(withSpan(before, from, until)));
     if (!moved) return;
     say(
@@ -405,12 +426,14 @@ export function CalendarPage(props: CalendarPageProps) {
             form={writing.form}
             calendars={calendar.all()}
             busy={busy}
+            own={calendar.own}
             onChange={(form) => setWriting({ key: writing.key, form })}
-            onSave={() => void save()}
+            onSave={(tell) => void save(tell)}
             onClose={() => setWriting(null)}
             onPopOut={popOut}
+            onAnswer={(reply) => void answer(reply)}
             {...(writing.form.id !== null
-              ? { onDelete: () => void remove(writing.form) }
+              ? { onDelete: (tell: boolean) => void remove(writing.form, tell) }
               : {})}
           />
         </div>
@@ -1125,12 +1148,13 @@ export function EventWindow() {
         calendars={calendar.all()}
         busy={busy}
         failure={failure}
+        own={calendar.own}
         onChange={setForm}
-        onSave={() => void run(() => calendar.save(form))}
+        onSave={(tell) => void run(() => calendar.save(form, tell))}
         onClose={() => done('closed')}
         {...(form.id !== null
           ? {
-              onDelete: () =>
+              onDelete: (tell: boolean) =>
                 void run(() =>
                   calendar.remove(
                     {
@@ -1138,6 +1162,7 @@ export function EventWindow() {
                       ...(form.series ? { baseEventId: form.series.id } : {}),
                     },
                     form.series?.all ?? false,
+                    tell,
                   ),
                 ),
             }

@@ -30,6 +30,7 @@ import { Face } from './face';
 import { MoveTo } from './list';
 import { TagChip, TagPicker } from './tags';
 import { cautions } from '../lib/senders';
+import { InvitationCard } from './invitation';
 import { useMail, useServices, useSynced, withUndo } from './services';
 
 /** A picture that came with a message is not shown in it when it is larger than this. */
@@ -731,6 +732,7 @@ function Message(props: MessageProps) {
           <Cautions email={email} />
           {loaded ? (
             <>
+              <InvitationCard email={email} />
               <Body
                 email={email}
                 onShown={(part, pictures) => shown.current.set(part, pictures)}

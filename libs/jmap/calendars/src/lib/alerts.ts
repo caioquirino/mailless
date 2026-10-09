@@ -168,7 +168,11 @@ export async function takeCalendarAlerts(
       : { kind: 'create', type: ALERT_STATE, id: STATE_ID, value },
   ]);
   return {
-    due: due.map(({ time: _time, ...alert }) => alert),
+    due: due.map((each): CalendarAlert => {
+      const alert: Partial<typeof each> = { ...each };
+      delete alert.time;
+      return alert as CalendarAlert;
+    }),
     next: await nextCalendarAlert(ctx, now),
   };
 }

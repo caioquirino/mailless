@@ -26,4 +26,6 @@ export {
 // How full a mailbox is, for something that reports on accounts without reading their mail.
 export { storedUsage } from './lib/quota.js';
 export { tagsModule } from './lib/tag.js';
+// What a message says of a calendar, for a server that keeps one too.
+export { calendarParts } from './lib/mime.js';
 export { blockedSendersModule } from './lib/blocked.js';

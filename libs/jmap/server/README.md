@@ -397,7 +397,20 @@ card must have and the client left out: `uid`, `created`, `updated`.
   next, and `nextCalendarAlert` says when that is without marking anything.
   A host pushes them as a state change of the type `CalendarAlert`, which is
   not data and has no methods: a subscription names it to be told.
-- Not there yet: sending invitations.
+- The people on an event are told of it by mail when `CalendarEvent/set` is
+  given `sendSchedulingMessages: true`, as standard invitations (iTIP by
+  mail, RFC 6047): whoever the event is from tells those invited when it is
+  made, changed or removed, and whoever was invited tells them what they
+  answer. Who an event is from is its `replyTo.imip`; it is the account's to
+  tell of when that is one of its identities. Not having been able to send
+  does not undo the change: `onSchedulingError` is told.
+- Mail that arrives with an answer to an invitation of the account's own
+  notes the answer on the event, and with word that an event the account was
+  invited to is off marks it cancelled. Only from whoever it concerns: nobody
+  answers for somebody else, or calls off what is not theirs. An invitation
+  that arrives is not put in the calendar until it is answered.
+- `CalendarEvent/parse` reads the event out of a calendar file (iCalendar),
+  such as the one an invitation comes with, without keeping it.
 
 ### Vacation response
 

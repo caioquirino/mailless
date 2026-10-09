@@ -146,6 +146,14 @@ export const handler = createLambdaHttpHandler({
         // Mail apps register where to be told of new mail. The push function does the telling.
         push: vapid ? { vapid } : {},
         // An account may send from the addresses that deliver to it.
+        // The people on an event that could not be told of it. The kind of failure only.
+        onSchedulingError: (error) =>
+          console.log(
+            JSON.stringify({
+              event: 'scheduling',
+              error: (error as { name?: string }).name ?? 'Error',
+            }),
+          ),
         identities: async (auth) =>
           identitiesFor(
             auth.accountId,

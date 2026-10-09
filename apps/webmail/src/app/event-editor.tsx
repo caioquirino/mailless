@@ -8,10 +8,50 @@ import {
   reminderText,
   remindersOf,
   usedParts,
+  type Answer,
   type Calendar,
   type EventForm,
   type FormPart,
+  type Own,
 } from '../lib/calendar';
+
+/** What someone answered, in a word. */
+export const ANSWER_WORDS: Record<string, string> = {
+  accepted: 'Yes',
+  tentative: 'Maybe',
+  declined: 'No',
+  'needs-action': 'No answer yet',
+};
+
+const ANSWERS: ReadonlyArray<{ answer: Answer; label: string }> = [
+  { answer: 'accepted', label: 'Yes' },
+  { answer: 'tentative', label: 'Maybe' },
+  { answer: 'declined', label: 'No' },
+];
+
+/** Yes, maybe, no: the three things to say to an invitation, with the one that was said pressed. */
+export function AnswerButtons(props: {
+  answer: string;
+  busy: boolean;
+  onAnswer(answer: Answer): void;
+}) {
+  return (
+    <span className="answer-buttons" role="group" aria-label="Your answer">
+      {ANSWERS.map((each) => (
+        <button
+          key={each.answer}
+          type="button"
+          className={`button button-small${props.answer === each.answer ? ' answer-given' : ''}`}
+          aria-pressed={props.answer === each.answer}
+          disabled={props.busy}
+          onClick={() => props.onAnswer(each.answer)}
+        >
+          {each.label}
+        </button>
+      ))}
+    </span>
+  );
+}
 
 /*
  * Writing an event. One form that starts small (what, when, in which
@@ -60,11 +100,16 @@ export interface EventEditorProps {
   busy: boolean;
   /** What went wrong keeping it, when something did. */
   failure?: string | null;
+  /** The addresses the person goes by, for who an event with people on it is from. */
+  own?: readonly Own[];
   onChange(form: EventForm): void;
-  onSave(): void;
+  /** Keeps it. `tell` is whether the people on it are to be told, which is asked each time. */
+  onSave(tell: boolean): void;
   onClose(): void;
   /** Removes the event. Not there for one that is not kept yet. */
-  onDelete?(): void;
+  onDelete?(tell: boolean): void;
+  /** Answers the invitation the event is, and tells whoever it is from. */
+  onAnswer?(answer: Answer): void;
   /** Moves the form to a window of its own. Not there where it already is in one. */
   onPopOut?(): void;
 }
@@ -80,6 +125,13 @@ export function EventEditor(props: EventEditorProps) {
   ]);
   const title = useRef<HTMLInputElement>(null);
   useEffect(() => title.current?.focus(), []);
+  /** Whether there were others on it when it was opened: they hear of what is done to it even when taken off. */
+  const [hadPeople] = useState(form.people.trim() !== '');
+  /** What is about to be done, while it is asked whether the others are to be told. */
+  const [asking, setAsking] = useState<'save' | 'delete' | null>(null);
+  const others =
+    form.invited === null && (hadPeople || form.people.trim() !== '');
+  const selves = props.own ?? [];
   const set = (change: Partial<EventForm>) =>
     props.onChange({ ...form, ...change });
   const calendar = calendars.find((each) => each.id === form.calendarId);
@@ -114,7 +166,15 @@ export function EventEditor(props: EventEditorProps) {
     event.preventDefault();
     if (busy || problem) return;
     rememberParts(open);
-    props.onSave();
+    // With others on it, whether to tell them is asked every time.
+    if (others) setAsking('save');
+    else props.onSave(false);
+  };
+  const tellOrNot = (tell: boolean) => {
+    const what = asking;
+    setAsking(null);
+    if (what === 'save') props.onSave(tell);
+    else props.onDelete?.(tell);
   };
   const field = (
     part: FormPart,
@@ -317,16 +377,67 @@ export function EventEditor(props: EventEditorProps) {
             onChange={(event) => set({ place: event.target.value })}
           />,
         )}
-        {field(
-          'people',
-          'People',
-          'contacts',
-          <input
-            aria-label="People"
-            placeholder="Addresses, with commas between them"
-            value={form.people}
-            onChange={(event) => set({ people: event.target.value })}
-          />,
+        {form.invited ? (
+          <div className="event-invited">
+            <p>
+              <strong>Invitation</strong> from {form.invited.by}
+              {form.people ? (
+                <span className="muted small"> · with {form.people}</span>
+              ) : null}
+            </p>
+            {props.onAnswer ? (
+              <AnswerButtons
+                answer={form.invited.answer}
+                busy={busy}
+                onAnswer={props.onAnswer}
+              />
+            ) : null}
+          </div>
+        ) : (
+          field(
+            'people',
+            'People',
+            'contacts',
+            <div className="event-people">
+              <input
+                aria-label="People"
+                placeholder="Addresses, with commas between them"
+                value={form.people}
+                onChange={(event) => set({ people: event.target.value })}
+              />
+              {Object.keys(form.answers).length > 0 ? (
+                <ul className="event-answers" aria-label="What they answered">
+                  {Object.entries(form.answers).map(([email, answer]) => (
+                    <li key={email} className={`answer-${answer}`}>
+                      {email}
+                      <span className="muted small">
+                        {' '}
+                        · {ANSWER_WORDS[answer] ?? ANSWER_WORDS['needs-action']}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {selves.length > 1 ? (
+                <label className="event-as">
+                  <span className="muted small">Invite as</span>
+                  <select
+                    aria-label="Invite as"
+                    value={form.as || (selves[0]?.email ?? '')}
+                    onChange={(event) => set({ as: event.target.value })}
+                  >
+                    {selves.map((each) => (
+                      <option key={each.email} value={each.email}>
+                        {each.name
+                          ? `${each.name} <${each.email}>`
+                          : each.email}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </div>,
+          )
         )}
         {field(
           'link',
@@ -419,6 +530,7 @@ export function EventEditor(props: EventEditorProps) {
             {PARTS.filter(
               (each) =>
                 !open.includes(each.part) &&
+                !(each.part === 'people' && form.invited) &&
                 !(each.part === 'repeat' && form.series && !form.series.all),
             ).map((each) => (
               <button
@@ -446,30 +558,68 @@ export function EventEditor(props: EventEditorProps) {
           </p>
         ) : null}
       </div>
-      <footer className="event-foot">
-        {props.onDelete ? (
+      {asking ? (
+        <footer
+          className="event-foot event-ask"
+          role="alertdialog"
+          aria-label="Tell the others?"
+        >
+          <span className="event-foot-gap">
+            {form.invited
+              ? `Tell ${form.invited.by} you are not coming?`
+              : asking === 'delete'
+                ? 'Tell the people on it that it is cancelled?'
+                : 'Send this to the people on it?'}
+          </span>
+          <Button type="button" onClick={() => setAsking(null)}>
+            Back
+          </Button>
           <Button
             type="button"
-            icon="delete"
             disabled={busy}
-            onClick={props.onDelete}
+            onClick={() => tellOrNot(false)}
           >
-            Delete
+            Don’t send
           </Button>
-        ) : null}
-        <span className="event-foot-gap">
-          {problem && form.title !== '' ? (
-            <span className="muted small">{problem}</span>
+          <Button
+            type="button"
+            variant="primary"
+            disabled={busy}
+            onClick={() => tellOrNot(true)}
+          >
+            Send
+          </Button>
+        </footer>
+      ) : (
+        <footer className="event-foot">
+          {props.onDelete ? (
+            <Button
+              type="button"
+              icon="delete"
+              disabled={busy}
+              onClick={() => {
+                // With others on it, or as someone invited, whether to say so is asked.
+                if (others || form.invited) setAsking('delete');
+                else props.onDelete?.(false);
+              }}
+            >
+              Delete
+            </Button>
           ) : null}
-        </span>
-        <Button
-          type="submit"
-          variant="primary"
-          disabled={busy || problem !== null}
-        >
-          Save
-        </Button>
-      </footer>
+          <span className="event-foot-gap">
+            {problem && form.title !== '' ? (
+              <span className="muted small">{problem}</span>
+            ) : null}
+          </span>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={busy || problem !== null}
+          >
+            Save
+          </Button>
+        </footer>
+      )}
     </form>
   );
 }

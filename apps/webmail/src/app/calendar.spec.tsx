@@ -487,6 +487,188 @@ describe('the calendar', () => {
   });
 });
 
+describe('invitations', () => {
+  /** The calendar a message that was sent carries. */
+  const carried = (message: string) => {
+    const found =
+      /text\/calendar[^\n]*\r\n[^\n]*\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/.exec(
+        message,
+      );
+    return atob((found?.[1] ?? '').replace(/\s/g, '')).replace(/\r\n /g, '');
+  };
+
+  it('asks each time whether the people on an event are to be told, and tells them when asked', async () => {
+    const backend = await fakeBackend();
+    await renderApp(backend, `/calendar/week/${today}`);
+    await within(await opened()).findByRole('grid', { name: 'Week' });
+    await userEvent.click(newEvent());
+    let form = await screen.findByRole('form', { name: 'New event' });
+    await userEvent.type(within(form).getByLabelText('Title'), 'Lunch');
+    await userEvent.click(
+      within(
+        within(form).getByRole('group', { name: 'Add to the event' }),
+      ).getByRole('button', { name: 'People' }),
+    );
+    await userEvent.type(
+      within(form).getByLabelText('People'),
+      'bob@example.net',
+    );
+    await userEvent.click(within(form).getByRole('button', { name: 'Save' }));
+    // Not kept yet: first, whether to tell him.
+    const ask = within(form).getByRole('alertdialog', {
+      name: 'Tell the others?',
+    });
+    expect(ask).toHaveTextContent('Send this to the people on it?');
+    expect(await events(backend)).toEqual([]);
+    await userEvent.click(within(ask).getByRole('button', { name: 'Send' }));
+    expect(
+      await screen.findByText(
+        'Added to the calendar. The people on it were told.',
+      ),
+    ).toBeInTheDocument();
+    expect(backend.sent).toHaveLength(1);
+    expect(backend.sent[0]?.recipients).toEqual(['bob@example.net']);
+    expect(backend.sent[0]?.message).toContain('Subject: Invitation: Lunch');
+    const invitation = carried(backend.sent[0]?.message ?? '');
+    expect(invitation).toContain('METHOD:REQUEST');
+    expect(invitation).toContain('ORGANIZER;CN=Ann:mailto:ann@example.com');
+
+    // Changed, and this time nobody is told.
+    await userEvent.click(
+      await within(await opened()).findByRole('button', { name: /Lunch/ }),
+    );
+    form = await screen.findByRole('form', { name: 'Event' });
+    expect(within(form).getByLabelText('People')).toHaveValue(
+      'bob@example.net',
+    );
+    expect(
+      within(form).getByRole('list', { name: 'What they answered' }),
+    ).toHaveTextContent('bob@example.net · No answer yet');
+    await userEvent.type(within(form).getByLabelText('Title'), ' at one');
+    await userEvent.click(within(form).getByRole('button', { name: 'Save' }));
+    await userEvent.click(
+      within(form).getByRole('button', { name: 'Don’t send' }),
+    );
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+    expect(backend.sent).toHaveLength(1);
+
+    // Deleted, and he is told that it is off.
+    await userEvent.click(
+      await within(await opened()).findByRole('button', {
+        name: /Lunch at one/,
+      }),
+    );
+    form = await screen.findByRole('form', { name: 'Event' });
+    await userEvent.click(within(form).getByRole('button', { name: 'Delete' }));
+    expect(
+      within(form).getByRole('alertdialog', { name: 'Tell the others?' }),
+    ).toHaveTextContent('Tell the people on it that it is cancelled?');
+    await userEvent.click(within(form).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(backend.sent).toHaveLength(2));
+    expect(backend.sent[1]?.message).toContain(
+      'Subject: Cancelled: Lunch at one',
+    );
+    // What was said cannot be unsaid: there is nothing to undo.
+    expect(
+      await screen.findByText(
+        'Lunch at one was deleted, and the others were told',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Undo' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows an invitation above the message it came with, answers it, and puts it in the calendar', async () => {
+    const backend = await fakeBackend();
+    // From one to half past two today, by the clock here, said in the world's time as other calendars say it.
+    const from = new Date(`${today}T13:00:00`);
+    const until = new Date(`${today}T14:30:00`);
+    const stamp = (date: Date) =>
+      `${date.toISOString().slice(0, 19).replace(/[-:]/g, '')}Z`;
+    const calendar = [
+      'BEGIN:VCALENDAR',
+      'METHOD:REQUEST',
+      'BEGIN:VEVENT',
+      'UID:review@example.org',
+      'SUMMARY:Quarterly review',
+      `DTSTART:${stamp(from)}`,
+      `DTEND:${stamp(until)}`,
+      'LOCATION:Room 2',
+      'ORGANIZER;CN=Marta:mailto:marta@example.org',
+      'ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:ann@example.com',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    await backend.deliver({
+      raw: [
+        'From: Marta <marta@example.org>',
+        'To: ann@example.com',
+        'Subject: Invitation: Quarterly review',
+        'Message-ID: <inv1@example.org>',
+        'Date: Mon, 5 Jan 2026 09:00:00 +0000',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/alternative; boundary="b"',
+        '',
+        '--b',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'Marta invites you.',
+        '--b',
+        'Content-Type: text/calendar; charset=utf-8; method=REQUEST',
+        '',
+        calendar,
+        '--b--',
+        '',
+      ].join('\r\n'),
+    });
+    await renderApp(backend);
+    await userEvent.click(
+      await screen.findByRole('link', { name: /Quarterly review/ }),
+    );
+    const card = await screen.findByRole('note', { name: 'Invitation' });
+    expect(card).toHaveTextContent('Quarterly review');
+    expect(card).toHaveTextContent('13:00 – 14:30');
+    expect(card).toHaveTextContent('Room 2');
+    // Nothing is in the calendar until it is answered.
+    expect(await events(backend)).toEqual([]);
+
+    await userEvent.click(within(card).getByRole('button', { name: 'Yes' }));
+    expect(
+      await screen.findByText(
+        'marta@example.org was told: yes. It is in your calendar.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Yes' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(backend.sent).toHaveLength(1);
+    expect(backend.sent[0]?.recipients).toEqual(['marta@example.org']);
+    expect(backend.sent[0]?.message).toContain(
+      'Subject: Accepted: Quarterly review',
+    );
+    expect(carried(backend.sent[0]?.message ?? '')).toContain(
+      'PARTSTAT=ACCEPTED:mailto:ann@example.com',
+    );
+    expect(await events(backend)).toMatchObject([
+      {
+        title: 'Quarterly review',
+        start: from.toISOString().slice(0, 19),
+        timeZone: 'Etc/UTC',
+      },
+    ]);
+
+    // Thought better of: the same event, another answer, and Marta is told again.
+    await userEvent.click(within(card).getByRole('button', { name: 'Maybe' }));
+    await waitFor(() => expect(backend.sent).toHaveLength(2));
+    expect(backend.sent[1]?.message).toContain(
+      'Subject: Maybe: Quarterly review',
+    );
+    expect(await events(backend)).toHaveLength(1);
+  });
+});
+
 describe('the calendars, in the settings', () => {
   it('are made, named, made the default and removed', async () => {
     const backend = await fakeBackend();

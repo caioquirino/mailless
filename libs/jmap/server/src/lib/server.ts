@@ -1,5 +1,6 @@
 import type { CoreCapability } from '@mailless/jmap-core';
 import {
+  applySchedulingMessage,
   calendarsModule,
   nextCalendarAlert,
   takeCalendarAlerts,
@@ -15,6 +16,7 @@ import {
 } from '@mailless/jmap-engine';
 import {
   blockedSendersModule,
+  calendarParts,
   importMessage,
   mailModule,
   recordDelivery,
@@ -27,6 +29,7 @@ import {
   tagsModule,
 } from '@mailless/jmap-mail';
 import { sharingModule } from '@mailless/jmap-sharing';
+import { schedulingMail } from './scheduling-mail.js';
 
 /*
  * A JMAP server with everything this project offers: mail, contacts and
@@ -39,6 +42,12 @@ export interface JmapServerOptions
   extends Omit<JmapEngineOptions, 'modules'>, MailModuleOptions {
   storage: StorageAdapter;
   limits?: Partial<CoreCapability>;
+  /**
+   * Told when the people on an event could not be told of it, or word from
+   * someone else's calendar could not be taken in. Neither undoes what was
+   * asked for: the event is kept, the message delivered.
+   */
+  onSchedulingError?: (error: unknown) => void;
 }
 
 export interface JmapServer extends Omit<JmapEngine, 'contextFor'> {
@@ -95,6 +104,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     maxSizeBlob,
     identities,
     onAutoReply,
+    onSchedulingError,
     ...engineOptions
   } = options;
   const mail: MailModuleOptions = {
@@ -118,14 +128,50 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       blockedSendersModule(),
       sharingModule(),
       contactsModule(),
-      calendarsModule(),
+      calendarsModule(
+        // The people on an event are told of it where there is a way to send mail.
+        transport
+          ? {
+              scheduling: {
+                addresses: async (ctx) =>
+                  (await ctx.mail.identities()).map((identity) => ({
+                    email: identity.email,
+                    name: identity.name,
+                  })),
+                send: async (ctx, message) => {
+                  await transport.send(schedulingMail(message), {
+                    mailFrom: message.from.email,
+                    rcptTo: message.to,
+                  });
+                },
+              },
+              ...(onSchedulingError ? { onSchedulingError } : {}),
+            }
+          : {},
+      ),
     ],
   });
 
   return {
     ...engine,
-    importMessage: (auth, raw, importOptions) =>
-      importMessage(contextFor(auth), raw, importOptions),
+    importMessage: async (auth, raw, importOptions) => {
+      const ctx = contextFor(auth);
+      const imported = await importMessage(ctx, raw, importOptions);
+      // Mail from outside may be word from someone else's calendar: an answer
+      // to an invitation, or an event that is off. It is taken in; the
+      // message is delivered whether or not that worked.
+      if (importOptions.delivery) {
+        try {
+          const { from, calendars } = await calendarParts(raw);
+          for (const calendar of from ? calendars : []) {
+            await applySchedulingMessage(ctx, calendar, from as string);
+          }
+        } catch (error) {
+          onSchedulingError?.(error);
+        }
+      }
+      return imported;
+    },
     recordDelivery: (auth, submissionId, updates) =>
       recordDelivery(contextFor(auth), submissionId, updates),
     sendScheduled: (auth, submissionId) =>

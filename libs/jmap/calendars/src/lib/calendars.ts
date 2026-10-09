@@ -41,6 +41,7 @@ import {
   type StoredRecord,
   type WriteOp,
 } from '@mailless/jmap-engine';
+import { fromICalendar, organizerOf } from './icalendar.js';
 import {
   expand,
   NOT_FOR_ONE,
@@ -49,12 +50,28 @@ import {
   parseOccurrenceId,
   repeats,
 } from './recurrence.js';
+import { messagesFor, type Scheduling } from './scheduling.js';
 import {
   durationMillis,
   isTimeZone,
   LOCAL_DATE_TIME,
   zonedToUtc,
 } from './time.js';
+
+/** What the calendar methods need besides what every method has. */
+export interface CalendarsContext {
+  /** Present when the server can tell the people on an event about it. */
+  scheduling?: Scheduling;
+  /** Told when one of them could not be told. The event is kept all the same. */
+  onSchedulingError?: (error: unknown) => void;
+}
+
+declare module '@mailless/jmap-engine' {
+  interface MethodContext {
+    /** Set by the calendars module on every context. */
+    calendars: CalendarsContext;
+  }
+}
 
 /*
  * Calendars, and the events in them, as JMAP for Calendars has them. An
@@ -495,6 +512,17 @@ const CalendarSetArgumentsSchema = SetArgumentsSchema.extend({
 
 type Event = { id: string } & Record<string, unknown>;
 
+/** What an answer to an invitation is an answer to. */
+const WHEN_AND_WHERE = [
+  'start',
+  'duration',
+  'timeZone',
+  'showWithoutTime',
+  'locations',
+  'recurrenceRules',
+  'recurrenceRule',
+];
+
 /** What is worked out from an event and never kept with it. */
 const COMPUTED = ['utcStart', 'utcEnd', 'isOrigin', 'baseEventId'];
 
@@ -798,6 +826,16 @@ async function updateEvent(
   if (!changedProperties.includes('updated')) {
     serverSet['updated'] = next['updated'] = toUtcDate(new Date());
     changedProperties.push('updated');
+  }
+  // When or where it is has changed: those who answered answered to something
+  // else, which a higher number tells their calendars (RFC 5546 §2.1.4).
+  if (
+    WHEN_AND_WHERE.some((property) => changedProperties.includes(property)) &&
+    !changedProperties.includes('sequence')
+  ) {
+    serverSet['sequence'] = next['sequence'] =
+      Number(record.value['sequence'] ?? 0) + 1;
+    changedProperties.push('sequence');
   }
   await checkEvent(ctx, next);
   await commit(ctx, [
@@ -1104,6 +1142,20 @@ const AvailabilityArgumentsSchema = z.strictObject({
   eventProperties: z.array(z.string()).nullish(),
 });
 
+const EventSetArgumentsSchema = SetArgumentsSchema.extend({
+  /** Tells the people on each event what was done to it, by mail. */
+  sendSchedulingMessages: z.boolean().optional(),
+});
+
+const EventParseArgumentsSchema = z.strictObject({
+  accountId: z.string(),
+  blobIds: z.array(z.string()).max(20),
+  properties: z.array(z.string()).nullish(),
+});
+
+/** A calendar file larger than this is not read: an invitation is a few lines. */
+const MAX_CALENDAR_OCTETS = 1024 * 1024;
+
 const eventSetSpec = {
   type: CALENDAR_EVENT,
   create: createEvent,
@@ -1263,13 +1315,110 @@ export const calendarMethods: Record<string, MethodHandler> = {
     return { ...queryChanges(ctx, ids, changes, [], args, state) };
   },
 
-  'CalendarEvent/set': async (rawArgs, ctx) => ({
-    ...(await standardSet(
+  'CalendarEvent/set': async (rawArgs, ctx) => {
+    const args = parseArguments(EventSetArgumentsSchema, rawArgs);
+    const tell =
+      args.sendSchedulingMessages === true
+        ? ctx.calendars.scheduling
+        : undefined;
+    if (!tell) return { ...(await standardSet(ctx, eventSetSpec, args)) };
+
+    // Each event as it was and as it is, for what to tell the people on it.
+    const changes: Array<{ before?: Event; after?: Event }> = [];
+    const whole = async (id: string) => {
+      const [record] = await ctx.store.get(ctx.auth.accountId, CALENDAR_EVENT, [
+        id,
+      ]);
+      return record ? ({ ...record.value } as Event) : undefined;
+    };
+    const kept = (before?: Event, after?: Event) =>
+      changes.push({
+        ...(before ? { before } : {}),
+        ...(after ? { after } : {}),
+      });
+    const response = await standardSet(
       ctx,
-      eventSetSpec,
-      parseArguments(SetArgumentsSchema, rawArgs),
-    )),
-  }),
+      {
+        type: CALENDAR_EVENT,
+        create: async (context, input) => {
+          const made = await createEvent(context, input);
+          kept(undefined, await whole(made.id));
+          return made;
+        },
+        update: async (context, id, patch) => {
+          const eventId = parseOccurrenceId(id)?.eventId ?? id;
+          const before = await whole(eventId);
+          const changed = await updateEvent(context, id, patch);
+          kept(before, await whole(eventId));
+          return changed;
+        },
+        destroy: async (context, id) => {
+          const eventId = parseOccurrenceId(id)?.eventId ?? id;
+          const before = await whole(eventId);
+          await destroyEvent(context, id);
+          kept(before, await whole(eventId));
+        },
+      },
+      args,
+    );
+    if (changes.length > 0) {
+      const addresses = await tell.addresses(ctx);
+      for (const { before, after } of changes) {
+        for (const message of messagesFor(before, after, addresses)) {
+          try {
+            await tell.send(ctx, message);
+          } catch (error) {
+            // The event is kept: not having been able to tell of it does not undo it.
+            ctx.calendars.onSchedulingError?.(error);
+          }
+        }
+      }
+    }
+    return { ...response };
+  },
+
+  /** Reads events out of files that other calendars write (iCalendar), without keeping them. */
+  'CalendarEvent/parse': async (rawArgs, ctx) => {
+    const args = parseArguments(EventParseArgumentsSchema, rawArgs);
+    const accountId = requireAccount(ctx, args.accountId);
+    const parsed: Record<string, Record<string, unknown>> = {};
+    const notParsable: string[] = [];
+    const notFound: string[] = [];
+    for (const blobId of args.blobIds) {
+      const data = await ctx.readBlob(blobId);
+      if (!data) {
+        notFound.push(blobId);
+        continue;
+      }
+      const read =
+        data.length > MAX_CALENDAR_OCTETS
+          ? { method: null, events: [] }
+          : fromICalendar(new TextDecoder().decode(data));
+      const [event] = read.events;
+      if (!event) {
+        notParsable.push(blobId);
+        continue;
+      }
+      const whole: Event = {
+        ...event,
+        // What the file is for: an invitation, an answer, a cancellation.
+        ...(read.method ? { method: read.method.toLowerCase() } : {}),
+        id: blobId,
+        // When it is in the world's time, for whoever shows it without knowing the zones.
+        utcStart: toUtcDate(new Date(span(event).start)),
+        utcEnd: toUtcDate(new Date(span(event).end)),
+      };
+      parsed[blobId] = args.properties
+        ? pick(whole, [...new Set(['id', ...args.properties])])
+        : whole;
+    }
+    return {
+      accountId,
+      parsed: Object.keys(parsed).length > 0 ? parsed : null,
+      notParsable: notParsable.length > 0 ? notParsable : null,
+      notFound: notFound.length > 0 ? notFound : null,
+    };
+  },
 
   'CalendarEvent/copy': async (rawArgs, ctx) => {
     const args = parseArguments(EventCopyArgumentsSchema, rawArgs);
@@ -1396,3 +1545,68 @@ export const calendarMethods: Record<string, MethodHandler> = {
     return { list };
   },
 };
+
+/** An answer someone gave, as this server keeps it. */
+const ANSWERED = ['accepted', 'declined', 'tentative'];
+
+/**
+ * Takes in what someone else's calendar says of an event the account has: an
+ * answer to an invitation of its own, which is noted on the event, or word
+ * that an event it was invited to is off. `sender` is who the message is
+ * from: nobody answers for somebody else, and nobody calls off what is not
+ * theirs. Returns what was done, or null when it called for nothing.
+ */
+export async function applySchedulingMessage(
+  ctx: MethodContext,
+  calendar: string,
+  sender: string,
+): Promise<'answered' | 'cancelled' | null> {
+  if (calendar.length > MAX_CALENDAR_OCTETS) return null;
+  const from = sender.trim().toLowerCase();
+  const { method, events } = fromICalendar(calendar);
+  if (method !== 'REPLY' && method !== 'CANCEL') return null;
+  let done: 'answered' | 'cancelled' | null = null;
+  for (const said of events) {
+    // What is said of one time of an event that repeats is left for whoever reads the message.
+    if (said['recurrenceId'] !== undefined) continue;
+    const records = await ctx.store.list(ctx.auth.accountId, CALENDAR_EVENT, {
+      name: 'uid',
+      value: fingerprint(String(said['uid'])),
+    });
+    const record = records.find((each) => each.value['uid'] === said['uid']);
+    if (!record) continue;
+    // Older than what is kept: it answers to an event that has since changed.
+    if (Number(said['sequence'] ?? 0) < Number(record.value['sequence'] ?? 0)) {
+      continue;
+    }
+    if (method === 'CANCEL') {
+      if (organizerOf(record.value) !== from) continue;
+      if (record.value['status'] === 'cancelled') continue;
+      await updateEvent(ctx, record.id, { status: 'cancelled' });
+      done = 'cancelled';
+      continue;
+    }
+    const theirs = Object.values(
+      (said['participants'] as Record<string, Event> | undefined) ?? {},
+    ).find((each) => each['email'] === from);
+    const status = String(theirs?.['participationStatus'] ?? '');
+    if (!ANSWERED.includes(status)) continue;
+    const key = Object.entries(
+      (record.value['participants'] as Record<string, Event> | undefined) ?? {},
+    ).find(([, each]) => {
+      const imip = isPlainObject(each['sendTo']) ? each['sendTo']['imip'] : '';
+      return (
+        String(each['email'] ?? '').toLowerCase() === from ||
+        String(imip)
+          .replace(/^mailto:/i, '')
+          .toLowerCase() === from
+      );
+    })?.[0];
+    if (key === undefined) continue;
+    await updateEvent(ctx, record.id, {
+      [`participants/${key}/participationStatus`]: status,
+    });
+    done = 'answered';
+  }
+  return done;
+}

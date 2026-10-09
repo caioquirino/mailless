@@ -117,6 +117,46 @@ function repeatOf(
   return { repeat, until: until?.slice(0, 10) ?? '' };
 }
 
+export interface Participant {
+  '@type'?: 'Participant';
+  name?: string;
+  email?: string;
+  sendTo?: { imip?: string };
+  /** What they answered: `accepted`, `declined`, `tentative`, or `needs-action`. */
+  participationStatus?: string;
+  roles?: Record<string, boolean>;
+  expectReply?: boolean;
+}
+
+/** An address the person using this goes by, and the name they write under. */
+export interface Own {
+  email: string;
+  name?: string | null;
+}
+
+export type Answer = 'accepted' | 'tentative' | 'declined';
+
+const lower = (email: string | undefined) => (email ?? '').trim().toLowerCase();
+
+/** The address of whoever an event is from, or null for one with nobody else on it. */
+export function organizerOf(
+  event: Pick<CalendarEvent, 'replyTo'>,
+): string | null {
+  const imip = event.replyTo?.imip;
+  return imip ? lower(imip.replace(/^mailto:/i, '')) : null;
+}
+
+/** The entry of the person using this among those on an event, with its key. */
+export function ownEntry(
+  event: Pick<CalendarEvent, 'participants'>,
+  own: readonly Own[],
+): [string, Participant] | undefined {
+  const mine = new Set(own.map((each) => lower(each.email)));
+  return Object.entries(event.participants ?? {}).find(([, each]) =>
+    mine.has(lower(each.email)),
+  );
+}
+
 export interface Calendar {
   id: Id;
   name: string;
@@ -141,7 +181,11 @@ export interface CalendarEvent {
   showWithoutTime?: boolean;
   locations?: Record<string, { name?: string }> | null;
   virtualLocations?: Record<string, { uri?: string }> | null;
-  participants?: Record<string, { name?: string; email?: string }> | null;
+  participants?: Record<string, Participant> | null;
+  /** Whoever it is from, for an event with people on it: `{ imip: 'mailto:…' }`. */
+  replyTo?: { imip?: string } | null;
+  status?: string;
+  uid?: string;
   alerts?: Record<string, Alert> | null;
   useDefaultAlerts?: boolean;
   /** When it comes again, for one that repeats. */
@@ -153,6 +197,12 @@ export interface CalendarEvent {
   /** When it is, in the world's time: worked out by the server. */
   utcStart: string;
   utcEnd: string;
+}
+
+/** An event read out of a calendar file: what an invitation that came with a message says. */
+export interface Invitation extends CalendarEvent {
+  /** What the file is for: `request` is an invitation, `reply` an answer to one, `cancel` word that it is off. */
+  method?: string;
 }
 
 export class CalendarError extends Error {}
@@ -314,8 +364,17 @@ export interface EventForm {
   allDay: boolean;
   calendarId: Id;
   place: string;
-  /** Addresses, with commas between them. */
+  /** The others on it: addresses, with commas between them. */
   people: string;
+  /** What each of them answered, by address. Carried along; not something the form changes. */
+  answers: Record<string, string>;
+  /** The address it is from, of those the person goes by. Empty for the first of them. */
+  as: string;
+  /**
+   * For an event someone else invited to: who, and what was answered. The
+   * people on it are theirs to change, not the person's who was invited.
+   */
+  invited: { by: string; answer: string } | null;
   /** Where to join it from afar. */
   link: string;
   notes: string;
@@ -368,6 +427,9 @@ export function newForm(
     calendarId,
     place: '',
     people: '',
+    answers: {},
+    as: '',
+    invited: null,
     link: '',
     notes: '',
     reminders: null,
@@ -407,8 +469,22 @@ export function remindersOf(
  * The form of an event. For one of the times of an event that repeats, give
  * the event too: how it repeats is the event's to say.
  */
-export function formOf(event: CalendarEvent, whole?: CalendarEvent): EventForm {
+export function formOf(
+  event: CalendarEvent,
+  whole?: CalendarEvent,
+  own: readonly Own[] = [],
+): EventForm {
   const { start, end, allDay } = shown(event);
+  const organizer = organizerOf(event);
+  const mine = new Set(own.map((each) => lower(each.email)));
+  const theirs = organizer !== null && !mine.has(organizer);
+  // The others: everyone but whoever it is from, and but the person themselves when it is theirs.
+  const others = Object.values(event.participants ?? {}).filter(
+    (person) =>
+      person.email &&
+      lower(person.email) !== organizer &&
+      (theirs || !mine.has(lower(person.email))),
+  );
   return {
     id: event.id,
     title: event.title ?? '',
@@ -419,10 +495,21 @@ export function formOf(event: CalendarEvent, whole?: CalendarEvent): EventForm {
     allDay,
     calendarId: Object.keys(event.calendarIds)[0] ?? '',
     place: first(event.locations)?.name ?? '',
-    people: Object.values(event.participants ?? {})
-      .map((person) => person.email)
-      .filter(Boolean)
-      .join(', '),
+    people: others.map((person) => lower(person.email)).join(', '),
+    answers: Object.fromEntries(
+      others.map((person) => [
+        lower(person.email),
+        person.participationStatus ?? 'needs-action',
+      ]),
+    ),
+    as: organizer !== null && !theirs ? organizer : '',
+    invited: theirs
+      ? {
+          by: organizer,
+          answer:
+            ownEntry(event, own)?.[1].participationStatus ?? 'needs-action',
+        }
+      : null,
     link: first(event.virtualLocations)?.uri ?? '',
     notes: event.description ?? '',
     reminders:
@@ -510,11 +597,14 @@ function offset(minutes: number): string {
 export function eventOf(
   form: EventForm,
   timeZone: string,
+  /** The addresses the person goes by: one of them is who an event with people on it is from. */
+  own: readonly Own[] = [],
 ): Record<string, unknown> {
   const { start, end } = formSpan(form);
   const minutes = Math.round((end.getTime() - start.getTime()) / 60_000);
   const whole = Math.round(minutes / 1440);
-  const people = addresses(form.people);
+  const people = addresses(form.people).map(lower);
+  const me = own.find((each) => lower(each.email) === lower(form.as)) ?? own[0];
   return {
     calendarIds: { [form.calendarId]: true },
     title: form.title.trim(),
@@ -536,20 +626,44 @@ export function eventOf(
       form.link.trim() === ''
         ? null
         : { '1': { '@type': 'VirtualLocation', uri: form.link.trim() } },
-    participants:
-      people.length === 0
-        ? null
-        : Object.fromEntries(
-            people.map((email, index) => [
-              String(index + 1),
-              {
-                '@type': 'Participant',
-                email,
-                sendTo: { imip: `mailto:${email}` },
-                roles: { attendee: true },
-              },
+    // Who is on someone else's event is theirs to say: nothing is said of it here.
+    ...(form.invited
+      ? {}
+      : people.length === 0
+        ? { participants: null, replyTo: null }
+        : {
+            replyTo: me ? { imip: `mailto:${lower(me.email)}` } : null,
+            participants: Object.fromEntries([
+              ...(me
+                ? [
+                    [
+                      'me',
+                      {
+                        '@type': 'Participant',
+                        ...(me.name ? { name: me.name } : {}),
+                        email: lower(me.email),
+                        sendTo: { imip: `mailto:${lower(me.email)}` },
+                        participationStatus: 'accepted',
+                        roles: { owner: true, attendee: true },
+                      },
+                    ],
+                  ]
+                : []),
+              ...people
+                .filter((email) => email !== lower(me?.email))
+                .map((email, index) => [
+                  String(index + 1),
+                  {
+                    '@type': 'Participant',
+                    email,
+                    sendTo: { imip: `mailto:${email}` },
+                    participationStatus: form.answers[email] ?? 'needs-action',
+                    expectReply: true,
+                    roles: { attendee: true },
+                  },
+                ]),
             ]),
-          ),
+          }),
     useDefaultAlerts: form.reminders === null,
     alerts:
       form.reminders === null || form.reminders.length === 0
@@ -636,6 +750,9 @@ const SHOWN_PROPERTIES = [
   'participants',
   'alerts',
   'useDefaultAlerts',
+  'replyTo',
+  'status',
+  'uid',
   'utcStart',
   'utcEnd',
 ];
@@ -645,6 +762,8 @@ export class Calendars {
   readonly events: ObjectCache<CalendarEvent>;
   /** Whether this server keeps calendars at all. Known once started. */
   available = false;
+  /** The addresses the person goes by: the first is the one they write from. Known once started. */
+  own: Own[] = [];
   private started: Promise<void> | undefined;
 
   constructor(private readonly client: JmapClient) {
@@ -741,6 +860,15 @@ export class Calendars {
     const result = await batch.send();
     calendars.done(result);
     events.done(result);
+    // Who the person is to the others on an event. An account that cannot send has nobody to tell.
+    this.own = await this.client.call('Identity/get', { ids: null }).then(
+      (found) =>
+        found.list.map((identity) => ({
+          email: identity.email,
+          name: identity.name,
+        })),
+      () => [],
+    );
   }
 
   /** Brings what is held up to date with what another device, or window, changed. */
@@ -785,8 +913,11 @@ export class Calendars {
         ? this.window.events
         : this.events.values();
     return known
-      .filter((event) =>
-        Object.keys(event.calendarIds).some((id) => visible.has(id)),
+      .filter(
+        (event) =>
+          // What whoever invited has called off is not on any more.
+          event.status !== 'cancelled' &&
+          Object.keys(event.calendarIds).some((id) => visible.has(id)),
       )
       .map(shown)
       .filter(
@@ -803,8 +934,11 @@ export class Calendars {
 
   private async set(
     type: 'Calendar' | 'CalendarEvent',
-    args: Record<string, unknown>,
+    given: Record<string, unknown>,
+    /** Tells the people on each event what was done to it, by mail. */
+    tell = false,
   ): Promise<SetResponse> {
+    const args = tell ? { ...given, sendSchedulingMessages: true } : given;
     const response = (await this.client.call(
       `${type}/set` as never,
       args as never,
@@ -828,17 +962,19 @@ export class Calendars {
   }
 
   /** Keeps an event: a new one when the form has no id. Returns its id. */
-  async save(form: EventForm): Promise<Id> {
+  async save(form: EventForm, tell = false): Promise<Id> {
     const problem = formProblem(form);
     if (problem) throw new CalendarError(problem);
-    const event = eventOf(form, ownTimeZone());
+    const event = eventOf(form, ownTimeZone(), this.own);
     if (form.id === null) {
       const said = Object.fromEntries(
         Object.entries(event).filter(([, value]) => value !== null),
       );
-      const response = await this.set('CalendarEvent', {
-        create: { new: said },
-      });
+      const response = await this.set(
+        'CalendarEvent',
+        { create: { new: said } },
+        tell,
+      );
       const id = response.created?.['new']?.id;
       if (!id) throw new CalendarError('The event could not be kept.');
       return id;
@@ -848,7 +984,13 @@ export class Calendars {
       // for one, and nothing of how it repeats. What was left alone goes on
       // following the event.
       const shownNow = this.window?.events.find((each) => each.id === form.id);
-      const was = shownNow ? eventOf(formOf(shownNow), ownTimeZone()) : {};
+      const was = shownNow
+        ? eventOf(
+            formOf(shownNow, undefined, this.own),
+            ownTimeZone(),
+            this.own,
+          )
+        : {};
       const once = Object.fromEntries(
         Object.entries(event).filter(
           ([property, value]) =>
@@ -857,7 +999,7 @@ export class Calendars {
         ),
       );
       if (Object.keys(once).length > 0) {
-        await this.set('CalendarEvent', { update: { [form.id]: once } });
+        await this.set('CalendarEvent', { update: { [form.id]: once } }, tell);
       }
       return form.id;
     }
@@ -869,15 +1011,92 @@ export class Calendars {
         (Date.parse(`${String(event['start'])}Z`) -
           Date.parse(`${form.series.recurrenceId}Z`)) /
         60_000;
-      await this.set('CalendarEvent', {
-        update: {
-          [form.series.id]: { ...event, start: later(whole.start, moved) },
+      await this.set(
+        'CalendarEvent',
+        {
+          update: {
+            [form.series.id]: { ...event, start: later(whole.start, moved) },
+          },
         },
-      });
+        tell,
+      );
       return form.series.id;
     }
-    await this.set('CalendarEvent', { update: { [form.id]: event } });
+    await this.set('CalendarEvent', { update: { [form.id]: event } }, tell);
     return form.id;
+  }
+
+  /**
+   * Answers an invitation that is in the calendar already, and tells whoever
+   * it is from. `id` is the event's, not that of one of its times.
+   */
+  async answer(id: Id, answer: Answer): Promise<void> {
+    const event = this.events.get(id);
+    const mine = event ? ownEntry(event, this.own) : undefined;
+    if (!mine) throw new CalendarError('You are not among those invited.');
+    await this.set(
+      'CalendarEvent',
+      {
+        update: {
+          [id]: { [`participants/${mine[0]}/participationStatus`]: answer },
+        },
+      },
+      true,
+    );
+  }
+
+  /** The event a calendar file holds: an invitation that came with a message, for one. Null when it holds none. */
+  async parse(blobId: Id): Promise<Invitation | null> {
+    const read = (await this.client.call(
+      'CalendarEvent/parse' as never,
+      { blobIds: [blobId] } as never,
+    )) as { parsed?: Record<string, Invitation> | null };
+    return read.parsed?.[blobId] ?? null;
+  }
+
+  /** The event of the calendar that an invitation is for, when it is in it. */
+  known(invitation: Pick<Invitation, 'uid'>): CalendarEvent | undefined {
+    return this.events
+      .values()
+      .find((event) => event.uid !== undefined && event.uid === invitation.uid);
+  }
+
+  /**
+   * Answers an invitation that came with a message: the event is put in the
+   * calendar when it is not there yet, and whoever it is from is told.
+   */
+  async respond(invitation: Invitation, answer: Answer): Promise<void> {
+    const known = this.known(invitation);
+    if (known) return this.answer(known.id, answer);
+    const into = this.defaultCalendar();
+    if (!into) throw new CalendarError('There is no calendar to put it in.');
+    const mine = ownEntry(invitation, this.own);
+    if (!mine) throw new CalendarError('You are not among those invited.');
+    const {
+      id: _id,
+      method: _method,
+      utcStart: _start,
+      utcEnd: _end,
+      ...event
+    } = invitation;
+    await this.set(
+      'CalendarEvent',
+      {
+        create: {
+          new: {
+            ...event,
+            calendarIds: { [into.id]: true },
+            // Reminded of as the rest of the calendar is.
+            useDefaultAlerts: true,
+            participants: {
+              ...invitation.participants,
+              [mine[0]]: { ...mine[1], participationStatus: answer },
+            },
+          },
+        },
+      },
+      true,
+    );
   }
 
   /** All of an event as the server has it, more than is shown here. */
@@ -897,10 +1116,11 @@ export class Calendars {
   async remove(
     event: Pick<CalendarEvent, 'id' | 'baseEventId'>,
     all = false,
+    tell = false,
   ): Promise<() => Promise<void>> {
     if (event.baseEventId && !all) {
       const before = await this.whole(event.baseEventId);
-      await this.set('CalendarEvent', { destroy: [event.id] });
+      await this.set('CalendarEvent', { destroy: [event.id] }, tell);
       const seriesId = event.baseEventId;
       return async () => {
         await this.set('CalendarEvent', {
@@ -914,7 +1134,7 @@ export class Calendars {
     }
     const id = event.baseEventId ?? event.id;
     const was = await this.whole(id);
-    await this.set('CalendarEvent', { destroy: [id] });
+    await this.set('CalendarEvent', { destroy: [id] }, tell);
     return async () => {
       if (!was) return;
       const { id: _id, isOrigin: _origin, ...rest } = was;

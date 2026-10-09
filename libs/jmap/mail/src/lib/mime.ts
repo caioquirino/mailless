@@ -829,3 +829,37 @@ export function buildBodyLayout(
     attachments: parsed.attachments,
   };
 }
+
+/**
+ * The calendar objects a message carries (an invitation, an answer to one, a
+ * cancellation: RFC 6047), as text, and who the message is from. Nothing is
+ * parsed of a message that names no calendar anywhere.
+ */
+export async function calendarParts(
+  raw: Uint8Array,
+): Promise<{ from: string | null; calendars: string[] }> {
+  const none = { from: null, calendars: [] };
+  // Latin-1 keeps every byte a letter: enough to look for a word.
+  if (
+    !/text\/calendar|application\/ics/i.test(
+      new TextDecoder('latin1').decode(raw),
+    )
+  ) {
+    return none;
+  }
+  let parsed: ParsedMessage;
+  try {
+    parsed = await parseMessage(raw);
+  } catch {
+    return none;
+  }
+  return {
+    from: parsed.metadata.from?.[0]?.email?.toLowerCase() ?? null,
+    calendars: parsed.parts
+      .filter(
+        (part) =>
+          part.type === 'text/calendar' || part.type === 'application/ics',
+      )
+      .map((part) => partText(part).value),
+  };
+}
