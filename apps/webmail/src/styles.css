@@ -52,11 +52,6 @@ input[type='checkbox'] {
   padding: 0 var(--space-4);
 }
 
-.menu-button,
-.back {
-  display: none;
-}
-
 .brand {
   display: flex;
   align-items: center;
@@ -119,9 +114,180 @@ input[type='checkbox'] {
   margin-left: auto;
 }
 
-.address {
-  margin-right: var(--space-2);
-  font-size: 0.875rem;
+.profile {
+  position: relative;
+  margin-left: var(--space-1);
+}
+
+.profile-button {
+  display: grid;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  cursor: pointer;
+}
+
+.profile-button:hover,
+.profile-button[aria-expanded='true'] {
+  background: var(--accent-soft);
+}
+
+.profile-card {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: var(--space-4);
+  width: min(21rem, calc(100vw - 2 * var(--space-3)));
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+}
+
+.profile-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.profile-names {
+  display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-usage {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.meter {
+  height: 6px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: var(--radius-pill);
+}
+
+.meter-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+}
+
+.meter-5 {
+  width: 5%;
+}
+
+.meter-10 {
+  width: 10%;
+}
+
+.meter-15 {
+  width: 15%;
+}
+
+.meter-20 {
+  width: 20%;
+}
+
+.meter-25 {
+  width: 25%;
+}
+
+.meter-30 {
+  width: 30%;
+}
+
+.meter-35 {
+  width: 35%;
+}
+
+.meter-40 {
+  width: 40%;
+}
+
+.meter-45 {
+  width: 45%;
+}
+
+.meter-50 {
+  width: 50%;
+}
+
+.meter-55 {
+  width: 55%;
+}
+
+.meter-60 {
+  width: 60%;
+}
+
+.meter-65 {
+  width: 65%;
+}
+
+.meter-70 {
+  width: 70%;
+}
+
+.meter-75 {
+  width: 75%;
+}
+
+.meter-80 {
+  width: 80%;
+}
+
+.meter-85 {
+  width: 85%;
+}
+
+.meter-90 {
+  width: 90%;
+}
+
+.meter-95 {
+  width: 95%;
+}
+
+.meter-100 {
+  width: 100%;
+}
+
+.meter-full {
+  background: var(--danger);
+}
+
+.profile-links {
+  display: grid;
+  gap: 2px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+}
+
+.profile-link,
+.button.profile-link {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-3);
+  min-height: 2.75rem;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.9rem;
+  text-align: left;
+  text-decoration: none;
+}
+
+.profile-link:hover,
+.button.profile-link:hover:not(:disabled) {
+  background: var(--hover);
 }
 
 a.icon-button {
@@ -230,10 +396,10 @@ a.icon-button {
 }
 
 .mailbox {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  gap: var(--space-3);
   height: 2.125rem;
   padding: 0 var(--space-4);
   border-radius: var(--radius-pill);
@@ -250,6 +416,14 @@ a.icon-button {
   background: var(--accent-soft);
   color: var(--accent-soft-text);
   font-weight: 700;
+}
+
+.mailbox .icon {
+  color: var(--muted);
+}
+
+.mailbox.active .icon {
+  color: inherit;
 }
 
 .mailbox-name {
@@ -275,6 +449,7 @@ a.icon-button {
 }
 
 .count {
+  margin-left: auto;
   font-size: 0.8rem;
 }
 
@@ -399,10 +574,143 @@ a.icon-button {
 
 .list {
   display: flex;
-  flex: none;
+  flex: 1;
   flex-direction: column;
-  width: 25rem;
   min-width: 0;
+}
+
+/* Beside a conversation, as wide as the divider was last left. */
+.has-thread .list {
+  flex: none;
+  width: var(--list-width, 25rem);
+}
+
+.divider {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  width: var(--space-3);
+  margin: 0 calc(-1 * var(--space-3));
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.divider::after {
+  position: absolute;
+  top: var(--space-5);
+  bottom: var(--space-5);
+  left: calc(50% - 1px);
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  content: '';
+}
+
+.divider:hover::after,
+.divider:focus-visible::after,
+.dragging .divider::after {
+  background: var(--accent);
+}
+
+/* While dragging, nothing under the pointer is selected or takes the pointer away. */
+.dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.dragging .message-frame {
+  pointer-events: none;
+}
+
+/* With the whole width to itself, a conversation is one line: who, what about, how it begins, when. */
+.list-wide .row-link {
+  align-items: center;
+  padding: var(--space-2) 0;
+}
+
+.list-wide .row-text {
+  grid-template-columns: 13rem auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0 var(--space-4);
+}
+
+.list-wide .row-top {
+  display: contents;
+}
+
+.list-wide .who {
+  grid-row: 1;
+  grid-column: 1;
+}
+
+.list-wide .subject {
+  grid-row: 1;
+  grid-column: 2;
+  max-width: 28rem;
+}
+
+.list-wide .preview {
+  grid-row: 1;
+  grid-column: 3;
+  font-size: 0.875rem;
+}
+
+.list-wide .marks {
+  grid-row: 1;
+  grid-column: 4;
+}
+
+.row-main {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Under what the conversation is about: past the picture and the name. */
+.files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 var(--space-2)
+    calc(2.25rem + var(--space-3) + 13rem + var(--space-4));
+  list-style: none;
+}
+
+.file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 13rem;
+  padding: 2px var(--space-3) 2px var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.file:hover {
+  border-color: var(--accent);
+}
+
+.file .icon {
+  color: var(--muted);
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-wide .row-text > .tag {
+  grid-row: 2;
+  grid-column: 2 / 4;
 }
 
 .toolbar {
@@ -468,6 +776,7 @@ a.icon-button {
 }
 
 .row-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -475,8 +784,38 @@ a.icon-button {
   border-bottom: 1px solid var(--line);
 }
 
-.row-item:hover {
+.row-item:hover,
+.row-item:focus-within {
   background: var(--hover);
+}
+
+/* Over where the date is, on the row's own ground, while the pointer or the keyboard is on the row. */
+.row-actions {
+  position: absolute;
+  top: 0;
+  right: var(--space-3);
+  bottom: 0;
+  display: none;
+  align-items: center;
+  gap: 2px;
+  padding-left: var(--space-3);
+  background: var(--hover);
+}
+
+.row-item:hover .row-actions,
+.row-item:focus-within .row-actions {
+  display: flex;
+}
+
+.row-item.current .row-actions {
+  background: var(--accent-soft);
+}
+
+/* Where there is no pointer to hover with, they would only be in the way. */
+@media (hover: none) {
+  .row-item .row-actions {
+    display: none;
+  }
 }
 
 .row-item.current {
@@ -847,6 +1186,62 @@ a.icon-button {
   color: var(--danger-text);
 }
 
+/* ------------------------------------------------- the sidebar, folded */
+
+/* Down to its icons, where there is a pointer to say what each is. */
+@media (min-width: 48.0625rem) {
+  .side-folded {
+    align-items: center;
+    width: 4.25rem;
+    padding-right: var(--space-3);
+  }
+
+  .side-folded .button.write {
+    align-self: center;
+    width: 3.25rem;
+    margin: 0;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .side-folded .write-label,
+  .side-folded .mailbox-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .side-folded .mailbox {
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    margin: 0 auto;
+    padding: 0;
+  }
+
+  /* How many, as a dot: that there is something. */
+  .side-folded .count {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 8px;
+    height: 8px;
+    margin: 0;
+    overflow: hidden;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    font-size: 0;
+  }
+
+  .side-folded .new-mailbox,
+  .side-folded .new-mailbox-button {
+    display: none;
+  }
+}
+
 /* ------------------------------------------------------ narrow screens */
 
 @media (max-width: 68rem) {
@@ -868,11 +1263,6 @@ a.icon-button {
   .topbar {
     gap: var(--space-1);
     padding: 0 var(--space-2);
-  }
-
-  .menu-button,
-  .back {
-    display: inline-grid;
   }
 
   .brand,
@@ -944,6 +1334,42 @@ a.icon-button {
   .panes {
     gap: 0;
     min-height: 0;
+  }
+
+  .divider {
+    display: none;
+  }
+
+  .has-thread .list {
+    width: auto;
+  }
+
+  .files {
+    padding-left: calc(2.25rem + var(--space-3));
+  }
+
+  /* No room for one line: back to who and when above, what about below. */
+  .list-wide .row-link {
+    align-items: flex-start;
+    padding: var(--space-3) 0;
+  }
+
+  .list-wide .row-text {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .list-wide .row-top {
+    display: flex;
+  }
+
+  .list-wide .who,
+  .list-wide .subject,
+  .list-wide .preview,
+  .list-wide .marks,
+  .list-wide .row-text > .tag {
+    grid-row: auto;
+    grid-column: auto;
+    max-width: 100%;
   }
 
   .list,

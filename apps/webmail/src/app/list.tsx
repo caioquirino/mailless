@@ -3,9 +3,10 @@ import { Link, useNavigate } from 'react-router';
 import type { Email, Id, Mailbox } from '@mailless/jmap-core';
 import { Avatar, Button, Icon, IconButton, Tag } from '@mailless/ui';
 import { nameOf } from '../lib/addresses';
+import { canView, openAttachment } from '../lib/attachments';
 import { formatWhen } from '../lib/format';
-import type { ListKey, MailStore } from '../lib/mail';
-import { useMail, useSynced } from './services';
+import type { Attachment, ListKey, MailStore } from '../lib/mail';
+import { useMail, useServices, useSynced } from './services';
 
 /** One row: a conversation, as the newest of its messages that the list found. */
 interface Row {
@@ -19,6 +20,8 @@ interface Row {
   who: string;
   /** Whose face stands for the row: who wrote last, or who it is going to. */
   face: string;
+  /** What is attached anywhere in the conversation. */
+  files: Attachment[];
 }
 
 function people(emails: readonly Email[], outgoing: boolean): string {
@@ -65,6 +68,21 @@ function rowsOf(
       unread: scope.some((each) => !each.keywords['$seen']),
       flagged: conversation.some((each) => each.keywords['$flagged']),
       who: people(outgoing ? [email] : conversation, outgoing),
+      files: conversation.flatMap((each) =>
+        (each.attachments ?? [])
+          // A picture shown inside the message is part of what it says, not something attached to it.
+          .filter(
+            (part) =>
+              part.blobId !== null &&
+              !(part.disposition === 'inline' && part.cid),
+          )
+          .map((part) => ({
+            blobId: part.blobId as string,
+            name: part.name ?? 'attachment',
+            type: part.type,
+            size: part.size,
+          })),
+      ),
       face: nameOfFirst(
         outgoing ? email.to : (conversation.at(-1) ?? email).from,
       ),
@@ -88,6 +106,7 @@ export interface MessageListProps {
 
 export function MessageList(props: MessageListProps) {
   const { listKey, title, mailbox, base, suffix, threadId } = props;
+  const { client } = useServices();
   const { store, act, say } = useMail();
   const navigate = useNavigate();
   const view = useMemo(() => store.list(listKey), [store, listKey]);
@@ -141,11 +160,22 @@ export function MessageList(props: MessageListProps) {
   const leave = async (action: () => Promise<unknown>, done: string) => {
     if ((await run(action, done)) === true) void navigate(`${base}${suffix}`);
   };
+  /** With the whole width to itself, each row has its own actions. */
+  const wide = threadId === undefined;
+  const ids = (row: Row) => row.scope.map((email) => email.id);
+  const named = (row: Row) => row.email.subject || 'no subject';
+  /** Something done to one row, whatever is selected. */
+  const one = async (action: () => Promise<unknown>, done?: string) => {
+    setBusy(true);
+    const worked = await act(action);
+    setBusy(false);
+    if (worked && done) say(done);
+  };
   const several = (count: number, one: string, many: string) =>
     count === 1 ? one : `${count} ${many}`;
 
   return (
-    <section className="list" aria-label={title}>
+    <section className={`list${wide ? ' list-wide' : ''}`} aria-label={title}>
       <div className="toolbar" role="toolbar" aria-label="Actions">
         <label className="check">
           <input
@@ -335,60 +365,131 @@ export function MessageList(props: MessageListProps) {
                   {row.email.subject || 'the conversation without a subject'}
                 </span>
               </label>
-              <Link
-                className="row-link"
-                to={`${base}/${row.email.threadId}${suffix}`}
-                aria-current={
-                  row.email.threadId === threadId ? 'page' : undefined
-                }
-              >
-                <Avatar name={row.face} />
-                <span className="row-text">
-                  <span className="row-top">
-                    <span className="who">
-                      {row.who}
-                      {row.count > 1 ? (
-                        <span
-                          className="muted"
-                          aria-label={`${row.count} messages`}
-                        >
-                          {' '}
-                          {row.count}
-                        </span>
-                      ) : null}
+              <div className="row-main">
+                <Link
+                  className="row-link"
+                  to={`${base}/${row.email.threadId}${suffix}`}
+                  aria-current={
+                    row.email.threadId === threadId ? 'page' : undefined
+                  }
+                >
+                  <Avatar name={row.face} />
+                  <span className="row-text">
+                    <span className="row-top">
+                      <span className="who">
+                        {row.who}
+                        {row.count > 1 ? (
+                          <span
+                            className="muted"
+                            aria-label={`${row.count} messages`}
+                          >
+                            {' '}
+                            {row.count}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="marks">
+                        {row.unread ? (
+                          <span className="visually-hidden">Unread</span>
+                        ) : null}
+                        {row.flagged ? (
+                          <span
+                            className="flag"
+                            role="img"
+                            aria-label="Flagged"
+                          >
+                            <Icon name="flag" size={14} />
+                          </span>
+                        ) : null}
+                        {row.email.hasAttachment &&
+                        !(wide && row.files.length > 0) ? (
+                          <span
+                            className="clip"
+                            role="img"
+                            aria-label="Has an attachment"
+                          >
+                            <Icon name="attach" size={14} />
+                          </span>
+                        ) : null}
+                        <time className="when" dateTime={row.email.receivedAt}>
+                          {formatWhen(row.email.receivedAt)}
+                        </time>
+                      </span>
                     </span>
-                    <span className="marks">
-                      {row.unread ? (
-                        <span className="visually-hidden">Unread</span>
-                      ) : null}
-                      {row.flagged ? (
-                        <span className="flag" role="img" aria-label="Flagged">
-                          <Icon name="flag" size={14} />
-                        </span>
-                      ) : null}
-                      {row.email.hasAttachment ? (
-                        <span
-                          className="clip"
-                          role="img"
-                          aria-label="Has an attachment"
+                    <span className="subject">
+                      {row.email.subject || '(no subject)'}
+                    </span>
+                    <span className="preview muted">{row.email.preview}</span>
+                    {row.email.keywords['$draft'] ? (
+                      <Tag tone="warning">Draft</Tag>
+                    ) : null}
+                  </span>
+                </Link>
+                {wide && row.files.length > 0 ? (
+                  <ul className="files" aria-label="Attached">
+                    {row.files.slice(0, 3).map((file, index) => (
+                      <li key={`${file.blobId} ${index}`}>
+                        <button
+                          type="button"
+                          className="file"
+                          title={`${canView(file) ? 'Open' : 'Save'} ${file.name}`}
+                          onClick={() =>
+                            void act(() => openAttachment(client, file))
+                          }
                         >
                           <Icon name="attach" size={14} />
-                        </span>
-                      ) : null}
-                      <time className="when" dateTime={row.email.receivedAt}>
-                        {formatWhen(row.email.receivedAt)}
-                      </time>
-                    </span>
-                  </span>
-                  <span className="subject">
-                    {row.email.subject || '(no subject)'}
-                  </span>
-                  <span className="preview muted">{row.email.preview}</span>
-                  {row.email.keywords['$draft'] ? (
-                    <Tag tone="warning">Draft</Tag>
+                          <span className="file-name">{file.name}</span>
+                        </button>
+                      </li>
+                    ))}
+                    {row.files.length > 3 ? (
+                      <li className="muted small">+{row.files.length - 3}</li>
+                    ) : null}
+                  </ul>
+                ) : null}
+              </div>
+              {wide ? (
+                // What is done most, without opening it or selecting it first. Shown under the pointer.
+                <span className="row-actions">
+                  {archive && mailbox && mailbox.id !== archive.id ? (
+                    <IconButton
+                      icon="archive"
+                      label={`Archive: ${named(row)}`}
+                      title="Archive"
+                      disabled={busy}
+                      onClick={() =>
+                        void one(
+                          () => store.move(ids(row), archive.id, mailbox.id),
+                          'Archived',
+                        )
+                      }
+                    />
                   ) : null}
+                  <IconButton
+                    icon="delete"
+                    label={`${inTrash ? 'Delete for good' : 'Delete'}: ${named(row)}`}
+                    title={inTrash ? 'Delete for good' : 'Delete'}
+                    disabled={busy}
+                    onClick={() =>
+                      void one(
+                        () => store.remove(ids(row)),
+                        inTrash ? 'Deleted for good' : 'Moved to the trash',
+                      )
+                    }
+                  />
+                  <IconButton
+                    icon="unread"
+                    label={`${row.unread ? 'Mark read' : 'Mark unread'}: ${named(row)}`}
+                    title={row.unread ? 'Mark read' : 'Mark unread'}
+                    disabled={busy}
+                    onClick={() =>
+                      void one(() =>
+                        store.setKeyword(ids(row), '$seen', row.unread),
+                      )
+                    }
+                  />
                 </span>
-              </Link>
+              ) : null}
             </li>
           ))}
         </ul>

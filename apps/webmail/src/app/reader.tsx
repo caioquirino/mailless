@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import type { Email, EmailBodyPart, Mailbox } from '@mailless/jmap-core';
 import { Avatar, Button, Icon, IconButton, Tag } from '@mailless/ui';
 import { formatAddresses, nameOf } from '../lib/addresses';
+import { canView, openAttachment } from '../lib/attachments';
 import {
   attachmentsOf,
   forwardDraft,
@@ -30,9 +31,11 @@ export interface ReaderProps {
   mailbox?: Mailbox;
   /** The list to go back to. */
   back: string;
+  /** What that list is called: "Inbox". */
+  backTo: string;
 }
 
-export function Reader({ threadId, mailbox, back }: ReaderProps) {
+export function Reader({ threadId, mailbox, back, backTo }: ReaderProps) {
   const { store, act, say } = useMail();
   const navigate = useNavigate();
   useSynced(store.emails);
@@ -139,8 +142,8 @@ export function Reader({ threadId, mailbox, back }: ReaderProps) {
         <Link
           className="icon-button back"
           to={back}
-          aria-label="Back to the list"
-          title="Back to the list"
+          aria-label={`Back to ${backTo}`}
+          title={`Back to ${backTo}`}
         >
           <Icon name="back" />
         </Link>
@@ -574,25 +577,9 @@ function Attachments({ attachments }: { attachments: Attachment[] }) {
   const [busy, setBusy] = useState<string | null>(null);
   if (attachments.length === 0) return null;
 
-  const save = async (attachment: Attachment) => {
+  const open = async (attachment: Attachment) => {
     setBusy(attachment.blobId);
-    await act(async () => {
-      const bytes = await client.download(attachment.blobId, {
-        name: attachment.name,
-        type: attachment.type,
-      });
-      // Saved, never opened here: a file is somebody else's content, and is not run as part of this page.
-      const url = URL.createObjectURL(
-        new Blob([bytes as BlobPart], { type: 'application/octet-stream' }),
-      );
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = attachment.name;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    });
+    await act(() => openAttachment(client, attachment));
     setBusy(null);
   };
 
@@ -604,12 +591,13 @@ function Attachments({ attachments }: { attachments: Attachment[] }) {
             type="button"
             className="button button-small attachment"
             disabled={busy !== null}
-            onClick={() => void save(attachment)}
+            title={canView(attachment) ? 'Open' : 'Save'}
+            onClick={() => void open(attachment)}
           >
             <span className="attachment-name">{attachment.name}</span>
             <span className="muted">
               {busy === attachment.blobId
-                ? 'Saving…'
+                ? 'Opening…'
                 : formatSize(attachment.size)}
             </span>
           </button>

@@ -405,7 +405,9 @@ export function answerPushes(
       }
       const view = store.list({ mailboxId: inbox.id });
       const known = view.isLoaded ? new Set(view.ids) : null;
-      await (known ? store.refresh() : store.open(view));
+      if (!known) await store.open(view);
+      // Everything else follows too: what is unread, and where.
+      await store.refresh();
       if (isLooking()) return { quiet: true };
       // What is at the top of the inbox now and was not before, and has not been read elsewhere since.
       const arrived = known

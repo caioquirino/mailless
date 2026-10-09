@@ -1,4 +1,5 @@
 import {
+  capabilitiesFor,
   JmapMethodError,
   ObjectCache,
   QueryView,
@@ -7,6 +8,7 @@ import {
   type JmapClient,
   type Synced,
 } from '@mailless/jmap-client';
+import { CAPABILITY_MAIL } from '@mailless/jmap-core';
 import type {
   Email,
   EmailAddress,
@@ -37,6 +39,8 @@ export const LIST_PROPERTIES = [
   'subject',
   'preview',
   'hasAttachment',
+  // The names of what is attached, for the list: kept with the message's other details, not read from the message.
+  'attachments',
 ];
 
 /** What more is asked for of a message that is opened. */
@@ -86,6 +90,12 @@ export interface Attachment {
   name: string;
   type: string;
   size: number;
+}
+
+/** How full a mailbox is, in bytes. `limit` is null when there is none. */
+export interface Usage {
+  used: number;
+  limit: number | null;
 }
 
 /** A message being written. */
@@ -540,6 +550,33 @@ export class MailStore {
     }
     await this.refresh();
     return id;
+  }
+
+  /** How full the mailbox is, or null when the server does not say (RFC 9425). */
+  async usage(): Promise<Usage | null> {
+    const response = (await this.client.call(
+      'Quota/get',
+      { ids: null },
+      // A server says how full mail is to those who say they are asking about mail.
+      { using: [...capabilitiesFor(['Quota/get']), CAPABILITY_MAIL] },
+    )) as {
+      list?: Array<{
+        resourceType?: string;
+        used?: number;
+        hardLimit?: number | null;
+      }>;
+    };
+    const quota = response.list?.find(
+      (each) => each.resourceType === 'octets' && typeof each.used === 'number',
+    );
+    if (!quota) return null;
+    return {
+      used: quota.used as number,
+      limit:
+        typeof quota.hardLimit === 'number' && quota.hardLimit > 0
+          ? quota.hardLimit
+          : null,
+    };
   }
 
   /** Changes the name someone writes under, or how they sign, for one of their addresses. */

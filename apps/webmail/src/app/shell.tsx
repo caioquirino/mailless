@@ -4,7 +4,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
 } from 'react';
 import {
   Navigate,
@@ -18,14 +22,16 @@ import {
 } from 'react-router';
 import { JmapRequestError } from '@mailless/jmap-client';
 import type { Mailbox } from '@mailless/jmap-core';
-import { Button, Icon, IconButton, ThemeSwitch } from '@mailless/ui';
+import { Button, Icon, IconButton, type IconName } from '@mailless/ui';
 import { emptyDraft } from '../lib/compose';
 import { MailError, MailStore, type Draft } from '../lib/mail';
 import { answerPushes, Notifications } from '../lib/notifications';
+import { usePreference } from '../lib/preference';
 import { Compose } from './compose';
 import { MessageList } from './list';
+import { ProfileMenu } from './profile';
 import { Reader } from './reader';
-import { SettingsPage, useNotificationSwitch } from './settings';
+import { SettingsPage } from './settings';
 import {
   MailProvider,
   useMail,
@@ -113,6 +119,18 @@ export function MailShell() {
   // On a narrow screen the mailboxes are a drawer, opened from the top bar.
   const [menu, setMenu] = useState(false);
   const closeMenu = useCallback(() => setMenu(false), []);
+  // On a wide one they fold down to their icons, and stay as they were left.
+  const [folded, setFolded] = usePreference<boolean>(
+    'mailless.mail.sidebar-folded',
+    false,
+  );
+  const toggleMenu = () => {
+    const narrow =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 48rem)').matches;
+    if (narrow) setMenu((open) => !open);
+    else setFolded(!folded);
+  };
   const [draft, setDraft] = useState<Draft | null>(null);
   const [notice, setNotice] = useState<{
     text: string;
@@ -217,10 +235,10 @@ export function MailShell() {
   return (
     <MailProvider value={mail}>
       <div className="shell">
-        <TopBar onMenu={() => setMenu((open) => !open)} />
+        <TopBar onMenu={toggleMenu} />
         <div className="body">
           <Rail />
-          <Sidebar open={menu} onClose={closeMenu} />
+          <Sidebar open={menu} folded={folded} onClose={closeMenu} />
           <Routes>
             <Route path="/" element={<ToInbox />} />
             <Route path="/box/:mailboxId" element={<MailboxPage />} />
@@ -260,21 +278,11 @@ export function MailShell() {
 }
 
 function TopBar({ onMenu }: { onMenu(): void }) {
-  const { session, theme } = useServices();
-  const { store, notifications } = useMail();
-  useSynced(store.identities);
-  const {
-    state: notifying,
-    switching,
-    toggle: toggleNotifications,
-  } = useNotificationSwitch();
   const navigate = useNavigate();
   const location = useLocation();
   const [params] = useSearchParams();
   const searching = location.pathname.startsWith('/search');
   const [text, setText] = useState(searching ? (params.get('q') ?? '') : '');
-  const address = store.identities.values()[0]?.email;
-
   const search = (event: FormEvent) => {
     event.preventDefault();
     const query = text.trim();
@@ -311,25 +319,6 @@ function TopBar({ onMenu }: { onMenu(): void }) {
         />
       </form>
       <div className="topbar-user">
-        {address ? <span className="muted address">{address}</span> : null}
-        {theme ? <ThemeSwitch theme={theme} /> : null}
-        {notifying === 'unsupported' ? null : (
-          <IconButton
-            icon="bell"
-            label={
-              switching
-                ? 'Notifications…'
-                : notifying === 'on'
-                  ? 'Notifications: on'
-                  : notifying === 'blocked'
-                    ? 'Notifications: blocked'
-                    : 'Notifications: off'
-            }
-            pressed={notifying === 'on'}
-            disabled={switching || notifying === 'blocked'}
-            onClick={toggleNotifications}
-          />
-        )}
         <NavLink
           to="/settings"
           className="icon-button"
@@ -338,17 +327,7 @@ function TopBar({ onMenu }: { onMenu(): void }) {
         >
           <Icon name="settings" />
         </NavLink>
-        <IconButton
-          icon="sign-out"
-          label="Sign out"
-          onClick={() => {
-            // Mail is not announced to a browser nobody is signed in to. Not waited for long: signing out comes first.
-            void Promise.race([
-              notifications.disable().catch(() => undefined),
-              new Promise((resolve) => window.setTimeout(resolve, 3000)),
-            ]).then(() => session.signOut());
-          }}
-        />
+        <ProfileMenu />
       </div>
     </header>
   );
@@ -381,7 +360,25 @@ function Rail() {
   );
 }
 
-function Sidebar({ open, onClose }: { open: boolean; onClose(): void }) {
+const ROLE_ICONS: Record<string, IconName> = {
+  inbox: 'inbox',
+  drafts: 'file',
+  sent: 'send',
+  archive: 'archive',
+  junk: 'junk',
+  trash: 'delete',
+};
+
+function Sidebar({
+  open,
+  folded,
+  onClose,
+}: {
+  open: boolean;
+  /** Down to its icons, on a wide screen. */
+  folded: boolean;
+  onClose(): void;
+}) {
   const { store, compose, act } = useMail();
   useSynced(store.mailboxes);
   useSynced(store.identities);
@@ -424,7 +421,9 @@ function Sidebar({ open, onClose }: { open: boolean; onClose(): void }) {
   };
 
   return (
-    <div className={`side${open ? ' side-open' : ''}`}>
+    <div
+      className={`side${open ? ' side-open' : ''}${folded ? ' side-folded' : ''}`}
+    >
       <Button
         className="write"
         icon="write"
@@ -434,7 +433,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose(): void }) {
         }
         onClick={() => compose(emptyDraft(identities))}
       >
-        Write
+        <span className="write-label">Write</span>
       </Button>
       {open ? (
         <button
@@ -457,7 +456,12 @@ function Sidebar({ open, onClose }: { open: boolean; onClose(): void }) {
                 <NavLink
                   to={`/box/${mailbox.id}`}
                   className={`mailbox depth-${Math.min(depth, 4)}`}
+                  title={mailbox.name}
                 >
+                  <Icon
+                    name={ROLE_ICONS[mailbox.role ?? ''] ?? 'folder'}
+                    size={18}
+                  />
                   <span className="mailbox-name">{mailbox.name}</span>
                   {count > 0 ? (
                     <span
@@ -547,28 +551,109 @@ function MailboxPage() {
   if (!mailbox) return <NotFound />;
   const base = `/box/${mailbox.id}`;
   return (
-    <main className={`panes${threadId ? ' has-thread' : ''}`}>
-      <MessageList
-        listKey={listKey}
-        title={mailbox.name}
-        mailbox={mailbox}
-        base={base}
-        suffix=""
-        threadId={threadId}
-      />
-      {threadId ? (
-        <Reader
-          // Another conversation is another reader: what was open in the last one is not open in this.
-          key={threadId}
-          threadId={threadId}
+    <Panes
+      open={threadId !== undefined}
+      list={
+        <MessageList
+          listKey={listKey}
+          title={mailbox.name}
           mailbox={mailbox}
-          back={base}
+          base={base}
+          suffix=""
+          threadId={threadId}
         />
-      ) : (
-        <section className="reader reader-empty" aria-label="Conversation">
-          <p className="muted">Choose a conversation to read it.</p>
-        </section>
-      )}
+      }
+      reader={
+        threadId ? (
+          <Reader
+            // Another conversation is another reader: what was open in the last one is not open in this.
+            key={threadId}
+            threadId={threadId}
+            mailbox={mailbox}
+            back={base}
+            backTo={mailbox.name}
+          />
+        ) : null
+      }
+    />
+  );
+}
+
+/** How narrow the list and the conversation beside it may each be made, in pixels. */
+const NARROWEST_LIST = 260;
+const NARROWEST_READER = 360;
+
+/**
+ * The list, and beside it the conversation chosen from it. With nothing
+ * chosen the list has the whole width; with something chosen the two share
+ * it, divided where the person last put the divider.
+ */
+function Panes(props: { open: boolean; list: ReactNode; reader: ReactNode }) {
+  const [width, setWidth] = usePreference<number>(
+    'mailless.mail.list-width',
+    400,
+  );
+  const panes = useRef<HTMLElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const fit = (wanted: number) => {
+    const room = panes.current?.getBoundingClientRect().width ?? 0;
+    const widest = room > 0 ? room - NARROWEST_READER : Number.MAX_SAFE_INTEGER;
+    return Math.round(
+      Math.max(
+        NARROWEST_LIST,
+        Math.min(wanted, Math.max(widest, NARROWEST_LIST)),
+      ),
+    );
+  };
+  const drag = (event: PointerEvent<HTMLDivElement>) => {
+    if (!dragging) return;
+    const left = panes.current?.getBoundingClientRect().left ?? 0;
+    setWidth(fit(event.clientX - left));
+  };
+  const nudge = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step =
+      event.key === 'ArrowLeft' ? -24 : event.key === 'ArrowRight' ? 24 : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    setWidth(fit(width + step));
+  };
+
+  return (
+    <main
+      ref={panes}
+      className={`panes${props.open ? ' has-thread' : ''}${
+        dragging ? ' dragging' : ''
+      }`}
+      style={
+        props.open
+          ? ({ '--list-width': `${width}px` } as CSSProperties)
+          : undefined
+      }
+    >
+      {props.list}
+      {props.open ? (
+        <>
+          <div
+            className="divider"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Width of the list"
+            aria-valuenow={width}
+            aria-valuemin={NARROWEST_LIST}
+            tabIndex={0}
+            onPointerDown={(event) => {
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+              setDragging(true);
+            }}
+            onPointerMove={drag}
+            onPointerUp={() => setDragging(false)}
+            onPointerCancel={() => setDragging(false)}
+            onKeyDown={nudge}
+          />
+          {props.reader}
+        </>
+      ) : null}
     </main>
   );
 }
@@ -581,22 +666,28 @@ function SearchPage() {
   if (query === '') return <Navigate to="/" replace />;
   const suffix = `?q=${encodeURIComponent(query)}`;
   return (
-    <main className={`panes${threadId ? ' has-thread' : ''}`}>
-      <MessageList
-        listKey={listKey}
-        title={`Search: ${query}`}
-        base="/search"
-        suffix={suffix}
-        threadId={threadId}
-      />
-      {threadId ? (
-        <Reader key={threadId} threadId={threadId} back={`/search${suffix}`} />
-      ) : (
-        <section className="reader reader-empty" aria-label="Conversation">
-          <p className="muted">Choose a conversation to read it.</p>
-        </section>
-      )}
-    </main>
+    <Panes
+      open={threadId !== undefined}
+      list={
+        <MessageList
+          listKey={listKey}
+          title={`Search: ${query}`}
+          base="/search"
+          suffix={suffix}
+          threadId={threadId}
+        />
+      }
+      reader={
+        threadId ? (
+          <Reader
+            key={threadId}
+            threadId={threadId}
+            back={`/search${suffix}`}
+            backTo="what was found"
+          />
+        ) : null
+      }
+    />
   );
 }
 

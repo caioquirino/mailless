@@ -58,6 +58,7 @@ export async function fakeBackend() {
   };
   const server = createJmapServer({
     storage,
+    quota: { maxOctets: 1024 ** 3 },
     push: {
       vapid: {
         ...(await generateVapidKeys()),

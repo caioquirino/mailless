@@ -231,6 +231,15 @@ describe('MailStore', () => {
     expect(backend.sent[0]?.message).toContain('Friday?');
   });
 
+  it('knows how full the mailbox is', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Hello' });
+    const store = await testStore(backend);
+    const usage = await store.usage();
+    expect(usage?.limit).toBe(1024 ** 3);
+    expect(usage?.used).toBeGreaterThan(0);
+  });
+
   it('says so when there is nobody to send to', async () => {
     const store = await testStore(await fakeBackend());
     await expect(store.send(draft({ to: [] }))).rejects.toThrow(

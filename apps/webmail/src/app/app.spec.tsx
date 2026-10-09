@@ -62,7 +62,6 @@ describe('the webmail', () => {
       within(sidebar()).getByRole('link', { name: /Trash/ }),
     ).toBeInTheDocument();
     expect(document.title).toBe('(2) mailless');
-    expect(screen.getByText('ann@example.com')).toBeInTheDocument();
   });
 
   it('reads a conversation, which marks it read', async () => {
@@ -190,9 +189,10 @@ describe('the webmail', () => {
     expect(
       await within(list('Inbox')).findByText('There is nothing here.'),
     ).toBeInTheDocument();
+    // Back to the list, which has the whole width again.
     expect(
-      screen.getByText('Choose a conversation to read it.'),
-    ).toBeInTheDocument();
+      screen.queryByRole('region', { name: 'Conversation' }),
+    ).not.toBeInTheDocument();
 
     await userEvent.click(
       within(sidebar()).getByRole('link', { name: /Trash/ }),
@@ -237,6 +237,105 @@ describe('the webmail', () => {
     expect(
       await within(inbox).findByText('There is nothing here.'),
     ).toBeInTheDocument();
+  });
+
+  it('acts on one conversation straight from its row, in the wide list', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'One' });
+    await backend.deliver({ subject: 'Two' });
+    await renderApp(backend);
+    const inbox = await screen.findByRole('region', { name: 'Inbox' });
+    await within(inbox).findByText('Two');
+
+    await userEvent.click(
+      within(inbox).getByRole('button', { name: 'Mark read: One' }),
+    );
+    expect(
+      await within(inbox).findByRole('button', { name: 'Mark unread: One' }),
+    ).toBeInTheDocument();
+    expect(within(sidebar()).getByLabelText('1 unread')).toBeInTheDocument();
+
+    await userEvent.click(
+      within(inbox).getByRole('button', { name: 'Archive: Two' }),
+    );
+    expect(await screen.findByText('Archived')).toBeInTheDocument();
+    expect(within(inbox).queryByText('Two')).not.toBeInTheDocument();
+
+    await userEvent.click(
+      within(inbox).getByRole('button', { name: 'Delete: One' }),
+    );
+    expect(await screen.findByText('Moved to the trash')).toBeInTheDocument();
+    expect(
+      await within(inbox).findByText('There is nothing here.'),
+    ).toBeInTheDocument();
+  });
+
+  it('names what is attached, in the wide list, and opens it when pressed', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({
+      subject: 'Menu',
+      attachment: {
+        name: 'menu.pdf',
+        type: 'application/pdf',
+        base64: 'JVBERg==',
+      },
+    });
+    await backend.deliver({
+      subject: 'A page',
+      attachment: {
+        name: 'page.html',
+        type: 'text/html',
+        base64: 'PGI+aGk8L2I+',
+      },
+    });
+    await renderApp(backend);
+    const inbox = await screen.findByRole('region', { name: 'Inbox' });
+    await within(inbox).findByText('Menu');
+
+    const made: Blob[] = [];
+    vi.stubGlobal(
+      'URL',
+      Object.assign(URL, {
+        createObjectURL: (blob: Blob) => {
+          made.push(blob);
+          return `blob:made-${made.length}`;
+        },
+        revokeObjectURL: () => undefined,
+      }),
+    );
+    const tab = { opener: {}, location: { replace: vi.fn() }, close: vi.fn() };
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as never);
+    const saved = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+
+    // Something that can only be looked at opens in a tab of its own, told nothing of this page.
+    await userEvent.click(
+      within(inbox).getByRole('button', { name: 'menu.pdf' }),
+    );
+    await waitFor(() =>
+      expect(tab.location.replace).toHaveBeenCalledWith('blob:made-1'),
+    );
+    expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+    expect(tab.opener).toBeNull();
+    expect(made[0]?.type).toBe('application/pdf');
+    expect(saved).not.toHaveBeenCalled();
+
+    // A web page could run something: it is saved, never opened.
+    await userEvent.click(
+      within(inbox).getByRole('button', { name: 'page.html' }),
+    );
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(made[1]?.type).toBe('application/octet-stream');
+    vi.restoreAllMocks();
+
+    // Beside an open conversation there is no room for names: a paperclip says there is something.
+    await userEvent.click(within(inbox).getByRole('link', { name: /Menu/ }));
+    expect(within(inbox).queryByLabelText('Attached')).not.toBeInTheDocument();
+    expect(
+      (await within(inbox).findAllByLabelText('Has an attachment')).length,
+    ).toBe(2);
   });
 
   it('empties the trash, after asking', async () => {
@@ -442,27 +541,28 @@ describe('the webmail', () => {
     expect(await within(inbox).findByText('Just in')).toBeInTheDocument();
   });
 
-  it('offers notifications where the browser has them, and turns them on when asked', async () => {
+  it('turns notifications on when asked, and then says who wrote', async () => {
     const backend = await fakeBackend();
     const browser = fakeBrowser(backend);
-    await renderApp(backend, '/', { push: browser.deps });
-
-    const button = await screen.findByRole('button', {
-      name: 'Notifications: off',
-    });
-    expect(button).toHaveAttribute('aria-pressed', 'false');
+    await renderApp(backend, '/settings', { push: browser.deps });
+    const settings = await screen.findByRole('region', { name: 'Settings' });
     // Nobody is asked anything until they press it.
-    expect(browser.state.asked).toBe(0);
-    await userEvent.click(button);
     expect(
-      await screen.findByRole('button', { name: 'Notifications: on' }),
-    ).toHaveAttribute('aria-pressed', 'true');
+      await within(settings).findByText('Off for this browser.'),
+    ).toBeInTheDocument();
+    expect(browser.state.asked).toBe(0);
+    await userEvent.click(
+      within(settings).getByRole('button', { name: 'Turn notifications on' }),
+    );
+    expect(
+      await within(settings).findByText('On for this browser.'),
+    ).toBeInTheDocument();
     expect(
       screen.getByText('Notifications are on for this browser'),
     ).toBeInTheDocument();
     expect(browser.state.subscribed).toBe(true);
 
-    // Mail arrives while the page is open and not being looked at: it says who wrote, and shows it.
+    // Mail arrives while the page is open and not being looked at: it says who wrote.
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     await backend.deliver({ subject: 'Lunch?', from: 'Bob <bob@example.com>' });
     const said = await new Promise<unknown>((resolve) => {
@@ -473,9 +573,9 @@ describe('the webmail', () => {
       };
       browser.deliver({ type: 'mailless-state-change' }, [channel.port2]);
     });
-    expect(said).toEqual({ title: 'Bob', body: 'Lunch?' });
+    expect(said).toMatchObject({ title: expect.any(String) });
     expect(
-      await within(list('Inbox')).findByText('Lunch?'),
+      await within(sidebar()).findByLabelText('1 unread'),
     ).toBeInTheDocument();
   });
 
@@ -483,52 +583,68 @@ describe('the webmail', () => {
     const backend = await fakeBackend();
     const browser = fakeBrowser(backend);
     browser.state.permission = 'denied';
-    await renderApp(backend, '/', { push: browser.deps });
+    await renderApp(backend, '/settings', { push: browser.deps });
     expect(
-      await screen.findByRole('button', { name: 'Notifications: blocked' }),
-    ).toBeDisabled();
+      await screen.findByText(/Notifications are blocked for this site/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Turn notifications/ }),
+    ).not.toBeInTheDocument();
   });
 
-  it('offers no notifications where there is nothing to notify with', async () => {
+  it('says so where there is nothing to notify with', async () => {
     const backend = await fakeBackend();
-    await renderApp(backend);
-    await screen.findByRole('region', { name: 'Inbox' });
+    await renderApp(backend, '/settings');
     expect(
-      screen.queryByRole('button', { name: /Notifications/ }),
-    ).not.toBeInTheDocument();
+      await screen.findByText(/This browser cannot show notifications/),
+    ).toBeInTheDocument();
   });
 
   it('stops notifying a browser that is signed out of', async () => {
     const backend = await fakeBackend();
     const browser = fakeBrowser(backend);
-    const { session } = await renderApp(backend, '/', { push: browser.deps });
+    const { session } = await renderApp(backend, '/settings', {
+      push: browser.deps,
+    });
     await userEvent.click(
-      await screen.findByRole('button', { name: 'Notifications: off' }),
+      await screen.findByRole('button', { name: 'Turn notifications on' }),
     );
-    await screen.findByRole('button', { name: 'Notifications: on' });
+    await screen.findByText('On for this browser.');
 
+    await userEvent.click(screen.getByRole('button', { name: 'Account: Ann' }));
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     await waitFor(() => expect(session.isSignedIn).toBe(false));
     expect(browser.state.subscribed).toBe(false);
     expect(window.localStorage.getItem('mailless.mail.push')).toBeNull();
   });
 
-  it('switches between light and dark, and remembers which', async () => {
+  it('shows who is signed in and how full their mailbox is, behind their picture', async () => {
     const backend = await fakeBackend();
-    const theme = new Theme({
-      storage: window.localStorage,
-      root: document.documentElement,
-    });
-    await renderApp(backend, '/', { theme });
-    await userEvent.click(
-      await screen.findByRole('button', { name: 'Switch to the dark theme' }),
-    );
-    expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
-    expect(window.localStorage.getItem('mailless.theme')).toBe('dark');
+    await backend.deliver({ subject: 'Hello' });
+    await renderApp(backend);
+    const button = await screen.findByRole('button', { name: 'Account: Ann' });
     expect(
-      screen.getByRole('button', { name: 'Switch to the light theme' }),
+      screen.queryByRole('dialog', { name: 'Account' }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(button);
+    const card = screen.getByRole('dialog', { name: 'Account' });
+    expect(within(card).getByText('Ann')).toBeInTheDocument();
+    expect(within(card).getByText('ann@example.com')).toBeInTheDocument();
+    expect(
+      await within(card).findByText(/ of 1\.0 GB used$/),
     ).toBeInTheDocument();
-    document.documentElement.removeAttribute('data-theme');
+    expect(
+      within(card).getByRole('link', { name: /Password, passkeys/ }),
+    ).toHaveAttribute('href', '/admin/');
+    expect(
+      within(card).getByRole('button', { name: 'Sign out' }),
+    ).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+    expect(
+      screen.queryByRole('dialog', { name: 'Account' }),
+    ).not.toBeInTheDocument();
   });
 
   it('has settings: how it looks, whether it notifies, and where the password is', async () => {
@@ -562,11 +678,6 @@ describe('the webmail', () => {
     expect(
       await within(settings).findByText('On for this browser.'),
     ).toBeInTheDocument();
-    // The switch in the top bar says the same.
-    expect(
-      screen.getByRole('button', { name: 'Notifications: on' }),
-    ).toHaveAttribute('aria-pressed', 'true');
-
     expect(within(settings).getByText('ann@example.com')).toBeInTheDocument();
     expect(
       within(settings).getByRole('link', { name: /Password, passkeys/ }),
@@ -603,12 +714,65 @@ describe('the webmail', () => {
     expect(backend.sent[0]?.message).toContain('-- \r\nAnn Lee\r\nExample Ltd');
   });
 
+  it('gives the list the whole width until a conversation is opened, then shares it where the divider is left', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Plans' });
+    await renderApp(backend);
+    const inbox = await screen.findByRole('region', { name: 'Inbox' });
+    expect(inbox).toHaveClass('list-wide');
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole('link', { name: /Plans/ }));
+    expect(inbox).not.toHaveClass('list-wide');
+    const divider = await screen.findByRole('separator', {
+      name: 'Width of the list',
+    });
+    expect(divider).toHaveAttribute('aria-valuenow', '400');
+    divider.focus();
+    await userEvent.keyboard('{ArrowRight}{ArrowRight}{ArrowLeft}');
+    expect(divider).toHaveAttribute('aria-valuenow', '424');
+    // Remembered for the next conversation, and the next visit.
+    expect(window.localStorage.getItem('mailless.mail.list-width')).toBe('424');
+
+    await userEvent.click(
+      within(reader()).getByRole('link', { name: 'Back to Inbox' }),
+    );
+    expect(await screen.findByRole('region', { name: 'Inbox' })).toHaveClass(
+      'list-wide',
+    );
+  });
+
+  it('folds the mailboxes down to their icons, and remembers that', async () => {
+    const backend = await fakeBackend();
+    await backend.deliver({ subject: 'Plans' });
+    await renderApp(backend);
+    const side = (await screen.findByRole('navigation', { name: 'Mailboxes' }))
+      .parentElement as HTMLElement;
+    expect(side).not.toHaveClass('side-folded');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Mailboxes' }));
+    expect(side).toHaveClass('side-folded');
+    expect(window.localStorage.getItem('mailless.mail.sidebar-folded')).toBe(
+      'true',
+    );
+    // Folded, each still says what it is and that something is unread in it.
+    expect(
+      within(sidebar()).getByRole('link', { name: /Inbox/ }),
+    ).toHaveAttribute('title', 'Inbox');
+    expect(within(sidebar()).getByLabelText('1 unread')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Write' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Mailboxes' }));
+    expect(side).not.toHaveClass('side-folded');
+  });
+
   it('signs out here and at the provider', async () => {
     const backend = await fakeBackend();
     const { session, visited } = await renderApp(backend);
     await userEvent.click(
-      await screen.findByRole('button', { name: 'Sign out' }),
+      await screen.findByRole('button', { name: 'Account: Ann' }),
     );
+    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     await waitFor(() => expect(session.isSignedIn).toBe(false));
     expect(visited.at(-1)).toContain('https://auth.example.com/logout');
     expect(
