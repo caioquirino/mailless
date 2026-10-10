@@ -8,6 +8,11 @@ import { challengeFor, randomToken, sameText } from './pkce.js';
  * and is emptied when it closes; scripts of this page can read it, which is
  * why the page is served so that no other script can run in it.
  *
+ * An application may ask for longer, by naming somewhere else to keep the
+ * tokens (`kept`): one installed on someone's own device, which closing would
+ * otherwise sign out every time. They then stay until signing out, which
+ * also takes back the refresh token at the provider.
+ *
  * When what was kept has run out and cannot be renewed, the page goes to the
  * provider, whose own session sends it straight back signed in.
  */
@@ -34,6 +39,8 @@ export interface SessionConfig {
   tokenUrl: string;
   logoutUrl: string;
   scopes: string[];
+  /** Where a refresh token is taken back on signing out, when the provider has such a place. */
+  revokeUrl?: string | null;
   /** The provider's page for adding a passkey, when it has one. */
   passkeyEnrolmentUrl?: string | null;
 }
@@ -42,6 +49,11 @@ export interface SessionDependencies {
   fetch: typeof fetch;
   /** Holds the verifier and state for the trip to the provider and back, and nothing else. */
   storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+  /**
+   * Where the tokens are kept, when that is not `storage`: storage that
+   * outlasts the tab, for an application installed on a device of one's own.
+   */
+  kept?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
   /** Sends the browser to another address. */
   navigate(url: string): void;
   now(): number;
@@ -106,6 +118,7 @@ export class Session {
   private readonly TOKENS_KEY: string;
   /** Says only that this tab was signed in, so that it may sign in again by itself when the tokens have run out. */
   private readonly RESUME_KEY: string;
+  private readonly kept: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
   constructor(
     private readonly config: SessionConfig,
@@ -114,7 +127,8 @@ export class Session {
     this.PENDING_KEY = `${deps.storageKey}.sign-in`;
     this.TOKENS_KEY = `${deps.storageKey}.tokens`;
     this.RESUME_KEY = `${deps.storageKey}.was-signed-in`;
-    const kept = storedTokens(deps.storage.getItem(this.TOKENS_KEY));
+    this.kept = deps.kept ?? deps.storage;
+    const kept = storedTokens(this.kept.getItem(this.TOKENS_KEY));
     if (!kept) return;
     if (kept.expiresAt - deps.now() > NEARLY_OVER_MS) this.adopt(kept);
     else this.lapsed = kept;
@@ -129,23 +143,39 @@ export class Session {
     const lapsed = this.lapsed;
     this.lapsed = null;
     if (!lapsed || this.isSignedIn) return;
-    const tokens = lapsed.refreshToken
-      ? await this.requestTokens({
-          grant_type: 'refresh_token',
-          client_id: this.config.clientId,
-          refresh_token: lapsed.refreshToken,
-        })
-      : null;
+    const tokens = await this.renewed(lapsed);
     // Someone signed in while this was being asked: leave that as it is.
     if (this.isSignedIn) return;
-    if (tokens) {
-      this.adopt({
-        ...tokens,
-        refreshToken: tokens.refreshToken ?? lapsed.refreshToken,
+    if (tokens) this.adopt(tokens);
+    else this.kept.removeItem(this.TOKENS_KEY);
+  }
+
+  /**
+   * Fresh tokens for ones that are running out, or null when there are none
+   * to be had. A provider that gives a new refresh token each time takes the
+   * old one back, so when it refuses, another window of this application may
+   * have renewed already: what that one kept is used, or renewed in turn.
+   */
+  private async renewed(current: Tokens): Promise<Tokens | null> {
+    if (current.refreshToken) {
+      const tokens = await this.requestTokens({
+        grant_type: 'refresh_token',
+        client_id: this.config.clientId,
+        refresh_token: current.refreshToken,
       });
-    } else {
-      this.deps.storage.removeItem(this.TOKENS_KEY);
+      // The provider may keep the refresh token it gave before.
+      if (tokens) {
+        return {
+          ...tokens,
+          refreshToken: tokens.refreshToken ?? current.refreshToken,
+        };
+      }
     }
+    const other = storedTokens(this.kept.getItem(this.TOKENS_KEY));
+    if (!other || other.refreshToken === current.refreshToken) return null;
+    return other.expiresAt - this.deps.now() > NEARLY_OVER_MS
+      ? other
+      : this.renewed(other);
   }
 
   get redirectUri(): string {
@@ -314,7 +344,7 @@ export class Session {
 
   private adopt(tokens: Tokens): void {
     this.tokens = tokens;
-    this.deps.storage.setItem(this.TOKENS_KEY, JSON.stringify(tokens));
+    this.kept.setItem(this.TOKENS_KEY, JSON.stringify(tokens));
     this.deps.storage.setItem(this.RESUME_KEY, '1');
     clearTimeout(this.renewTimer);
     if (tokens.refreshToken !== null) {
@@ -335,19 +365,11 @@ export class Session {
     this.renewing ??= (async () => {
       const current = this.tokens;
       if (!current?.refreshToken) return false;
-      const tokens = await this.requestTokens({
-        grant_type: 'refresh_token',
-        client_id: this.config.clientId,
-        refresh_token: current.refreshToken,
-      });
+      const tokens = await this.renewed(current);
       // Signed out, or signed in afresh, while waiting: leave that as it is.
       if (this.tokens !== current) return this.isSignedIn;
       if (!tokens) return false;
-      // The provider may keep the refresh token it gave before.
-      this.adopt({
-        ...tokens,
-        refreshToken: tokens.refreshToken ?? current.refreshToken,
-      });
+      this.adopt(tokens);
       return true;
     })().finally(() => {
       this.renewing = undefined;
@@ -360,7 +382,7 @@ export class Session {
     clearTimeout(this.renewTimer);
     this.exchange = undefined;
     this.lapsed = null;
-    this.deps.storage.removeItem(this.TOKENS_KEY);
+    this.kept.removeItem(this.TOKENS_KEY);
     if (this.tokens === null) return;
     this.tokens = null;
     this.changed();
@@ -368,6 +390,22 @@ export class Session {
 
   /** Signs out here and at the provider. */
   signOut(): void {
+    const refreshToken = this.tokens?.refreshToken ?? this.lapsed?.refreshToken;
+    if (refreshToken && this.config.revokeUrl) {
+      // Taken back at the provider, so that a copy of it is worth nothing.
+      // Not waited for: signing out here does not depend on it.
+      void this.deps
+        .fetch(this.config.revokeUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            token: refreshToken,
+            client_id: this.config.clientId,
+          }).toString(),
+          keepalive: true,
+        })
+        .catch(() => undefined);
+    }
     this.forget();
     // Signed out on purpose: a reload must not sign in again by itself.
     this.deps.storage.removeItem(this.RESUME_KEY);

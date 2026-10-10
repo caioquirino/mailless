@@ -410,6 +410,7 @@ describe('webmail Lambda bundle', () => {
       AUTH_AUTHORIZE_URL: 'https://auth.example.com/oauth2/authorize',
       AUTH_TOKEN_URL: 'https://auth.example.com/oauth2/token',
       AUTH_LOGOUT_URL: 'https://auth.example.com/logout',
+      AUTH_REVOKE_URL: 'https://auth.example.com/oauth2/revoke',
       AUTH_SCOPES: JSON.stringify(['openid']),
       ACCOUNT_URL: '/admin/',
     });
@@ -459,6 +460,7 @@ describe('webmail Lambda bundle', () => {
       authorizeUrl: 'https://auth.example.com/oauth2/authorize',
       tokenUrl: 'https://auth.example.com/oauth2/token',
       logoutUrl: 'https://auth.example.com/logout',
+      revokeUrl: 'https://auth.example.com/oauth2/revoke',
       scopes: ['openid'],
       accountUrl: '/admin/',
     });

@@ -51,6 +51,8 @@ output "hosted" {
     authorize_url = "${local.base_url}/oauth2/authorize"
     token_url     = "${local.base_url}/oauth2/token"
     logout_url    = "${local.base_url}/logout"
+    # Where a refresh token is taken back when someone signs out.
+    revoke_url = "${local.base_url}/oauth2/revoke"
     # Where a signed-in user adds a passkey. Nobody is sent there unasked.
     passkey_enrolment_url = "${local.base_url}/passkeys/add"
   }

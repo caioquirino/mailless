@@ -54,6 +54,7 @@ resource "aws_lambda_function" "webmail" {
       AUTH_AUTHORIZE_URL = module.identity.hosted.authorize_url
       AUTH_TOKEN_URL     = module.identity.hosted.token_url
       AUTH_LOGOUT_URL    = module.identity.hosted.logout_url
+      AUTH_REVOKE_URL    = module.identity.hosted.revoke_url
       AUTH_SCOPES        = jsonencode(module.identity.webmail_scopes)
       # Where someone changes their password and makes app passwords.
       ACCOUNT_URL = "/admin/"

@@ -106,9 +106,16 @@ with PKCE), through [`@mailless/web-session`](../../libs/web/session). Nothing
 about the provider or the server is built in: the pages read where things are
 from `/mail/config.json`.
 
-The tokens are kept for as long as the tab is open, in memory and in the
-tab's session storage, and are gone when it closes. A new tab signs in again,
-which the provider's own session makes a matter of one click.
+In a browser tab, the tokens are kept for as long as the tab is open, in
+memory and in the tab's session storage, and are gone when it closes. A new
+tab signs in again, which the provider's own session makes a matter of one
+click for a while.
+
+Installed on a device (the browser's "Install"), closing the application is
+only putting it away, so the tokens are kept on the device until signing out,
+and it opens on the mail. The provider gives a new refresh token at each
+renewal and takes the old one back, signing out takes the last one back too,
+and after 30 days it asks to sign in again whatever happened in between.
 
 ## Working on it
 

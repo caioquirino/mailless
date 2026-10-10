@@ -26,6 +26,7 @@ const configuration = {
   authorizeUrl: 'https://auth.example.com/oauth2/authorize',
   tokenUrl: 'https://auth.example.com/oauth2/token',
   logoutUrl: 'https://auth.example.com/logout',
+  revokeUrl: 'https://auth.example.com/oauth2/revoke',
   scopes: ['openid'],
   accountUrl: '/admin/',
 };
@@ -84,6 +85,7 @@ describe('webmail', () => {
       AUTH_AUTHORIZE_URL: configuration.authorizeUrl,
       AUTH_TOKEN_URL: configuration.tokenUrl,
       AUTH_LOGOUT_URL: configuration.logoutUrl,
+      AUTH_REVOKE_URL: configuration.revokeUrl ?? '',
       AUTH_SCOPES: '["openid"]',
       ACCOUNT_URL: '/admin/',
     };
@@ -91,6 +93,11 @@ describe('webmail', () => {
     expect(
       webmailConfigurationFromEnvironment({ ...env, ACCOUNT_URL: '' })
         .accountUrl,
+    ).toBeNull();
+    // A provider with nowhere to take a token back is still one to sign in at.
+    expect(
+      webmailConfigurationFromEnvironment({ ...env, AUTH_REVOKE_URL: '' })
+        .revokeUrl,
     ).toBeNull();
     expect(() =>
       webmailConfigurationFromEnvironment({ ...env, WEBMAIL_CLIENT_ID: '' }),

@@ -17,6 +17,8 @@ export interface WebmailConfiguration {
   authorizeUrl: string;
   tokenUrl: string;
   logoutUrl: string;
+  /** Where a refresh token is taken back on signing out, when the provider has such a place. */
+  revokeUrl: string | null;
   scopes: string[];
   /** Where someone manages their password and app passwords. */
   accountUrl: string | null;
@@ -52,6 +54,7 @@ export function webmailConfigurationFromEnvironment(
     authorizeUrl: required('AUTH_AUTHORIZE_URL'),
     tokenUrl: required('AUTH_TOKEN_URL'),
     logoutUrl: required('AUTH_LOGOUT_URL'),
+    revokeUrl: env['AUTH_REVOKE_URL'] || null,
     scopes: scopes as string[],
     accountUrl: env['ACCOUNT_URL'] || null,
   };
@@ -74,8 +77,12 @@ export function webmailSecurityHeaders(
 ): Record<string, string> {
   const provider = [
     ...new Set(
-      [configuration.tokenUrl, configuration.authorizeUrl]
-        .map(origin)
+      [
+        configuration.tokenUrl,
+        configuration.authorizeUrl,
+        configuration.revokeUrl ?? undefined,
+      ]
+        .map((url) => (url === undefined ? undefined : origin(url)))
         .filter((value): value is string => value !== undefined),
     ),
   ].join(' ');

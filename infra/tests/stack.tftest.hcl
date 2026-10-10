@@ -399,6 +399,7 @@ run "api_and_sign_in" {
       authorize_url         = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com/oauth2/authorize"
       token_url             = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com/oauth2/token"
       logout_url            = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com/logout"
+      revoke_url            = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com/oauth2/revoke"
       passkey_enrolment_url = "https://mailless-123456789012.auth.eu-west-1.amazoncognito.com/passkeys/add"
     }
     error_message = "The sign-in pages must be an output, with the page for enrolling a passkey."
@@ -1425,7 +1426,9 @@ run "identity_on_a_hostname_of_our_own" {
       aws_cognito_user_pool_client.webmail.allowed_oauth_flows_user_pool_client &&
       aws_cognito_user_pool_client.webmail.allowed_oauth_flows == toset(["code"]) &&
       aws_cognito_user_pool_client.webmail.allowed_oauth_scopes == toset(["openid"]) &&
-      aws_cognito_user_pool_client.webmail.explicit_auth_flows == toset(["ALLOW_USER_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]) &&
+      aws_cognito_user_pool_client.webmail.explicit_auth_flows == toset(["ALLOW_USER_AUTH"]) &&
+      aws_cognito_user_pool_client.webmail.refresh_token_rotation[0].feature == "ENABLED" &&
+      aws_cognito_user_pool_client.webmail.refresh_token_validity == 30 &&
       aws_cognito_user_pool_client.webmail.prevent_user_existence_errors == "ENABLED" &&
       aws_cognito_user_pool_client.webmail.enable_token_revocation &&
       aws_cognito_user_pool_client.webmail.callback_urls == toset([
@@ -1633,7 +1636,7 @@ run "webmail" {
     condition = (
       aws_lambda_function.webmail.handler == "webmail.handler" &&
       toset(keys(aws_lambda_function.webmail.environment[0].variables)) == toset([
-        "WEBMAIL_CLIENT_ID", "AUTH_AUTHORIZE_URL", "AUTH_TOKEN_URL", "AUTH_LOGOUT_URL", "AUTH_SCOPES", "ACCOUNT_URL",
+        "WEBMAIL_CLIENT_ID", "AUTH_AUTHORIZE_URL", "AUTH_TOKEN_URL", "AUTH_LOGOUT_URL", "AUTH_REVOKE_URL", "AUTH_SCOPES", "ACCOUNT_URL",
       ]) &&
       aws_lambda_function.webmail.environment[0].variables["WEBMAIL_CLIENT_ID"] == module.identity.webmail_client_id &&
       jsondecode(aws_lambda_function.webmail.environment[0].variables["AUTH_SCOPES"]) == ["openid"] &&

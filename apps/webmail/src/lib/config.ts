@@ -44,9 +44,25 @@ export function parseConfig(value: unknown): AppConfig {
     authorizeUrl: record['authorizeUrl'] as string,
     tokenUrl: record['tokenUrl'] as string,
     logoutUrl: record['logoutUrl'] as string,
+    revokeUrl:
+      typeof record['revokeUrl'] === 'string' && record['revokeUrl'] !== ''
+        ? record['revokeUrl']
+        : null,
     scopes: scopes as string[],
     accountUrl: typeof account === 'string' && account !== '' ? account : null,
   };
+}
+
+/**
+ * Whether this is the application installed on a device, in a window of its
+ * own, and not a tab of a browser: closing that is not leaving it.
+ */
+export function isInstalled(): boolean {
+  return (
+    window.matchMedia?.('(display-mode: standalone)').matches === true ||
+    // Safari on a phone says so its own way.
+    (navigator as { standalone?: boolean }).standalone === true
+  );
 }
 
 /** The address the page is served under, ending in "/": `https://host/mail/`. */

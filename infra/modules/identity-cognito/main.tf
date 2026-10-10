@@ -193,19 +193,29 @@ resource "aws_cognito_user_pool_client" "webmail" {
   logout_urls   = ["${var.webmail_base_url}/mail/"]
 
   # USER_AUTH is what lets the sign-in pages offer a passkey next to the password.
+  # Renewing goes through the token endpoint only: the other way of renewing
+  # cannot be offered by a client whose refresh tokens are replaced on use.
   explicit_auth_flows = [
     "ALLOW_USER_AUTH",
-    "ALLOW_REFRESH_TOKEN_AUTH",
   ]
 
   prevent_user_existence_errors = "ENABLED"
   enable_token_revocation       = true
 
-  # The page keeps its tokens for as long as its tab is open, and no longer;
-  # this is how long a tab left open goes on working without signing in again.
+  # A browser tab keeps its tokens for as long as it is open; the installed
+  # application keeps them on the device until signing out. Either way this
+  # is how long it is before signing in again, counted from signing in.
   access_token_validity  = 60
   id_token_validity      = 60
-  refresh_token_validity = 7
+  refresh_token_validity = 30
+
+  # Each renewal gives a new refresh token and takes the old one back, so a
+  # copy of one kept on a device stops working once the device renews. The
+  # old one works a minute more, for a request that has to be made again.
+  refresh_token_rotation {
+    feature                    = "ENABLED"
+    retry_grace_period_seconds = 60
+  }
 
   token_validity_units {
     access_token  = "minutes"

@@ -6,7 +6,7 @@ import { Session } from '@mailless/web-session';
 import { App } from './app/app';
 import { ServicesProvider, type Services } from './app/services';
 import { createMailClient } from './lib/client';
-import { appBaseUrl, loadConfig } from './lib/config';
+import { appBaseUrl, isInstalled, loadConfig } from './lib/config';
 
 // Before anything is drawn, so that the page opens in the theme that was chosen.
 const theme = browserTheme();
@@ -16,6 +16,9 @@ async function start(): Promise<Services> {
   const session = new Session(config, {
     fetch: (input, init) => fetch(input, init),
     storage: window.sessionStorage,
+    // A browser tab forgets who was signed in when it closes. The installed
+    // application does not: it is closed whenever it is put away.
+    ...(isInstalled() ? { kept: window.localStorage } : {}),
     navigate: (url) => window.location.assign(url),
     now: () => Date.now(),
     baseUrl: appBaseUrl(),
