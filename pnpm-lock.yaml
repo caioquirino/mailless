@@ -484,6 +484,9 @@ importers:
       '@lexical/utils':
         specifier: 0.52.0
         version: 0.52.0(typescript@6.0.3)
+      '@mailless/jmap-calendars':
+        specifier: workspace:*
+        version: link:../../libs/jmap/calendars
       '@mailless/jmap-client':
         specifier: workspace:*
         version: link:../../libs/jmap/client

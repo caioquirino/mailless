@@ -24,6 +24,7 @@ import { Calendars } from './calendar';
 import { Contacts } from './contacts';
 import { People } from './people';
 import { filterOf, parseSearch } from './search';
+import { FilterStore } from './filters';
 import { Blocked, FirstTimes, Pictures } from './senders';
 import { Tags } from './tags';
 
@@ -296,6 +297,8 @@ export class MailStore {
   /** The senders whose mail goes to the junk, and whether a message is the first from its sender. */
   readonly blocked: Blocked;
   readonly pictures: Pictures;
+  /** What is done with mail as it arrives. Fetched when it is first looked at. */
+  readonly filters: FilterStore;
   readonly firstTimes: FirstTimes;
   /**
    * For how long the server will hold a message before sending it, in
@@ -315,6 +318,7 @@ export class MailStore {
     this.tags = new Tags(client);
     this.blocked = new Blocked(client);
     this.pictures = new Pictures(client);
+    this.filters = new FilterStore(client);
     this.firstTimes = new FirstTimes(client);
     this.people = new People(client, this.contacts);
     this.mailboxes = new ObjectCache(client, {

@@ -17,6 +17,7 @@ import {
 import {
   blockedSendersModule,
   pictureSendersModule,
+  sieveModule,
   calendarParts,
   importMessage,
   mailModule,
@@ -49,6 +50,13 @@ export interface JmapServerOptions
    * asked for: the event is kept, the message delivered.
    */
   onSchedulingError?: (error: unknown) => void;
+  /**
+   * Fetches a calendar kept somewhere else, from the address its owner
+   * copied in, as the text of an .ics file. Without it no such calendar can
+   * be added. The address is the account owner's to give and not to be
+   * trusted: whoever gives this keeps it away from what is not public.
+   */
+  fetchCalendar?: (url: string) => Promise<string>;
 }
 
 export interface JmapServer extends Omit<JmapEngine, 'contextFor'> {
@@ -106,6 +114,7 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
     identities,
     onAutoReply,
     onSchedulingError,
+    fetchCalendar,
     ...engineOptions
   } = options;
   const mail: MailModuleOptions = {
@@ -128,11 +137,13 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
       tagsModule(),
       blockedSendersModule(),
       pictureSendersModule(),
+      sieveModule(),
       sharingModule(),
       contactsModule(),
-      calendarsModule(
+      calendarsModule({
+        ...(fetchCalendar ? { fetchCalendar } : {}),
         // The people on an event are told of it where there is a way to send mail.
-        transport
+        ...(transport
           ? {
               scheduling: {
                 addresses: async (ctx) =>
@@ -141,16 +152,27 @@ export function createJmapServer(options: JmapServerOptions): JmapServer {
                     name: identity.name,
                   })),
                 send: async (ctx, message) => {
-                  await transport.send(schedulingMail(message), {
+                  const raw = schedulingMail(message);
+                  await transport.send(raw, {
                     mailFrom: message.from.email,
                     rcptTo: message.to,
                   });
+                  // Kept with what the account sent, as anything it writes is. It
+                  // has gone out either way: not keeping it is not a failure to send.
+                  try {
+                    await importMessage(ctx, raw, {
+                      mailboxRole: 'sent',
+                      keywords: { $seen: true },
+                    });
+                  } catch (error) {
+                    onSchedulingError?.(error);
+                  }
                 },
               },
               ...(onSchedulingError ? { onSchedulingError } : {}),
             }
-          : {},
-      ),
+          : {}),
+      }),
     ],
   });
 

@@ -21,6 +21,7 @@ import { DynamoDbMetadataStore } from '@mailless/storage-dynamodb';
 import { S3BlobStore } from '@mailless/storage-s3';
 import { SesMailTransport } from '@mailless/transport-ses';
 import { createAuthenticator } from './api/authenticator.js';
+import { fetchCalendar } from './api/calendar-fetch.js';
 import { identitiesFor } from './api/identities.js';
 import { createLambdaHttpHandler } from './api/lambda-http.js';
 import { createAwsSendScheduler } from './api/send-scheduler.js';
@@ -146,6 +147,8 @@ export const handler = createLambdaHttpHandler({
         // Mail apps register where to be told of new mail. The push function does the telling.
         push: vapid ? { vapid } : {},
         // An account may send from the addresses that deliver to it.
+        // Calendars kept elsewhere are fetched from where their owner says, when that is a public place.
+        fetchCalendar,
         // The people on an event that could not be told of it. The kind of failure only.
         onSchedulingError: (error) =>
           console.log(

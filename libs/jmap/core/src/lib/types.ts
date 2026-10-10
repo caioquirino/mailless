@@ -35,6 +35,8 @@ export const CAPABILITY_CORE = 'urn:ietf:params:jmap:core';
 export const CAPABILITY_MAIL = 'urn:ietf:params:jmap:mail';
 export const CAPABILITY_SUBMISSION = 'urn:ietf:params:jmap:submission';
 export const CAPABILITY_VACATION = 'urn:ietf:params:jmap:vacationresponse';
+/** RFC 9661: the scripts that say what is done with mail as it arrives. */
+export const CAPABILITY_SIEVE = 'urn:ietf:params:jmap:sieve';
 export const CAPABILITY_BLOB = 'urn:ietf:params:jmap:blob';
 export const CAPABILITY_QUOTA = 'urn:ietf:params:jmap:quota';
 export const CAPABILITY_MDN = 'urn:ietf:params:jmap:mdn';
@@ -70,6 +72,12 @@ export const CAPABILITY_BLOCKED_SENDERS =
  */
 export const CAPABILITY_PICTURE_SENDERS =
   'https://github.com/caioquirino/mailless/jmap/picture-senders';
+/**
+ * Not an RFC's: calendars kept somewhere else and published as an .ics file,
+ * fetched from there and only read here (CalendarSubscription/get, /add, /refresh).
+ */
+export const CAPABILITY_CALENDAR_SUBSCRIPTIONS =
+  'https://github.com/caioquirino/mailless/jmap/calendar-subscriptions';
 /** RFC 9749: the key a client gives its push service, so that only this server may push to it. */
 export const CAPABILITY_WEBPUSH_VAPID = 'urn:ietf:params:jmap:webpush-vapid';
 

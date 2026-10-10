@@ -14,6 +14,7 @@ import {
   type EventForm,
   type FormPart,
   type Own,
+  withSpan,
 } from '../lib/calendar';
 import type { Person } from '../lib/people';
 import { Recipients, typed } from './recipients';
@@ -183,6 +184,8 @@ export interface EventEditorProps {
   busy: boolean;
   /** What went wrong keeping it, when something did. */
   failure?: string | null;
+  /** Set for an event that is only shown here: why it cannot be changed. */
+  locked?: string;
   /** The addresses the person goes by, for who an event with people on it is from. */
   own?: readonly Own[];
   /** Who what is typed among the people might be the start of: the address book, and who was written to. */
@@ -310,7 +313,12 @@ export function EventEditor(props: EventEditorProps) {
         ) : null}
         <IconButton icon="close" label="Close" onClick={props.onClose} />
       </header>
-      <div className="event-fields">
+      {props.locked ? (
+        <p className="notice small event-locked" role="note">
+          {props.locked}
+        </p>
+      ) : null}
+      <div className="event-fields" inert={props.locked !== undefined}>
         <input
           ref={title}
           className="event-title"
@@ -356,7 +364,27 @@ export function EventEditor(props: EventEditorProps) {
                 aria-label="Starts"
                 required
                 value={form.from}
-                onChange={(event) => set({ from: event.target.value })}
+                onChange={(event) => {
+                  const [hour, minute] = event.target.value
+                    .split(':')
+                    .map(Number);
+                  if (hour === undefined || minute === undefined) {
+                    return set({ from: event.target.value });
+                  }
+                  // It stays as long as it was: the end goes with the start.
+                  const { start, end } = formSpan(form);
+                  const next = new Date(start);
+                  next.setHours(hour, minute, 0, 0);
+                  props.onChange(
+                    withSpan(
+                      form,
+                      next,
+                      new Date(
+                        next.getTime() + end.getTime() - start.getTime(),
+                      ),
+                    ),
+                  );
+                }}
               />
               <span className="muted">–</span>
               <input
@@ -406,9 +434,11 @@ export function EventEditor(props: EventEditorProps) {
               <input
                 type="radio"
                 name="event-scope"
-                checked={!form.series.all}
+                checked={!form.series.all && !form.series.following}
                 onChange={() =>
-                  set({ series: { ...form.series!, all: false } })
+                  set({
+                    series: { ...form.series!, all: false, following: false },
+                  })
                 }
               />
               This one
@@ -417,15 +447,32 @@ export function EventEditor(props: EventEditorProps) {
               <input
                 type="radio"
                 name="event-scope"
+                checked={!form.series.all && form.series.following === true}
+                onChange={() =>
+                  set({
+                    series: { ...form.series!, all: false, following: true },
+                  })
+                }
+              />
+              This and following
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="event-scope"
                 checked={form.series.all}
-                onChange={() => set({ series: { ...form.series!, all: true } })}
+                onChange={() =>
+                  set({
+                    series: { ...form.series!, all: true, following: false },
+                  })
+                }
               />
               Every one
             </label>
           </fieldset>
         ) : null}
         {/* How it repeats is said of all of it, not of one of its times. */}
-        {form.series && !form.series.all
+        {form.series && !form.series.all && !form.series.following
           ? null
           : field(
               'repeat',
@@ -690,7 +737,12 @@ export function EventEditor(props: EventEditorProps) {
               (each) =>
                 !open.includes(each.part) &&
                 !(each.part === 'people' && form.invited) &&
-                !(each.part === 'repeat' && form.series && !form.series.all),
+                !(
+                  each.part === 'repeat' &&
+                  form.series &&
+                  !form.series.all &&
+                  !form.series.following
+                ),
             ).map((each) => (
               <button
                 key={each.part}
@@ -717,7 +769,7 @@ export function EventEditor(props: EventEditorProps) {
           </p>
         ) : null}
       </div>
-      {asking ? (
+      {props.locked ? null : asking ? (
         <footer
           className="event-foot event-ask"
           role="alertdialog"

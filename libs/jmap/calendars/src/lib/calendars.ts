@@ -70,6 +70,12 @@ export interface CalendarsContext {
   scheduling?: Scheduling;
   /** Told when one of them could not be told. The event is kept all the same. */
   onSchedulingError?: (error: unknown) => void;
+  /**
+   * Fetches a calendar someone else keeps, from the address it is published
+   * at, as the text of an .ics file. Present where the server may reach out;
+   * it is for whoever gives it to say which addresses it will go to.
+   */
+  fetchCalendar?: (url: string) => Promise<string>;
 }
 
 declare module '@mailless/jmap-engine' {
@@ -123,6 +129,21 @@ interface CalendarValue {
   defaultAlertsWithTime: Record<string, unknown> | null;
   defaultAlertsWithoutTime: Record<string, unknown> | null;
   timeZone: string | null;
+  /** For a calendar kept somewhere else and only read here: where, and how the last look went. */
+  source?: CalendarSource;
+}
+
+interface CalendarSource {
+  /** Where it is published. Whoever has this can read the calendar: it is told to nobody. */
+  url: string;
+  /** When it was last looked at, whether or not that worked. */
+  fetchedAt: string | null;
+  /** Why the last look did not work; null when it did. */
+  problem: string | null;
+  /** How many events it had. */
+  events: number;
+  /** Of what it said, to know without comparing when it says the same again. */
+  digest: string | null;
 }
 
 const CALENDAR_PROPERTIES = [
@@ -156,6 +177,8 @@ function describeCalendar(
   defaultId: string | null,
 ): Record<string, unknown> {
   const mayWrite = !ctx.isReadOnly;
+  // What is kept somewhere else is changed there: here it is only read.
+  const mayChange = mayWrite && !value.source;
   return {
     id,
     name: value.name,
@@ -174,10 +197,10 @@ function describeCalendar(
     myRights: {
       mayReadFreeBusy: true,
       mayReadItems: true,
-      mayWriteAll: mayWrite,
-      mayWriteOwn: mayWrite,
+      mayWriteAll: mayChange,
+      mayWriteOwn: mayChange,
       mayUpdatePrivate: mayWrite,
-      mayRSVP: mayWrite,
+      mayRSVP: mayChange,
       mayShare: false,
       mayAdmin: false,
       mayDelete: mayWrite,
@@ -350,7 +373,11 @@ async function updateCalendar(
       kind: 'update',
       type: CALENDAR,
       id,
-      value: { ...value },
+      // Where it comes from is not a client's to say, and stays.
+      value: {
+        ...value,
+        ...(record.value['source'] ? { source: record.value['source'] } : {}),
+      },
       expectedVersion: record.version,
       changedProperties,
     },
@@ -679,6 +706,12 @@ export function eventProblems(event: Record<string, unknown>): string[] {
   return problems;
 }
 
+const readOnly = () =>
+  new SetFailure(
+    'forbidden',
+    'This calendar is kept somewhere else: its events are changed there',
+  );
+
 async function checkEvent(
   ctx: MethodContext,
   event: Record<string, unknown>,
@@ -695,6 +728,7 @@ async function checkEvent(
     const ids = Object.keys(calendars);
     const found = await ctx.store.get(ctx.auth.accountId, CALENDAR, ids);
     if (found.length !== ids.length) problems.push('calendarIds');
+    if (found.some((calendar) => calendar.value['source'])) throw readOnly();
   }
   if (problems.length > 0) {
     throw invalid(
@@ -910,6 +944,12 @@ async function destroyEvent(ctx: MethodContext, id: string): Promise<void> {
     id,
   ]);
   if (!record) throw new SetFailure('notFound');
+  const calendars = await ctx.store.get(
+    ctx.auth.accountId,
+    CALENDAR,
+    Object.keys((record.value['calendarIds'] as object | undefined) ?? {}),
+  );
+  if (calendars.some((calendar) => calendar.value['source'])) throw readOnly();
   await commit(ctx, [
     {
       kind: 'destroy',
@@ -1748,6 +1788,111 @@ const whenOf = (event: Record<string, unknown>) =>
 /** An answer someone gave, as this server keeps it. */
 const ANSWERED = ['accepted', 'declined', 'tentative'];
 
+/** Whoever of those on an event writes from an address, by the key they are kept under. */
+function participantKey(event: Event, from: string): string | undefined {
+  return Object.entries(
+    (event['participants'] as Record<string, Event> | undefined) ?? {},
+  ).find(([, each]) => {
+    const imip = isPlainObject(each['sendTo']) ? each['sendTo']['imip'] : '';
+    return (
+      String(each['email'] ?? '').toLowerCase() === from ||
+      String(imip)
+        .replace(/^mailto:/i, '')
+        .toLowerCase() === from
+    );
+  })?.[0];
+}
+
+/** What whoever an event is from may say differently of one of its times. */
+const SAID_OF_ONE = [
+  'title',
+  'description',
+  'start',
+  'duration',
+  'locations',
+  'virtualLocations',
+  'status',
+];
+
+/**
+ * What someone else's calendar says of one time of an event that repeats: an
+ * answer for that time alone, that it is off, or that it is different.
+ */
+async function applyToOccurrence(
+  ctx: MethodContext,
+  record: { id: string; value: Record<string, unknown> },
+  said: Record<string, unknown>,
+  method: 'REPLY' | 'CANCEL' | 'REQUEST',
+  from: string,
+): Promise<'answered' | 'cancelled' | 'changed' | null> {
+  const zone = (record.value['timeZone'] as string | null | undefined) ?? null;
+  // Times are kept on the event's own clock, whichever they were said on.
+  const onOwn = (local: string, saidOn: string | null) =>
+    zone !== null && saidOn !== null && saidOn !== zone
+      ? utcToZoned(zonedToUtc(local, saidOn), zone)
+      : local;
+  const recurrenceId = onOwn(
+    String(said['recurrenceId']),
+    (said['recurrenceIdTimeZone'] as string | undefined) ?? null,
+  );
+  const one = { eventId: record.id, recurrenceId };
+  if (method === 'REPLY') {
+    const theirs = Object.values(
+      (said['participants'] as Record<string, Event> | undefined) ?? {},
+    ).find((each) => each['email'] === from);
+    const status = String(theirs?.['participationStatus'] ?? '');
+    const key = participantKey(record.value as Event, from);
+    if (!ANSWERED.includes(status) || key === undefined) return null;
+    await overrideOccurrence(ctx, one, {
+      [`participants/${key}/participationStatus`]: status,
+    });
+    return 'answered';
+  }
+  if (organizerOf(record.value) !== from) return null;
+  if (method === 'CANCEL') {
+    await overrideOccurrence(ctx, one, null);
+    return 'cancelled';
+  }
+  if (!occurrenceAt(record.value, recurrenceId)) return null;
+  const now: Record<string, unknown> = {
+    ...said,
+    start: onOwn(
+      String(said['start']),
+      (said['timeZone'] as string | null | undefined) ?? null,
+    ),
+  };
+  const usual: Record<string, unknown> = {
+    ...record.value,
+    start: recurrenceId,
+  };
+  const overrides = isPlainObject(record.value['recurrenceOverrides'])
+    ? record.value['recurrenceOverrides']
+    : {};
+  const before = isPlainObject(overrides[recurrenceId])
+    ? overrides[recurrenceId]
+    : {};
+  // What the account itself keeps of that time stays: its own answer, its reminders.
+  const next: Record<string, unknown> = Object.fromEntries(
+    Object.entries(before).filter(
+      ([property]) =>
+        property !== 'excluded' && !SAID_OF_ONE.includes(property),
+    ),
+  );
+  for (const property of SAID_OF_ONE) {
+    if (!same(now[property], usual[property])) {
+      next[property] = now[property] ?? null;
+    }
+  }
+  if (same(next, overrides[recurrenceId])) return null;
+  await updateEvent(
+    ctx,
+    record.id,
+    { recurrenceOverrides: { ...overrides, [recurrenceId]: next } },
+    true,
+  );
+  return 'changed';
+}
+
 /**
  * Takes in what someone else's calendar says of an event the account has: an
  * answer to an invitation of its own, which is noted on the event, word that
@@ -1770,14 +1915,23 @@ export async function applySchedulingMessage(
   }
   let done: 'answered' | 'cancelled' | 'changed' | null = null;
   for (const said of events) {
-    // What is said of one time of an event that repeats is left for whoever reads the message.
-    if (said['recurrenceId'] !== undefined) continue;
     const records = await ctx.store.list(ctx.auth.accountId, CALENDAR_EVENT, {
       name: 'uid',
       value: fingerprint(String(said['uid'])),
     });
     const record = records.find((each) => each.value['uid'] === said['uid']);
     if (!record) continue;
+    if (said['recurrenceId'] !== undefined) {
+      // Of one time of an event that repeats: kept as what is different that once.
+      try {
+        const did = await applyToOccurrence(ctx, record, said, method, from);
+        if (did) done = did;
+      } catch (error) {
+        // Not one of its times, or no longer: nothing to say it of.
+        if (!(error instanceof SetFailure)) throw error;
+      }
+      continue;
+    }
     // Older than what is kept: it answers to an event that has since changed.
     if (Number(said['sequence'] ?? 0) < Number(record.value['sequence'] ?? 0)) {
       continue;
@@ -1836,17 +1990,7 @@ export async function applySchedulingMessage(
     ).find((each) => each['email'] === from);
     const status = String(theirs?.['participationStatus'] ?? '');
     if (!ANSWERED.includes(status)) continue;
-    const key = Object.entries(
-      (record.value['participants'] as Record<string, Event> | undefined) ?? {},
-    ).find(([, each]) => {
-      const imip = isPlainObject(each['sendTo']) ? each['sendTo']['imip'] : '';
-      return (
-        String(each['email'] ?? '').toLowerCase() === from ||
-        String(imip)
-          .replace(/^mailto:/i, '')
-          .toLowerCase() === from
-      );
-    })?.[0];
+    const key = participantKey(record.value as Event, from);
     if (key === undefined) continue;
     await updateEvent(ctx, record.id, {
       [`participants/${key}/participationStatus`]: status,
@@ -1855,3 +1999,350 @@ export async function applySchedulingMessage(
   }
   return done;
 }
+
+// ------------------------------------------------- calendars kept elsewhere
+
+/*
+ * A calendar someone keeps somewhere else, and publishes at an address as an
+ * .ics file: it is fetched from there and shown here, and never changed
+ * here. Not part of JMAP for Calendars; under a capability of this project's.
+ */
+
+const MAX_SUBSCRIPTIONS = 20;
+const MAX_FEED_OCTETS = 10 * 1024 * 1024;
+const MAX_FEED_EVENTS = 20_000;
+/** What an event of such a calendar is compared by, to know whether it changed. */
+const FROM_FEED = [
+  'title',
+  'description',
+  'start',
+  'duration',
+  'timeZone',
+  'showWithoutTime',
+  'locations',
+  'virtualLocations',
+  'status',
+  'participants',
+  'replyTo',
+  'recurrenceRules',
+  'recurrenceOverrides',
+  'sequence',
+];
+
+const SubscriptionAddSchema = z.strictObject({
+  accountId: z.string(),
+  name: z.string().min(1).max(255),
+  color: z.string().regex(COLOR).nullish(),
+  url: z.string().min(1).max(2000),
+});
+
+const SubscriptionRefreshSchema = z.strictObject({
+  accountId: z.string(),
+  /** The calendars to look at again; all of them when left out. */
+  ids: z.array(z.string()).nullish(),
+  /** Leaves alone what was looked at less than this many seconds ago. */
+  ifOlderThan: z.number().int().min(0).optional(),
+});
+
+const SubscriptionGetSchema = z.strictObject({
+  accountId: z.string(),
+  ids: z.array(z.string()).nullish(),
+});
+
+/** The address as it is fetched: of a secure page, however it was copied. */
+function feedUrl(given: string): string {
+  const trimmed = given.trim().replace(/^webcals?:\/\//i, 'https://');
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new MethodError('invalidArguments', 'That is not an address');
+  }
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    throw new MethodError(
+      'invalidArguments',
+      'The address has to start with https://',
+    );
+  }
+  return url.href;
+}
+
+const describeSubscription = (id: string, source: CalendarSource) => ({
+  id,
+  fetchedAt: source.fetchedAt,
+  problem: source.problem,
+  events: source.events,
+});
+
+async function digestOf(text: string): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', encoder.encode(text));
+  return [...new Uint8Array(hash)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Looks at a calendar kept somewhere else again, and makes what is here the
+ * same: what is new there is added, what changed is changed, what is gone is
+ * removed. Nobody on any event is told. Stops when `until` has passed, with
+ * the rest left for the next look: `more` says so.
+ */
+async function refreshSubscription(
+  ctx: MethodContext,
+  id: string,
+  until: number,
+): Promise<{ more: boolean } | null> {
+  const fetchCalendar = ctx.calendars.fetchCalendar;
+  const [calendar] = await ctx.store.get(ctx.auth.accountId, CALENDAR, [id]);
+  const source = calendar?.value['source'] as CalendarSource | undefined;
+  if (!calendar || !source || !fetchCalendar) return null;
+  const note = async (change: Partial<CalendarSource>) => {
+    const [now] = await ctx.store.get(ctx.auth.accountId, CALENDAR, [id]);
+    if (!now) return;
+    await commit(ctx, [
+      {
+        kind: 'update',
+        type: CALENDAR,
+        id,
+        value: {
+          ...now.value,
+          source: { ...source, ...change, fetchedAt: toUtcDate(new Date()) },
+        },
+        expectedVersion: now.version,
+        // Nothing a client is shown of the calendar itself.
+        changedProperties: [],
+      },
+    ]);
+  };
+
+  let said: Record<string, unknown>[];
+  let digest: string;
+  try {
+    const text = await fetchCalendar(source.url);
+    if (encoder.encode(text).length > MAX_FEED_OCTETS) {
+      throw new Error('The calendar is too large');
+    }
+    digest = await digestOf(text);
+    if (digest === source.digest) {
+      await note({ problem: null });
+      return { more: false };
+    }
+    const read = fromICalendar(text);
+    if (read.events.length === 0 && !/BEGIN:VCALENDAR/i.test(text)) {
+      throw new Error('That address does not give a calendar');
+    }
+    said = read.events
+      .filter((event) => event['recurrenceId'] === undefined)
+      .slice(0, MAX_FEED_EVENTS);
+  } catch (error) {
+    // What is here stays as it was: a look that failed takes nothing away.
+    await note({
+      problem:
+        error instanceof Error && error.message
+          ? error.message.slice(0, 200)
+          : 'The calendar could not be fetched',
+    });
+    return { more: false };
+  }
+
+  const here = new Map(
+    (await eventsIn(ctx, id)).map((record) => [
+      String(record.value['uid']),
+      record,
+    ]),
+  );
+  const now = toUtcDate(new Date());
+  const ops: WriteOp[] = [];
+  const seen = new Set<string>();
+  for (const event of said) {
+    const uid = String(event['uid'] ?? '');
+    if (uid === '' || seen.has(uid)) continue;
+    seen.add(uid);
+    const { comment: _comment, ...rest } = event;
+    const before = here.get(uid);
+    const value: Record<string, unknown> = {
+      '@type': 'Event',
+      created: before?.value['created'] ?? now,
+      ...rest,
+      updated: now,
+      calendarIds: { [id]: true },
+      // Reminded of where it is kept, and not here as well.
+      useDefaultAlerts: false,
+    };
+    if (eventProblems(value).length > 0) continue;
+    if (encoder.encode(JSON.stringify(value)).length > MAX_EVENT_OCTETS)
+      continue;
+    if (!before) {
+      ops.push({
+        kind: 'create',
+        type: CALENDAR_EVENT,
+        id: generateId('ev'),
+        value,
+        indexes: eventIndexes(value),
+      });
+    } else if (
+      FROM_FEED.some(
+        (property) => !same(value[property], before.value[property]),
+      )
+    ) {
+      ops.push({
+        kind: 'update',
+        type: CALENDAR_EVENT,
+        id: before.id,
+        value,
+        expectedVersion: before.version,
+        indexes: eventIndexes(value),
+        changedProperties: FROM_FEED,
+      });
+    }
+  }
+  for (const [uid, record] of here) {
+    if (!seen.has(uid)) {
+      ops.push({
+        kind: 'destroy',
+        type: CALENDAR_EVENT,
+        id: record.id,
+        expectedVersion: record.version,
+      });
+    }
+  }
+  let done = 0;
+  while (done < ops.length && Date.now() < until) {
+    await commit(ctx, ops.slice(done, done + EVENTS_PER_COMMIT));
+    done += EVENTS_PER_COMMIT;
+  }
+  const more = done < ops.length;
+  await note({
+    problem: null,
+    events: seen.size,
+    // Not all of it is here yet: the next look has to compare again.
+    digest: more ? null : digest,
+  });
+  return { more };
+}
+
+/** How long one call goes on bringing a calendar in before leaving the rest for the next. */
+const REFRESH_MILLIS = 15_000;
+
+export const subscriptionMethods: Record<string, MethodHandler> = {
+  'CalendarSubscription/get': async (rawArgs, ctx) => {
+    const args = parseArguments(SubscriptionGetSchema, rawArgs);
+    const accountId = requireAccount(ctx, args.accountId);
+    const all = await ctx.store.list(accountId, CALENDAR);
+    return {
+      accountId,
+      list: all
+        .filter(
+          (record) =>
+            record.value['source'] &&
+            (!args.ids || args.ids.includes(record.id)),
+        )
+        .map((record) =>
+          describeSubscription(
+            record.id,
+            record.value['source'] as unknown as CalendarSource,
+          ),
+        ),
+    };
+  },
+
+  /** Adds a calendar kept somewhere else, and looks at it for the first time. */
+  'CalendarSubscription/add': async (rawArgs, ctx) => {
+    const args = parseArguments(SubscriptionAddSchema, rawArgs);
+    const accountId = requireAccount(ctx, args.accountId);
+    if (ctx.isReadOnly) throw new MethodError('accountReadOnly');
+    const url = feedUrl(args.url);
+    const all = await ctx.store.list(accountId, CALENDAR);
+    if (
+      all.filter((each) => each.value['source']).length >= MAX_SUBSCRIPTIONS
+    ) {
+      throw new MethodError(
+        'invalidArguments',
+        `No more than ${MAX_SUBSCRIPTIONS} calendars from elsewhere`,
+      );
+    }
+    const id = generateId('ca');
+    const source: CalendarSource = {
+      url,
+      fetchedAt: null,
+      problem: null,
+      events: 0,
+      digest: null,
+    };
+    await commit(ctx, [
+      {
+        kind: 'create',
+        type: CALENDAR,
+        id,
+        value: {
+          ...NEW_CALENDAR,
+          name: args.name.trim(),
+          color: args.color?.toLowerCase() ?? null,
+          sortOrder: all.length,
+          source,
+        },
+      },
+    ]);
+    const looked = await refreshSubscription(
+      ctx,
+      id,
+      Date.now() + REFRESH_MILLIS,
+    );
+    const [made] = await ctx.store.get(accountId, CALENDAR, [id]);
+    return {
+      accountId,
+      calendarId: id,
+      more: looked?.more ?? false,
+      ...describeSubscription(
+        id,
+        (made?.value['source'] as unknown as CalendarSource) ?? source,
+      ),
+    };
+  },
+
+  /** Looks at calendars kept somewhere else again. */
+  'CalendarSubscription/refresh': async (rawArgs, ctx) => {
+    const args = parseArguments(SubscriptionRefreshSchema, rawArgs);
+    const accountId = requireAccount(ctx, args.accountId);
+    if (ctx.isReadOnly) throw new MethodError('accountReadOnly');
+    const until = Date.now() + REFRESH_MILLIS;
+    const all = (await ctx.store.list(accountId, CALENDAR)).filter(
+      (record) =>
+        record.value['source'] && (!args.ids || args.ids.includes(record.id)),
+    );
+    let more = false;
+    for (const record of all) {
+      const source = record.value['source'] as unknown as CalendarSource;
+      const age =
+        source.fetchedAt === null
+          ? Infinity
+          : (Date.now() - Date.parse(source.fetchedAt)) / 1000;
+      // One that is not all here yet is gone on with, however lately it was looked at.
+      if (
+        args.ifOlderThan !== undefined &&
+        age < args.ifOlderThan &&
+        source.digest !== null
+      ) {
+        continue;
+      }
+      if (Date.now() >= until) {
+        more = true;
+        break;
+      }
+      if ((await refreshSubscription(ctx, record.id, until))?.more) more = true;
+    }
+    const after = await ctx.store.list(accountId, CALENDAR);
+    return {
+      accountId,
+      more,
+      list: after
+        .filter((record) => all.some((each) => each.id === record.id))
+        .map((record) =>
+          describeSubscription(
+            record.id,
+            record.value['source'] as unknown as CalendarSource,
+          ),
+        ),
+    };
+  },
+};

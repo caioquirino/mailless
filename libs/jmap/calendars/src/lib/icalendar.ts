@@ -360,6 +360,41 @@ export function toICalendar(event: Event, options: WriteOptions = {}): string {
   return `${lines.map(fold).join('\r\n')}\r\n`;
 }
 
+/**
+ * Events as one file with the ending .ics, for another calendar to take in:
+ * each as it is, with what was changed for some of its times. No message is
+ * meant by it, so it names no method.
+ */
+export function toICalendarFile(
+  events: readonly Event[],
+  options: { name?: string; now?: Date } = {},
+): string {
+  const stamp = utcStamp((options.now ?? new Date()).getTime());
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//mailless//calendar//EN',
+    'CALSCALE:GREGORIAN',
+    ...(options.name ? [`X-WR-CALNAME:${escape(options.name)}`] : []),
+  ];
+  for (const event of events) {
+    lines.push(...eventLines(event, stamp, null));
+    const overrides = isObject(event['recurrenceOverrides'])
+      ? event['recurrenceOverrides']
+      : {};
+    for (const [id, patch] of Object.entries(overrides)) {
+      if (!isObject(patch) || patch['excluded'] === true) continue;
+      const once: Event = { ...event, start: id };
+      for (const [property, value] of Object.entries(patch)) {
+        if (!property.includes('/')) once[property] = value;
+      }
+      lines.push(...eventLines(once, stamp, null, id));
+    }
+  }
+  lines.push('END:VCALENDAR');
+  return `${lines.map(fold).join('\r\n')}\r\n`;
+}
+
 // ----------------------------------------------------------------- reading
 
 interface Line {
@@ -685,7 +720,11 @@ function readEvent(lines: readonly Line[]): Event | null {
     event['recurrenceOverrides'] = overrides;
   const once = one('RECURRENCE-ID');
   const which = once ? readTime(once) : null;
-  if (which) event['recurrenceId'] = which.local;
+  if (which) {
+    event['recurrenceId'] = which.local;
+    // The clock it is said on, where that is not the event's own (RFC 8984 §4.3.2).
+    if (which.zone !== null) event['recurrenceIdTimeZone'] = which.zone;
+  }
   return event;
 }
 

@@ -29,7 +29,9 @@ import { printMessage, type PicturesShown } from '../lib/print';
 import { Face } from './face';
 import { MoveTo } from './list';
 import { TagChip, TagPicker } from './tags';
+import { filedBy, ruleLike } from '../lib/filters';
 import { cautions, pictureChoices } from '../lib/senders';
+import { told, useFilterNames } from './filters';
 import { InvitationCard } from './invitation';
 import { useMail, useServices, useSynced, withUndo } from './services';
 
@@ -468,6 +470,13 @@ function Message(props: MessageProps) {
   const { email, open } = props;
   const { client, theme } = useServices();
   const { store, compose, act, say, unsend } = useMail();
+  useSynced(store.filters);
+  useEffect(() => {
+    if (open) void store.filters.ensure();
+  }, [store, open]);
+  const filterNames = useFilterNames(store);
+  /** The filter that put it where it is, when one did. */
+  const filed = filedBy(email.keywords, store.filters.filters.blocks);
   // On a dark page a message is dark too, unless asked for as it was written.
   const [page, setPage] = useState(() => theme?.shown ?? 'light');
   useEffect(() => {
@@ -542,6 +551,30 @@ function Message(props: MessageProps) {
       act: () => compose(forwardDraft(email, identities)),
     },
     canSend && null,
+    store.filters.available && {
+      label: 'Filter messages like this',
+      icon: 'options',
+      act: () =>
+        void navigate('/settings', { state: { filter: ruleLike(email) } }),
+    },
+    store.filters.available &&
+      store.filters.script !== '' && {
+        label: 'Try the filters on this',
+        icon: 'refresh',
+        act: () =>
+          void act(async () => {
+            const trial = (
+              await store.filters.tryOn(store.filters.script, [email.blobId])
+            ).get(email.blobId);
+            say(
+              trial && trial.rules.length > 0
+                ? `The filters would have it ${told(trial, filterNames)}, by ${trial.rules.join(' and ')}`
+                : 'No filter fits this message',
+              { seconds: 10 },
+            );
+          }),
+      },
+    store.filters.available && null,
     {
       label: inTrash
         ? 'Delete this message permanently'
@@ -753,6 +786,14 @@ function Message(props: MessageProps) {
             ) : null}
           </p>
           <Cautions email={email} />
+          {filed ? (
+            <p className="notice small filed-by" role="note">
+              <Icon name="options" size={16} />
+              <span>
+                Filed by your filter <strong>{filed.name}</strong>.
+              </span>
+            </p>
+          ) : null}
           {loaded ? (
             <>
               <InvitationCard email={email} />

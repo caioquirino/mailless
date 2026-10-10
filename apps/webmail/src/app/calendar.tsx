@@ -12,6 +12,7 @@ import {
   formSpan,
   newForm,
   placeDay,
+  SUBSCRIPTION_AGE,
   readDraft,
   timeOf,
   weekStart,
@@ -30,7 +31,17 @@ import { ANSWER_WORDS, EventEditor, type Place } from './event-editor';
 import { Rail } from './rail';
 import { useMail, useServices, useSynced, withUndo } from './services';
 
-export type CalendarView = 'week' | 'agenda';
+export type CalendarView = 'day' | 'week' | 'month' | 'agenda';
+
+const VIEWS: ReadonlyArray<[CalendarView, string]> = [
+  ['day', 'Day'],
+  ['week', 'Week'],
+  ['month', 'Month'],
+  ['agenda', 'Agenda'],
+];
+
+/** How many events a day of the month shows before saying how many more there are. */
+const MONTH_SHOWN = 3;
 
 /** How tall an hour is in the week, in pixels. */
 const HOUR = 48;
@@ -130,6 +141,16 @@ export function CalendarPage(props: CalendarPageProps) {
     return () => heard.close();
   }, [calendar]);
 
+  // Calendars kept somewhere else are looked at again while this one is open.
+  useEffect(() => {
+    if (state !== 'ready' || !calendar.subscribable) return undefined;
+    const look = () =>
+      void calendar.refreshSubscriptions().catch(() => undefined);
+    look();
+    const again = window.setInterval(look, SUBSCRIPTION_AGE * 1000);
+    return () => window.clearInterval(again);
+  }, [calendar, state]);
+
   // Looked at again after a while: another device may have changed it.
   useEffect(() => {
     const seen = () => {
@@ -153,7 +174,7 @@ export function CalendarPage(props: CalendarPageProps) {
     addDays(month, 42).getTime(),
     (view === 'week'
       ? addDays(weekStart(day), 7)
-      : addDays(day, AGENDA_DAYS)
+      : addDays(day, view === 'agenda' ? AGENDA_DAYS : 1)
     ).getTime(),
   );
   useEffect(() => {
@@ -162,7 +183,12 @@ export function CalendarPage(props: CalendarPageProps) {
   }, [calendar, act, state, first, last]);
   const to = (where: Date, as: CalendarView = view) =>
     `/calendar/${as}/${dayKey(where)}`;
-  const step = view === 'week' ? 7 : 30;
+  /** The day a step back or forth from here: a day, a week, a month, or as far as the list of days goes on. */
+  const stepped = (way: 1 | -1) =>
+    view === 'month'
+      ? new Date(day.getFullYear(), day.getMonth() + way, 1)
+      : addDays(day, way * (view === 'day' ? 1 : view === 'week' ? 7 : 30));
+  const unit = view === 'agenda' ? null : view;
 
   const write = (form: EventForm) =>
     setWriting({ key: `e${Date.now()}-${++made.current}`, form });
@@ -213,9 +239,14 @@ export function CalendarPage(props: CalendarPageProps) {
       back = await calendar.remove(
         {
           id: form.id as string,
-          ...(form.series ? { baseEventId: form.series.id } : {}),
+          ...(form.series
+            ? {
+                baseEventId: form.series.id,
+                recurrenceId: form.series.recurrenceId,
+              }
+            : {}),
         },
-        form.series?.all ?? false,
+        form.series?.all ? true : form.series?.following ? 'following' : false,
         tell,
       );
     });
@@ -265,6 +296,11 @@ export function CalendarPage(props: CalendarPageProps) {
     setWriting(null);
   };
 
+  /** Whether what is open is only shown here: an event of a calendar kept somewhere else. */
+  const lockedNow =
+    writing !== null &&
+    writing.form.id !== null &&
+    calendar.locked({ calendarIds: { [writing.form.calendarId]: true } });
   /** What is being written, here or in another window, as it would be on the calendar. */
   /** What is being written, here and in other windows, as it would be on the calendar. */
   const mine = writing
@@ -276,6 +312,12 @@ export function CalendarPage(props: CalendarPageProps) {
   }));
   /** An event dragged to another time, or pulled to another length: kept at once, with a way back. */
   const move = async (event: CalendarEvent, from: Date, until: Date) => {
+    if (calendar.locked(event)) {
+      say(
+        `${titleOf(event)} is in a calendar kept somewhere else: it is moved there.`,
+      );
+      return;
+    }
     const whole = event.baseEventId
       ? calendar.events.get(event.baseEventId)
       : undefined;
@@ -346,7 +388,17 @@ export function CalendarPage(props: CalendarPageProps) {
   const title =
     view === 'week'
       ? weekTitle(weekStart(day))
-      : day.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+      : view === 'day'
+        ? day.toLocaleDateString(undefined, {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+          })
+        : day.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  /** The days the hours are shown of: the week's seven, or the one. */
+  const from = view === 'day' ? day : weekStart(day);
+  const count = view === 'day' ? 1 : 7;
 
   return (
     <>
@@ -365,30 +417,30 @@ export function CalendarPage(props: CalendarPageProps) {
           </Link>
           <Link
             className="icon-button"
-            to={to(addDays(day, -step))}
-            aria-label={view === 'week' ? 'Previous week' : 'Earlier'}
-            title={view === 'week' ? 'Previous week' : 'Earlier'}
+            to={to(stepped(-1))}
+            aria-label={unit ? `Previous ${unit}` : 'Earlier'}
+            title={unit ? `Previous ${unit}` : 'Earlier'}
           >
             <Icon name="chevron-left" />
           </Link>
           <Link
             className="icon-button"
-            to={to(addDays(day, step))}
-            aria-label={view === 'week' ? 'Next week' : 'Later'}
-            title={view === 'week' ? 'Next week' : 'Later'}
+            to={to(stepped(1))}
+            aria-label={unit ? `Next ${unit}` : 'Later'}
+            title={unit ? `Next ${unit}` : 'Later'}
           >
             <Icon name="chevron-right" />
           </Link>
           <h1 className="calendar-title">{title}</h1>
           <span className="calendar-views" role="group" aria-label="View">
-            {(['week', 'agenda'] as const).map((each) => (
+            {VIEWS.map(([each, name]) => (
               <Link
                 key={each}
                 to={to(day, each)}
                 className={`calendar-view${each === view ? ' current' : ''}`}
                 {...(each === view ? { 'aria-current': 'page' as const } : {})}
               >
-                {each === 'week' ? 'Week' : 'Agenda'}
+                {name}
               </Link>
             ))}
           </span>
@@ -403,14 +455,27 @@ export function CalendarPage(props: CalendarPageProps) {
           </p>
         ) : !calendar.available ? (
           <p className="muted pad">This server keeps no calendar.</p>
-        ) : view === 'week' ? (
-          <Week
-            start={weekStart(day)}
+        ) : view === 'month' ? (
+          <Month
+            month={day}
             today={today}
-            events={calendar.between(
-              weekStart(day),
-              addDays(weekStart(day), 7),
-            )}
+            events={calendar.between(month, addDays(month, 42))}
+            colorOf={(event) => calendar.colorOf(event)}
+            to={(date) => to(date, 'day')}
+            onOpen={open}
+            onNew={(date) => {
+              const at = new Date(date);
+              at.setHours(9, 0, 0, 0);
+              writeNew(at);
+            }}
+          />
+        ) : view === 'week' || view === 'day' ? (
+          <Week
+            key={view}
+            start={from}
+            count={count}
+            today={today}
+            events={calendar.between(from, addDays(from, count))}
             mine={mine}
             away={others}
             onMove={(event, from, until) => void move(event, from, until)}
@@ -450,9 +515,15 @@ export function CalendarPage(props: CalendarPageProps) {
           <EventEditor
             key={writing.key}
             form={writing.form}
-            calendars={calendar.all()}
+            calendars={lockedNow ? calendar.all() : calendar.writable()}
             busy={busy}
             own={calendar.own}
+            {...(lockedNow
+              ? {
+                  locked:
+                    'This event is in a calendar kept somewhere else. It is changed there, and shows here as it is.',
+                }
+              : {})}
             suggest={(typed, without) => store.people.find(typed, { without })}
             places={places}
             onChange={(form) => setWriting({ key: writing.key, form })}
@@ -481,7 +552,7 @@ export function CalendarPage(props: CalendarPageProps) {
                   },
                 }
               : {})}
-            {...(writing.form.id !== null
+            {...(writing.form.id !== null && !lockedNow
               ? { onDelete: (tell: boolean) => void remove(writing.form, tell) }
               : {})}
           />
@@ -610,6 +681,8 @@ interface Drag {
 
 function Week(props: {
   start: Date;
+  /** How many days from there: seven for a week, one for a day. */
+  count: number;
   today: Date;
   events: readonly Shown[];
   /** The event being written beside the calendar: it can be moved and pulled where it stands. */
@@ -624,8 +697,10 @@ function Week(props: {
   /** The same, for the event being written. */
   onMine(start: Date, end: Date): void;
 }) {
-  const { start, today, events } = props;
-  const days = Array.from({ length: 7 }, (_, index) => addDays(start, index));
+  const { start, count, today, events } = props;
+  const days = Array.from({ length: count }, (_, index) =>
+    addDays(start, index),
+  );
   const hours = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   // Opened at the morning, not at midnight.
@@ -656,7 +731,10 @@ function Week(props: {
     const first = body.current?.querySelector<HTMLElement>('.week-day');
     const left = first?.getBoundingClientRect().left ?? box?.left ?? 0;
     const width = first?.getBoundingClientRect().width || 1;
-    const column = Math.max(0, Math.min(6, Math.floor((x - left) / width)));
+    const column = Math.max(
+      0,
+      Math.min(count - 1, Math.floor((x - left) / width)),
+    );
     const minutes = Math.max(
       0,
       Math.min(24 * 60, ((y - (box?.top ?? 0)) / HOUR) * 60),
@@ -765,7 +843,7 @@ function Week(props: {
     <div
       className={`week${moving ? ` week-dragging week-${moving.kind}` : ''}`}
       role="grid"
-      aria-label="Week"
+      aria-label={count === 1 ? 'Day' : 'Week'}
     >
       <div className="week-heads" role="row">
         <span className="week-gutter" />
@@ -985,6 +1063,120 @@ function Week(props: {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** A month, a box to each day: what is on it, as much as fits, and the way to the day itself. */
+function Month(props: {
+  /** Any day of the month. */
+  month: Date;
+  today: Date;
+  events: readonly Shown[];
+  colorOf(event: CalendarEvent): string;
+  /** Where a day is looked at by itself. */
+  to(date: Date): string;
+  onOpen(event: CalendarEvent): void;
+  onNew(day: Date): void;
+}) {
+  const { month, today, events } = props;
+  const first = weekStart(new Date(month.getFullYear(), month.getMonth(), 1));
+  // As many weeks as the month reaches into: four, five or six.
+  const weeks = [0, 1, 2, 3, 4, 5]
+    .map((week) => addDays(first, week * 7))
+    .filter(
+      (week, index) =>
+        index === 0 ||
+        (week.getMonth() === month.getMonth() &&
+          week.getFullYear() === month.getFullYear()),
+    );
+  const on = (day: Date) => {
+    const next = addDays(day, 1);
+    return events
+      .filter(
+        (each) =>
+          each.end.getTime() > day.getTime() &&
+          each.start.getTime() < next.getTime(),
+      )
+      .sort(
+        (a, b) =>
+          Number(b.allDay) - Number(a.allDay) ||
+          a.start.getTime() - b.start.getTime(),
+      );
+  };
+  return (
+    <div className="month" role="grid" aria-label="Month">
+      <div className="month-heads" role="row">
+        {[0, 1, 2, 3, 4, 5, 6].map((index) => (
+          <span key={index} role="columnheader" className="month-head">
+            {addDays(first, index).toLocaleDateString(undefined, {
+              weekday: 'short',
+            })}
+          </span>
+        ))}
+      </div>
+      {weeks.map((week) => (
+        <div key={dayKey(week)} className="month-week" role="row">
+          {[0, 1, 2, 3, 4, 5, 6].map((index) => {
+            const day = addDays(week, index);
+            const there = on(day);
+            const named = day.toLocaleDateString(undefined, {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+            });
+            return (
+              <div
+                key={index}
+                role="gridcell"
+                aria-label={named}
+                className={[
+                  'month-day',
+                  day.getMonth() !== month.getMonth() && 'month-other',
+                  sameDay(day, today) && 'month-today',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onClick={(event) => {
+                  if (event.target === event.currentTarget) props.onNew(day);
+                }}
+              >
+                <Link
+                  className="month-number"
+                  to={props.to(day)}
+                  aria-label={`Go to ${named}`}
+                  {...(sameDay(day, today)
+                    ? { 'aria-current': 'date' as const }
+                    : {})}
+                >
+                  {day.getDate()}
+                </Link>
+                {there.slice(0, MONTH_SHOWN).map((each) => (
+                  <button
+                    key={each.event.id}
+                    type="button"
+                    className={`month-event${each.allDay ? ' month-whole' : ''}`}
+                    style={tinted(props.colorOf(each.event))}
+                    onClick={() => props.onOpen(each.event)}
+                  >
+                    {each.allDay ? null : (
+                      <span className="month-time">
+                        {sameDay(each.start, day) ? timeOf(each.start) : '…'}
+                      </span>
+                    )}
+                    <span className="month-title">{titleOf(each.event)}</span>
+                  </button>
+                ))}
+                {there.length > MONTH_SHOWN ? (
+                  <Link className="month-more" to={props.to(day)}>
+                    {there.length - MONTH_SHOWN} more
+                  </Link>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1219,9 +1411,18 @@ export function EventWindow() {
                   calendar.remove(
                     {
                       id: form.id ?? '',
-                      ...(form.series ? { baseEventId: form.series.id } : {}),
+                      ...(form.series
+                        ? {
+                            baseEventId: form.series.id,
+                            recurrenceId: form.series.recurrenceId,
+                          }
+                        : {}),
                     },
-                    form.series?.all ?? false,
+                    form.series?.all
+                      ? true
+                      : form.series?.following
+                        ? 'following'
+                        : false,
                     tell,
                   ),
                 ),

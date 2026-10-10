@@ -5,7 +5,9 @@ import {
   CAPABILITY_CONTACTS,
   CAPABILITY_BLOCKED_SENDERS,
   CAPABILITY_PICTURE_SENDERS,
+  CAPABILITY_SIEVE,
   CAPABILITY_CALENDAR_PROPOSALS,
+  CAPABILITY_CALENDAR_SUBSCRIPTIONS,
   CAPABILITY_CALENDARS,
   CAPABILITY_TAGS,
   CAPABILITY_MDN,
@@ -50,6 +52,7 @@ const USING = [
   CAPABILITY_CONTACTS,
   CAPABILITY_BLOCKED_SENDERS,
   CAPABILITY_PICTURE_SENDERS,
+  CAPABILITY_SIEVE,
   CAPABILITY_CALENDAR_PROPOSALS,
   CAPABILITY_CALENDARS,
   CAPABILITY_TAGS,
@@ -198,6 +201,8 @@ interface Harness {
   adapter: StorageAdapter;
   /** Everything handed to the transport, in order. */
   sent: Array<{ message: string; envelope: MailEnvelope }>;
+  /** What calendars kept elsewhere say, by the address each is published at. */
+  feeds: Record<string, string>;
   /** Makes the transport refuse the next message with this reason. */
   rejectNext(reason: string): void;
   /** Sends method calls, adding the account id, and returns the raw responses. */
@@ -220,9 +225,15 @@ async function createHarness(factory: StorageAdapterFactory): Promise<Harness> {
   const adapter = await factory();
   const sent: Harness['sent'] = [];
   let rejection: string | undefined;
+  const feeds: Harness['feeds'] = {};
   const server = createJmapServer({
     storage: adapter,
     urls: URLS,
+    fetchCalendar: async (url) => {
+      const said = feeds[url];
+      if (said === undefined) throw new Error('Nothing is published there');
+      return said;
+    },
     transport: {
       async send(message, envelope) {
         if (rejection !== undefined) {
@@ -272,6 +283,7 @@ async function createHarness(factory: StorageAdapterFactory): Promise<Harness> {
     server,
     adapter,
     sent,
+    feeds,
     rejectNext(reason) {
       rejection = reason;
     },
@@ -326,7 +338,8 @@ export function describeJmapConformance(
     it('describes the session', () => {
       const session = h.server.getSession(AUTH);
       expect(Object.keys(session.capabilities).sort()).toEqual(
-        [...USING].sort(),
+        // And what only a server that can reach out to other calendars offers.
+        [...USING, CAPABILITY_CALENDAR_SUBSCRIPTIONS].sort(),
       );
       expect(session.primaryAccounts[CAPABILITY_MAIL]).toBe(AUTH.accountId);
       expect(session.accounts[AUTH.accountId]?.name).toBe(AUTH.username);
@@ -4069,6 +4082,7 @@ export function describeJmapConformance(
         'Mailbox',
         'PictureSender',
         'Quota',
+        'SieveScript',
         'Tag',
         'Thread',
       ]);
@@ -7904,6 +7918,146 @@ export function describeJmapConformance(
       ]);
     });
 
+    it('keeps scripts, checks them, and has at most one in use', async () => {
+      const session = h.server.getSession(AUTH);
+      expect(session.capabilities[CAPABILITY_SIEVE]).toEqual({});
+      expect(
+        session.accounts[AUTH.accountId]?.accountCapabilities[CAPABILITY_SIEVE],
+      ).toMatchObject({
+        sieveExtensions: expect.arrayContaining(['fileinto']),
+      });
+
+      const good = await h.upload('require "fileinto";\nfileinto "Invoices";');
+      const bad = await h.upload('fileinto "Invoices"');
+      expect(
+        (await h.call('SieveScript/validate', { blobId: good })).error,
+      ).toBeNull();
+      expect(
+        (await h.call('SieveScript/validate', { blobId: bad })).error,
+      ).toMatchObject({ type: 'invalidSieve', description: /^Line 1: / });
+
+      const made = await h.call('SieveScript/set', {
+        create: {
+          a: { name: 'Mine', blobId: good },
+          b: { name: 'Broken', blobId: bad },
+        },
+        onSuccessActivateScript: '#a',
+      });
+      expect(made.notCreated.b).toMatchObject({ type: 'invalidSieve' });
+      // Not all of it worked: nothing is put in use.
+      expect(made.created.a.isActive).toBe(false);
+      const id = made.created.a.id;
+      const used = await h.call('SieveScript/set', {
+        onSuccessActivateScript: id,
+      });
+      expect(used.updated[id]).toEqual({ isActive: true });
+      const [kept] = (await h.call('SieveScript/get', { ids: [id] })).list;
+      expect(kept).toMatchObject({ name: 'Mine', isActive: true });
+      // What it says is read back as it was written.
+      const content = await h.server.download(
+        AUTH,
+        AUTH.accountId,
+        kept.blobId,
+      );
+      expect(new TextDecoder().decode(content ?? new Uint8Array())).toBe(
+        'require "fileinto";\nfileinto "Invoices";',
+      );
+
+      // The one in use is not removed; out of use, it is.
+      const refused = await h.call('SieveScript/set', { destroy: [id] });
+      expect(refused.notDestroyed[id]).toMatchObject({ type: 'sieveIsActive' });
+      // Changed, it is under another blob id.
+      const other = await h.upload('keep;');
+      const changed = await h.call('SieveScript/set', {
+        update: { [id]: { blobId: other } },
+      });
+      expect(changed.updated[id].blobId).not.toBe(kept.blobId);
+      await h.call('SieveScript/set', { onSuccessDeactivateScript: true });
+      expect(
+        (await h.call('SieveScript/set', { destroy: [id] })).destroyed,
+      ).toEqual([id]);
+    });
+
+    it('does to what arrives what the script in use says, and says which filter did', async () => {
+      const inbox = await h.mailbox('inbox');
+      const trash = await h.mailbox('trash');
+      const invoices = (
+        await h.call('Mailbox/set', {
+          create: { m: { name: 'Invoices', parentId: null } },
+        })
+      ).created.m.id;
+      const script = [
+        'require ["fileinto", "imap4flags", "mailboxid"];',
+        '# rule:[Invoices]',
+        'if address :domain :is "from" "nordlys.example" {',
+        `    fileinto :flags ["\\\\Seen", "receipts"] :mailboxid "${invoices}" "Renamed since";`,
+        '}',
+        '# rule:[Gone]',
+        'if address :is "from" "old@example.net" { fileinto "No such folder"; }',
+        '# rule:[Noise]',
+        'if address :is "from" "noise@example.net" { discard; }',
+      ].join('\n');
+      const blobId = await h.upload(script);
+      const use = await h.call('SieveScript/set', {
+        create: { a: { name: 'Filters', blobId } },
+        onSuccessActivateScript: '#a',
+      });
+      expect(use.created.a.isActive).toBe(true);
+
+      const filed = await whereIs(
+        (await arrives('billing@nordlys.example')).id,
+      );
+      expect(filed.mailboxIds).toEqual({ [invoices]: true });
+      expect(Object.keys(filed.keywords).sort()).toEqual([
+        '$seen',
+        expect.stringMatching(/^mailless-filter-[0-9a-f]{8}$/),
+        'receipts',
+      ]);
+      // Nothing fits: as it would have been.
+      const plain = await whereIs((await arrives('ann@example.net')).id);
+      expect(plain).toMatchObject({
+        mailboxIds: { [inbox]: true },
+        keywords: {},
+      });
+      // A folder that is not there: kept in the inbox, and not lost.
+      const gone = await whereIs((await arrives('old@example.net')).id);
+      expect(gone.mailboxIds).toEqual({ [inbox]: true });
+      // Thrown away is in the trash, read.
+      const noise = await whereIs((await arrives('noise@example.net')).id);
+      expect(noise.mailboxIds).toEqual({ [trash]: true });
+      expect(noise.keywords).toMatchObject({ $seen: true });
+
+      // Tried, it says what it would do, and does nothing.
+      const one = await h.upload(
+        'From: billing@nordlys.example\r\nSubject: Hi\r\n\r\nHello\r\n',
+      );
+      const tried = await h.call('SieveScript/test', {
+        scriptBlobId: blobId,
+        emailBlobIds: [one, 'no-such-blob'],
+      });
+      expect(tried.completed[one]).toEqual([
+        [
+          'fileinto',
+          {
+            mailbox: 'Renamed since',
+            mailboxId: invoices,
+            flags: ['\\Seen', 'receipts'],
+          },
+        ],
+        ['mailless:rules', { names: ['Invoices'] }],
+      ]);
+      expect(tried.notCompleted['no-such-blob']).toEqual({
+        type: 'blobNotFound',
+      });
+
+      // Out of use, mail goes where it always went.
+      await h.call('SieveScript/set', { onSuccessDeactivateScript: true });
+      const later = await whereIs(
+        (await arrives('billing@nordlys.example')).id,
+      );
+      expect(later.mailboxIds).toEqual({ [inbox]: true });
+    });
+
     it('files what a blocked address or domain sends as junk, and only that', async () => {
       const inbox = await h.mailbox('inbox');
       const junk = await h.mailbox('junk');
@@ -8782,6 +8936,288 @@ export function describeJmapConformance(
       expect((await stored(id)).title).toBe('Review');
       // Nobody was written to over any of it.
       expect(h.sent).toEqual([]);
+    });
+
+    it('takes in what is said of one time of an event that repeats', async () => {
+      const weekly = {
+        recurrenceRules: [{ '@type': 'RecurrenceRule', frequency: 'weekly' }],
+      };
+      // Someone else's, every Monday: one week it is later, another it is off.
+      const theirs = (
+        await h.call('CalendarEvent/set', {
+          create: {
+            e: {
+              calendarIds: { [calendarId]: true },
+              uid: 'series@example.org',
+              title: 'Standup',
+              start: '2026-10-12T13:00:00',
+              duration: 'PT30M',
+              timeZone: 'Europe/Berlin',
+              replyTo: { imip: 'mailto:marta@example.org' },
+              participants: {
+                '1': person('marta@example.org', { roles: { owner: true } }),
+                '2': person('me@example.com'),
+              },
+              ...weekly,
+            },
+          },
+        })
+      ).created.e.id;
+      const once = (method: string, lines: string[]) =>
+        [
+          'BEGIN:VCALENDAR',
+          `METHOD:${method}`,
+          'BEGIN:VEVENT',
+          'UID:series@example.org',
+          'SEQUENCE:0',
+          'ORGANIZER:mailto:marta@example.org',
+          ...lines,
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n');
+      const later = once('REQUEST', [
+        'RECURRENCE-ID;TZID=Europe/Berlin:20261019T130000',
+        // 15:00 in Berlin, said in the world's time.
+        'DTSTART:20261019T130000Z',
+        'DURATION:PT30M',
+        'SUMMARY:Standup',
+        'ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:me@example.com',
+      ]);
+      // Nobody changes what is not theirs.
+      await arrives('mallory@example.org', later);
+      expect((await stored(theirs)).recurrenceOverrides).toBeUndefined();
+      await arrives('marta@example.org', later);
+      expect((await stored(theirs)).recurrenceOverrides).toEqual({
+        '2026-10-19T13:00:00': { start: '2026-10-19T15:00:00' },
+      });
+      // The clocks have gone back by then: 13:00 in Berlin is 12:00 in the world's time.
+      await arrives(
+        'marta@example.org',
+        once('CANCEL', [
+          'RECURRENCE-ID:20261026T120000Z',
+          'DTSTART:20261026T120000Z',
+          'STATUS:CANCELLED',
+        ]),
+      );
+      expect(
+        (await stored(theirs)).recurrenceOverrides['2026-10-26T13:00:00'],
+      ).toEqual({ excluded: true });
+      // A day it is not on: nothing to say it of.
+      await arrives(
+        'marta@example.org',
+        once('CANCEL', [
+          'RECURRENCE-ID:20261027T120000Z',
+          'DTSTART:20261027T120000Z',
+        ]),
+      );
+      expect(
+        Object.keys((await stored(theirs)).recurrenceOverrides),
+      ).toHaveLength(2);
+      expect((await stored(theirs)).title).toBe('Standup');
+
+      // One's own, every Thursday: someone cannot come one week.
+      const own = (
+        await h.call('CalendarEvent/set', { create: { e: lunch(weekly) } })
+      ).created.e.id;
+      await arrives(
+        'ann@example.net',
+        [
+          'BEGIN:VCALENDAR',
+          'METHOD:REPLY',
+          'BEGIN:VEVENT',
+          'UID:lunch@example.com',
+          'SEQUENCE:0',
+          'RECURRENCE-ID:20261022T120000Z',
+          'DTSTART:20261022T120000Z',
+          'ORGANIZER:mailto:me@example.com',
+          'ATTENDEE;PARTSTAT=DECLINED:mailto:ann@example.net',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+      );
+      const kept = await stored(own);
+      expect(kept.recurrenceOverrides).toEqual({
+        '2026-10-22T13:00:00': {
+          'participants/ann/participationStatus': 'declined',
+        },
+      });
+      // Of the other weeks nothing was said.
+      expect(kept.participants.ann.participationStatus).toBe('needs-action');
+    });
+
+    it('shows a calendar kept somewhere else, as it is there, and lets nothing here change it', async () => {
+      const URL = 'https://calendar.example/secret/basic.ics';
+      // Under a capability of its own, which only a server that can reach out offers.
+      const sub = async (name: string, args: Json = {}) => {
+        const response = await h.server.handleRequest(
+          {
+            using: [...USING, CAPABILITY_CALENDAR_SUBSCRIPTIONS],
+            methodCalls: [[name, { accountId: AUTH.accountId, ...args }, 'c']],
+          },
+          AUTH,
+        );
+        return response.methodResponses[0] as unknown as [string, Json];
+      };
+      const call = async (name: string, args: Json = {}) => {
+        const [said, result] = await sub(name, args);
+        expect(said).toBe(name);
+        return result;
+      };
+      const feed = (events: string[][]) =>
+        [
+          'BEGIN:VCALENDAR',
+          'VERSION:2.0',
+          ...events.flatMap((lines) => [
+            'BEGIN:VEVENT',
+            ...lines,
+            'END:VEVENT',
+          ]),
+          'END:VCALENDAR',
+        ].join('\r\n');
+      const dentist = [
+        'UID:dentist@elsewhere.example',
+        'DTSTART:20261020T090000Z',
+        'DTEND:20261020T100000Z',
+        'SUMMARY:Dentist',
+      ];
+      const gym = [
+        'UID:gym@elsewhere.example',
+        'DTSTART:20261021T180000Z',
+        'DURATION:PT1H',
+        'SUMMARY:Gym',
+        'RRULE:FREQ=WEEKLY',
+      ];
+      h.feeds[URL] = feed([dentist, gym]);
+      expect(
+        h.server.getSession(AUTH).capabilities[
+          CAPABILITY_CALENDAR_SUBSCRIPTIONS
+        ],
+      ).toEqual({});
+      // Only a secure address, and only one that is an address.
+      expect(
+        (
+          await sub('CalendarSubscription/add', {
+            name: 'Plain',
+            url: 'http://calendar.example/basic.ics',
+          })
+        )[0],
+      ).toBe('error');
+      const added = await call('CalendarSubscription/add', {
+        name: 'Personal, at Gmail',
+        color: '#0e7490',
+        // As some programs hand it out.
+        url: URL.replace('https://', 'webcal://'),
+      });
+      expect(added).toMatchObject({ events: 2, problem: null, more: false });
+      const id = added.calendarId;
+      const [calendar] = (await h.call('Calendar/get', { ids: [id] })).list;
+      expect(calendar).toMatchObject({
+        name: 'Personal, at Gmail',
+        myRights: { mayReadItems: true, mayWriteAll: false, mayDelete: true },
+      });
+      // Where it is fetched from is told to nobody.
+      expect(JSON.stringify(calendar)).not.toContain('calendar.example');
+      const inIt = async () =>
+        (
+          await h.call('CalendarEvent/get', {
+            ids: (
+              await h.call('CalendarEvent/query', {
+                filter: { inCalendar: id },
+              })
+            ).ids,
+          })
+        ).list as Array<Record<string, never>>;
+      const first = await inIt();
+      expect(first.map((each) => each.title).sort()).toEqual([
+        'Dentist',
+        'Gym',
+      ]);
+      // Silent: it reminds where it is kept.
+      expect(first.every((each) => each.useDefaultAlerts === false)).toBe(true);
+
+      // Nothing here changes it, adds to it, or takes from it.
+      const dentistId = first.find((each) => each.title === 'Dentist')?.id;
+      const tried = await h.call('CalendarEvent/set', {
+        update: { [String(dentistId)]: { title: 'Mine now' } },
+        create: { e: { ...lunch(), calendarIds: { [id]: true } } },
+        destroy: [first.find((each) => each.title === 'Gym')?.id],
+      });
+      expect(tried.notUpdated[String(dentistId)]).toMatchObject({
+        type: 'forbidden',
+      });
+      expect(tried.notCreated.e).toMatchObject({ type: 'forbidden' });
+      expect(Object.values(tried.notDestroyed)).toMatchObject([
+        { type: 'forbidden' },
+      ]);
+
+      // Looked at again: what changed there changes here, what is gone goes.
+      h.feeds[URL] = feed([
+        dentist.map((line) =>
+          line.startsWith('SUMMARY') ? 'SUMMARY:Dentist, moved' : line,
+        ),
+        [
+          'UID:new@elsewhere.example',
+          'DTSTART;VALUE=DATE:20261224',
+          'SUMMARY:Eve',
+        ],
+      ]);
+      // Looked at a moment ago: left alone when only the old are asked for.
+      await call('CalendarSubscription/refresh', { ifOlderThan: 3600 });
+      expect((await inIt()).map((each) => each.title).sort()).toEqual([
+        'Dentist',
+        'Gym',
+      ]);
+      const again = await call('CalendarSubscription/refresh', { ids: [id] });
+      expect(again.list).toMatchObject([{ id, events: 2, problem: null }]);
+      const second = await inIt();
+      expect(second.map((each) => each.title).sort()).toEqual([
+        'Dentist, moved',
+        'Eve',
+      ]);
+      // The same event, changed: not another one.
+      expect(second.find((each) => each.title === 'Dentist, moved')?.id).toBe(
+        dentistId,
+      );
+
+      // A look that fails says why, and takes nothing away.
+      delete h.feeds[URL];
+      const failed = await call('CalendarSubscription/refresh', {});
+      expect(failed.list[0].problem).toBe('Nothing is published there');
+      expect(await inIt()).toHaveLength(2);
+      expect(h.sent).toEqual([]);
+
+      // Renamed, it is still what it was; removed, its events go with it.
+      await h.call('Calendar/set', { update: { [id]: { name: 'Gmail' } } });
+      expect((await call('CalendarSubscription/get', {})).list).toMatchObject([
+        { id },
+      ]);
+      await h.call('Calendar/set', {
+        destroy: [id],
+        onDestroyRemoveEvents: true,
+      });
+      expect((await call('CalendarSubscription/get', {})).list).toEqual([]);
+    });
+
+    it('keeps what it tells the people on an event with what was sent', async () => {
+      await h.call('CalendarEvent/set', {
+        create: { e: lunch() },
+        sendSchedulingMessages: true,
+      });
+      expect(h.sent).toHaveLength(1);
+      const sent = await h.mailbox('sent');
+      const { ids } = await h.call('Email/query', {
+        filter: { inMailbox: sent },
+      });
+      expect(ids).toHaveLength(1);
+      const [kept] = (
+        await h.call('Email/get', {
+          ids,
+          properties: ['subject', 'keywords', 'to'],
+        })
+      ).list;
+      expect(kept.keywords).toEqual({ $seen: true });
+      expect(kept.subject).toContain('Lunch');
+      expect(kept.to.length).toBeGreaterThan(0);
     });
 
     it('suggests another time to whoever invited, and says no to such a suggestion', async () => {

@@ -1,6 +1,11 @@
+import {
+  fromICalendar,
+  toICalendarFile,
+} from '@mailless/jmap-calendars/icalendar';
 import { ObjectCache, sync, type JmapClient } from '@mailless/jmap-client';
 import {
   CAPABILITY_CALENDAR_PROPOSALS,
+  CAPABILITY_CALENDAR_SUBSCRIPTIONS,
   CAPABILITY_CALENDARS,
   type Id,
 } from '@mailless/jmap-core';
@@ -170,7 +175,25 @@ export interface Calendar {
   isVisible: boolean;
   isDefault: boolean;
   defaultAlertsWithTime: Record<string, Alert> | null;
+  /** What may be done with it. A calendar kept somewhere else is only read here. */
+  myRights?: { mayWriteAll?: boolean };
 }
+
+/** Whether a calendar is kept somewhere else, and only shown here. */
+export const keptElsewhere = (calendar: Pick<Calendar, 'myRights'>) =>
+  calendar.myRights?.mayWriteAll === false;
+
+/** How the last look at a calendar kept somewhere else went. */
+export interface Subscription {
+  id: Id;
+  fetchedAt: string | null;
+  /** Why it could not be fetched; null when it was. */
+  problem: string | null;
+  events: number;
+}
+
+/** How long what was fetched of a calendar kept elsewhere is taken as it is, in seconds. */
+export const SUBSCRIPTION_AGE = 30 * 60;
 
 export interface CalendarEvent {
   id: Id;
@@ -274,6 +297,39 @@ export function weekTitle(start: Date, locale?: string): string {
   return start.getMonth() === end.getMonth()
     ? `${start.getDate()} – ${end.getDate()} ${month(end)} ${year}`
     : `${start.getDate()} ${month(start)} – ${end.getDate()} ${month(end)} ${year}`;
+}
+
+/**
+ * What changes an event that repeats so that it ends before one of its
+ * times: its rules go on until the moment before, and what was different
+ * about a time from then on goes with it.
+ */
+export function endedBefore(
+  event: {
+    recurrenceRules?: RecurrenceRule[] | null;
+    recurrenceRule?: RecurrenceRule | null;
+    recurrenceOverrides?: Record<string, unknown> | null;
+  },
+  recurrenceId: string,
+): Record<string, unknown> {
+  const until = new Date(Date.parse(`${recurrenceId}Z`) - 1000)
+    .toISOString()
+    .slice(0, 19);
+  const rules = event.recurrenceRules?.length
+    ? event.recurrenceRules
+    : event.recurrenceRule
+      ? [event.recurrenceRule]
+      : [];
+  const kept = Object.entries(event.recurrenceOverrides ?? {}).filter(
+    ([when]) => when < recurrenceId,
+  );
+  return {
+    recurrenceRules: rules.map(({ count: _count, ...rule }) => ({
+      ...rule,
+      until,
+    })),
+    recurrenceOverrides: kept.length > 0 ? Object.fromEntries(kept) : null,
+  };
 }
 
 /** The time zone of whoever is looking: `Europe/Lisbon`. */
@@ -397,9 +453,15 @@ export interface EventForm {
   until: string;
   /**
    * For one of the times of an event that repeats: the event it is a time
-   * of, which time, and whether what is written is for this once or for all.
+   * of, which time, and whether what is written is for this once, for all,
+   * or (`following`) for this time and every one after it.
    */
-  series: { id: Id; recurrenceId: string; all: boolean } | null;
+  series: {
+    id: Id;
+    recurrenceId: string;
+    all: boolean;
+    following?: boolean;
+  } | null;
 }
 
 /** The parts of the form that start folded away, and open when they hold something. */
@@ -797,6 +859,10 @@ export class Calendars {
   own: Own[] = [];
   /** Whether another time can be suggested for an event one was invited to. Known once started. */
   proposals = false;
+  /** Whether a calendar kept somewhere else can be added. Known once started. */
+  subscribable = false;
+  /** How the last look at each calendar kept elsewhere went, by the calendar's id. */
+  subscriptions = new Map<Id, Subscription>();
   private started: Promise<void> | undefined;
 
   constructor(private readonly client: JmapClient) {
@@ -888,6 +954,8 @@ export class Calendars {
     this.available = session.capabilities[CAPABILITY_CALENDARS] !== undefined;
     this.proposals =
       session.capabilities[CAPABILITY_CALENDAR_PROPOSALS] !== undefined;
+    this.subscribable =
+      session.capabilities[CAPABILITY_CALENDAR_SUBSCRIPTIONS] !== undefined;
     if (!this.available) return;
     const batch = this.client.batch();
     const calendars = this.calendars.loadIn(batch, null);
@@ -921,10 +989,81 @@ export class Calendars {
     );
   }
 
+  /** The calendars events can be written in: those kept here. */
+  writable(): Calendar[] {
+    return this.all().filter((calendar) => !keptElsewhere(calendar));
+  }
+
   /** The calendar new events go in when none is chosen. */
   defaultCalendar(): Calendar | undefined {
-    const all = this.all();
+    const all = this.writable();
     return all.find((calendar) => calendar.isDefault) ?? all[0];
+  }
+
+  /** Whether an event is in a calendar kept somewhere else, where it is changed. */
+  locked(event: Pick<CalendarEvent, 'calendarIds'>): boolean {
+    return Object.keys(event.calendarIds).some((id) => {
+      const calendar = this.calendars.get(id);
+      return calendar !== undefined && keptElsewhere(calendar);
+    });
+  }
+
+  private noted(list: readonly Subscription[]): void {
+    for (const each of list) this.subscriptions.set(each.id, each);
+    this.version++;
+    for (const listener of [...this.listeners]) listener();
+  }
+
+  /**
+   * Looks again at the calendars kept somewhere else: all of them that were
+   * not looked at lately, or the ones named however lately they were. A big
+   * one comes in over several looks.
+   */
+  async refreshSubscriptions(ids?: readonly Id[]): Promise<void> {
+    if (!this.subscribable) return;
+    for (let looks = 0; looks < 40; looks++) {
+      const said = (await this.client.call(
+        'CalendarSubscription/refresh' as never,
+        (ids ? { ids } : { ifOlderThan: SUBSCRIPTION_AGE }) as never,
+      )) as { list: Subscription[]; more: boolean };
+      this.noted(said.list);
+      if (!said.more) break;
+    }
+    if (!ids) {
+      const all = (await this.client.call(
+        'CalendarSubscription/get' as never,
+        {} as never,
+      )) as { list: Subscription[] };
+      this.subscriptions = new Map();
+      this.noted(all.list);
+    }
+    await this.refresh();
+  }
+
+  /** Adds a calendar kept somewhere else, by the address it is published at. */
+  async addFrom(name: string, color: string, url: string): Promise<void> {
+    let added: Subscription & { calendarId: Id; more: boolean };
+    try {
+      added = (await this.client.call(
+        'CalendarSubscription/add' as never,
+        { name: name.trim(), color, url: url.trim() } as never,
+      )) as typeof added;
+    } catch {
+      throw new CalendarError(
+        'That address cannot be used. It has to start with https:// or webcal://.',
+      );
+    }
+    this.noted([{ ...added, id: added.calendarId }]);
+    await this.refresh();
+    if (added.problem) {
+      // Nothing came of it: it is not kept as a calendar that shows nothing.
+      await this.set('Calendar', {
+        destroy: [added.calendarId],
+        onDestroyRemoveEvents: true,
+      });
+      throw new CalendarError(`${added.problem}.`);
+    }
+    if (added.more) await this.refreshSubscriptions([added.calendarId]);
   }
 
   colorOf(event: Pick<CalendarEvent, 'calendarIds'>): string {
@@ -1008,6 +1147,37 @@ export class Calendars {
       const response = await this.set(
         'CalendarEvent',
         { create: { new: said } },
+        tell,
+      );
+      const id = response.created?.['new']?.id;
+      if (!id) throw new CalendarError('The event could not be kept.');
+      return id;
+    }
+    if (form.series?.following && !form.series.all) {
+      const whole = this.events.get(form.series.id);
+      if (!whole) throw new CalendarError('The event is no longer there.');
+      // From its first time on, that is every one of them.
+      if (form.series.recurrenceId <= whole.start) {
+        return this.save(
+          { ...form, series: { ...form.series, all: true, following: false } },
+          tell,
+        );
+      }
+      // From here on it is an event of its own, as written; the one there was ends the time before.
+      const said = Object.fromEntries(
+        Object.entries(event).filter(([, value]) => value !== null),
+      );
+      const response = await this.set(
+        'CalendarEvent',
+        {
+          update: {
+            [form.series.id]: endedBefore(
+              (await this.whole(form.series.id)) ?? whole,
+              form.series.recurrenceId,
+            ),
+          },
+          create: { new: said },
+        },
         tell,
       );
       const id = response.created?.['new']?.id;
@@ -1196,10 +1366,44 @@ export class Calendars {
    * what was removed, as it was.
    */
   async remove(
-    event: Pick<CalendarEvent, 'id' | 'baseEventId'>,
-    all = false,
+    event: Pick<CalendarEvent, 'id' | 'baseEventId' | 'recurrenceId'>,
+    all: boolean | 'following' = false,
     tell = false,
   ): Promise<() => Promise<void>> {
+    const first = event.baseEventId
+      ? this.events.get(event.baseEventId)
+      : undefined;
+    // This time and every one after: the event ends the time before. From its first time, that is all of it.
+    if (
+      all === 'following' &&
+      event.baseEventId &&
+      event.recurrenceId &&
+      first &&
+      event.recurrenceId > first.start
+    ) {
+      const seriesId = event.baseEventId;
+      const before = await this.whole(seriesId);
+      await this.set(
+        'CalendarEvent',
+        {
+          update: {
+            [seriesId]: endedBefore(before ?? first, event.recurrenceId),
+          },
+        },
+        tell,
+      );
+      return async () => {
+        await this.set('CalendarEvent', {
+          update: {
+            [seriesId]: {
+              recurrenceRules: before?.['recurrenceRules'] ?? null,
+              recurrenceOverrides: before?.['recurrenceOverrides'] ?? null,
+            },
+          },
+        });
+      };
+    }
+    if (all === 'following') all = true;
     if (event.baseEventId && !all) {
       const before = await this.whole(event.baseEventId);
       await this.set('CalendarEvent', { destroy: [event.id] }, tell);
@@ -1222,6 +1426,80 @@ export class Calendars {
       const { id: _id, isOrigin: _origin, ...rest } = was;
       await this.set('CalendarEvent', { create: { new: rest } });
     };
+  }
+
+  /** Every event the account has that answers to a filter, whole. */
+  private async everything(
+    filter: Record<string, unknown> | null,
+    properties?: string[],
+  ): Promise<Record<string, unknown>[]> {
+    const found: Record<string, unknown>[] = [];
+    for (let position = 0; ;) {
+      const { ids } = (await this.client.call(
+        'CalendarEvent/query' as never,
+        { filter, position, limit: 200 } as never,
+      )) as { ids: Id[] };
+      if (ids.length === 0) break;
+      const got = (await this.client.call(
+        'CalendarEvent/get' as never,
+        { ids, ...(properties ? { properties } : {}) } as never,
+      )) as { list: Record<string, unknown>[] };
+      found.push(...got.list);
+      position += ids.length;
+      if (ids.length < 200) break;
+    }
+    return found;
+  }
+
+  /** A calendar as a file with the ending .ics, for another program to take in. */
+  async exportCalendar(id: Id): Promise<string> {
+    const calendar = this.calendars.get(id);
+    return toICalendarFile(await this.everything({ inCalendar: id }), {
+      ...(calendar ? { name: calendar.name } : {}),
+    });
+  }
+
+  /**
+   * Puts the events of a file with the ending .ics in a calendar. One the
+   * account has already, in any calendar, is left as it is: taking the same
+   * file in twice adds nothing. Nobody on any of them is told.
+   */
+  async importCalendar(
+    id: Id,
+    file: string,
+  ): Promise<{ added: number; already: number; refused: number }> {
+    const read = fromICalendar(file).events.filter(
+      // What is said of one time of an event the file does not hold has nothing to go on.
+      (event) => event['recurrenceId'] === undefined,
+    );
+    if (read.length === 0) {
+      throw new CalendarError('There are no events in that file.');
+    }
+    const have = new Set(
+      (await this.everything(null, ['uid'])).map((event) => event['uid']),
+    );
+    const fresh = read.filter((event) => !have.has(event['uid']));
+    let added = 0;
+    let refused = 0;
+    for (let from = 0; from < fresh.length; from += 50) {
+      const create = Object.fromEntries(
+        fresh.slice(from, from + 50).map((event, index) => {
+          const { comment: _comment, ...rest } = event;
+          return [
+            `e${from + index}`,
+            { ...rest, calendarIds: { [id]: true }, useDefaultAlerts: true },
+          ];
+        }),
+      );
+      const response = (await this.client.call(
+        'CalendarEvent/set' as never,
+        { create } as never,
+      )) as SetResponse;
+      added += Object.keys(response.created ?? {}).length;
+      refused += Object.keys(response.notCreated ?? {}).length;
+    }
+    await this.refresh();
+    return { added, already: read.length - fresh.length, refused };
   }
 
   /** The places events have been at, most often first: where the next one might be too. */

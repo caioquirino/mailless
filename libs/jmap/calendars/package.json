@@ -35,6 +35,12 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./icalendar": {
+      "@mailless/source": "./src/icalendar.ts",
+      "types": "./dist/icalendar.d.ts",
+      "import": "./dist/icalendar.js",
+      "default": "./dist/icalendar.js"
     }
   },
   "files": [

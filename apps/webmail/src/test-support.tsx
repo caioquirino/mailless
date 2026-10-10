@@ -58,9 +58,16 @@ export async function fakeBackend(options: { holds?: boolean } = {}) {
       }
     },
   };
+  /** What calendars kept somewhere else say, by the address each is published at. */
+  const feeds: Record<string, string> = {};
   const server = createJmapServer({
     storage,
     quota: { maxOctets: 1024 ** 3 },
+    fetchCalendar: async (url) => {
+      const said = feeds[url];
+      if (said === undefined) throw new Error('Nothing is published there');
+      return said;
+    },
     push: {
       vapid: {
         ...(await generateVapidKeys()),
@@ -188,7 +195,7 @@ export async function fakeBackend(options: { holds?: boolean } = {}) {
     }
     await push.flush();
   };
-  return { server, state, sent, push, fetch: fetcher, deliver, due };
+  return { server, state, sent, push, fetch: fetcher, deliver, due, feeds };
 }
 
 export type FakeBackend = Awaited<ReturnType<typeof fakeBackend>>;

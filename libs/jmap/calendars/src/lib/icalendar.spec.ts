@@ -3,6 +3,7 @@ import {
   fromICalendar,
   organizerOf,
   toICalendar,
+  toICalendarFile,
 } from './icalendar.js';
 
 const NOW = new Date('2026-10-09T10:00:00Z');
@@ -299,5 +300,38 @@ describe('an event read from other calendars', () => {
     expect(
       fromICalendar('BEGIN:VEVENT\nSUMMARY:No id, no time\nEND:VEVENT').events,
     ).toEqual([]);
+  });
+});
+
+describe('toICalendarFile', () => {
+  it('holds every event, and is read back as they were', () => {
+    const file = toICalendarFile(
+      [
+        event(),
+        event({
+          uid: 'e2@example.com',
+          title: 'Stand-up',
+          recurrenceRules: [{ '@type': 'RecurrenceRule', frequency: 'weekly' }],
+          recurrenceOverrides: {
+            '2026-10-22T13:00:00': { title: 'Stand-up, outside' },
+            '2026-10-29T13:00:00': { excluded: true },
+          },
+        }),
+      ],
+      { name: 'Work; and play', now: NOW },
+    );
+    expect(file).toContain('X-WR-CALNAME:Work\\; and play');
+    // A file is not a message: it asks nothing of anyone.
+    expect(file).not.toContain('METHOD:');
+    const read = fromICalendar(file);
+    expect(read.method).toBeNull();
+    expect(read.events.map((each) => each['uid'])).toEqual([
+      'e1@example.com',
+      'e2@example.com',
+    ]);
+    expect(read.events[1]?.['recurrenceOverrides']).toMatchObject({
+      '2026-10-22T13:00:00': { title: 'Stand-up, outside' },
+      '2026-10-29T13:00:00': { excluded: true },
+    });
   });
 });

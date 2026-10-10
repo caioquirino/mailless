@@ -1693,6 +1693,226 @@ a.icon-button {
   margin: 2px var(--space-1) 2px 0;
 }
 
+.subscribe-form > p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.subscribe-form > input[type='url'] {
+  flex: 2;
+  min-width: 16rem;
+}
+
+/* An event that is only shown here says so, above what it is. */
+.event-locked {
+  margin: 0 var(--space-4) var(--space-2);
+}
+
+.event-fields[inert] {
+  opacity: 0.85;
+}
+
+/* Filters: the list of them, the form one is filled in on, and the script they are. */
+.filter {
+  align-items: center;
+}
+
+.filter-off .filter-what {
+  opacity: 0.55;
+}
+
+.filter-order {
+  display: flex;
+  flex-direction: column;
+}
+
+.filter-order .icon-button {
+  width: 1.5rem;
+  height: 1.25rem;
+}
+
+.filter-on {
+  display: flex;
+  align-items: center;
+}
+
+.filter-what {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.filter-hand {
+  justify-self: start;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  font-weight: 600;
+}
+
+.filter-source {
+  overflow: hidden;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-script-line {
+  margin-top: var(--space-3);
+}
+
+.filter-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  align-items: flex-start;
+}
+
+.filter-fields {
+  display: grid;
+  flex: 3 1 22rem;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.filter-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.filter-row > input:not([type='number']),
+.filter-value {
+  flex: 1;
+  min-width: 6rem;
+}
+
+.filter-row > input[type='number'] {
+  width: 5rem;
+}
+
+.filter-label {
+  width: 3.5rem;
+  flex: none;
+}
+
+.filter-part {
+  margin: var(--space-3) 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.filter-more {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  justify-self: start;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.filter-more:hover {
+  background: var(--hover);
+}
+
+.filter-stop {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin-top: var(--space-2);
+}
+
+.filter-trial {
+  display: grid;
+  flex: 2 1 16rem;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.filter-trial p {
+  margin: 0;
+}
+
+.filter-hits {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.filter-hits li {
+  display: grid;
+  gap: 1px;
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-hits li > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.filter-count {
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+}
+
+.filter-script {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--text);
+  font:
+    0.82rem/1.6 ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  resize: vertical;
+  tab-size: 4;
+  white-space: pre;
+}
+
+/* Which filter put a message where it is, under what it is about. */
+.filed-by {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin: 0 0 var(--space-3);
+}
+
+.filed-by .icon {
+  flex: none;
+  color: var(--accent);
+}
+
 /* What to know about a sender, above what they wrote. */
 .caution {
   margin: 0 0 var(--space-3);
@@ -3688,6 +3908,144 @@ a.button.write {
   font-weight: 700;
 }
 
+/* A month: a box to each day, as tall as the page lets the weeks be. */
+.month {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.month-heads,
+.month-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.month-heads {
+  flex: none;
+  border-bottom: 1px solid var(--line);
+}
+
+.month-head {
+  padding: var(--space-1) var(--space-2);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.month-week {
+  flex: 1;
+  min-height: 6.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.month-day {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-1);
+  border-right: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.month-day:last-child {
+  border-right: 0;
+}
+
+.month-other {
+  background: color-mix(in srgb, var(--hover) 50%, transparent);
+}
+
+.month-other .month-number {
+  color: var(--muted);
+}
+
+.month-number {
+  display: grid;
+  align-self: flex-start;
+  place-items: center;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  padding: 0 0.3rem;
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.month-number:hover {
+  background: var(--hover);
+}
+
+.month-today .month-number {
+  background: var(--accent);
+  color: #fff;
+}
+
+.month-event {
+  display: flex;
+  gap: 0.3rem;
+  align-items: baseline;
+  width: 100%;
+  padding: 1px var(--space-1);
+  overflow: hidden;
+  border: 0;
+  border-left: 3px solid var(--event, var(--accent));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--event, var(--accent)) 14%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.month-event:hover {
+  background: color-mix(in srgb, var(--event, var(--accent)) 26%, transparent);
+}
+
+.month-whole {
+  border-left: 0;
+  background: var(--event, var(--accent));
+  color: #fff;
+  font-weight: 600;
+}
+
+.month-whole:hover {
+  background: var(--event, var(--accent));
+  filter: brightness(1.1);
+}
+
+.month-time {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.month-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.month-more {
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.month-more:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 /* The round button for a new event: where there is no menu beside the calendar. */
 .calendar-add {
   display: none;
@@ -4325,7 +4683,26 @@ a.button.write {
   }
 
   .calendar-view {
-    padding: 0.55rem 0.8rem;
+    padding: 0.55rem 0.55rem;
+    font-size: 0.8rem;
+  }
+
+  /* A day of the month is a finger wide: what is on it by name only, and small. */
+  .month-week {
+    min-height: 5rem;
+  }
+
+  .month-day {
+    padding: 2px;
+  }
+
+  .month-time {
+    display: none;
+  }
+
+  .month-event {
+    padding: 1px 2px;
+    font-size: 0.65rem;
   }
 
   .week {

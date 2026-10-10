@@ -26,6 +26,10 @@ import type { Mailbox } from '@mailless/jmap-core';
 import { Button, Icon, IconButton, type IconName } from '@mailless/ui';
 import { emptyDraft, resumeDraft } from '../lib/compose';
 import { MailError, MailStore, type Draft, type Held } from '../lib/mail';
+import { CalendarError } from '../lib/calendar';
+import { FilterError } from '../lib/filters';
+import { SenderError } from '../lib/senders';
+import { TagError } from '../lib/tags';
 import { orderMailboxes, ownFolder } from '../lib/mailboxes';
 import { answerPushes, Notifications } from '../lib/notifications';
 import { usePreference } from '../lib/preference';
@@ -51,7 +55,16 @@ const REFRESH_MS = 60_000;
 
 /** What to tell the user about something that went wrong, or null when there is nothing to tell. */
 function explain(error: unknown): string | null {
-  if (error instanceof MailError) return error.message;
+  // What went wrong in words meant for whoever is looking: said as it is.
+  if (
+    error instanceof MailError ||
+    error instanceof CalendarError ||
+    error instanceof TagError ||
+    error instanceof SenderError ||
+    error instanceof FilterError
+  ) {
+    return error.message;
+  }
   if (error instanceof JmapRequestError) {
     // Signed out: the sign-in page says so itself.
     if (error.status === 401) return null;
@@ -444,7 +457,10 @@ function CalendarRoute(props: {
     <Suspense fallback={null}>
       <CalendarPage
         view={
-          view === 'week' || view === 'agenda'
+          view === 'day' ||
+          view === 'week' ||
+          view === 'month' ||
+          view === 'agenda'
             ? view
             : narrow
               ? 'agenda'

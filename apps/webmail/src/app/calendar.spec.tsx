@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { dayKey, draftKey, newForm } from '../lib/calendar';
+import { dayKey, draftKey, newForm, weekStart } from '../lib/calendar';
 import { fakeBackend, renderApp } from '../test-support';
 
 const AUTH = { accountId: 'ann', username: 'ann@example.com' };
@@ -76,6 +76,240 @@ describe('the calendar', () => {
     expect(
       within(menu).getByRole('link', { current: 'date' }),
     ).toHaveTextContent(String(new Date().getDate()));
+  });
+
+  it('changes this time of an event and every one after it, as an event of its own', async () => {
+    const backend = await fakeBackend();
+    const monday = dayKey(weekStart(new Date()));
+    await addEvent(backend, {
+      title: 'Stand-up',
+      start: `${monday}T09:00:00`,
+      duration: 'PT15M',
+      recurrenceRules: [{ '@type': 'RecurrenceRule', frequency: 'daily' }],
+    });
+    await renderApp(backend, `/calendar/week/${monday}`);
+    const week = await within(await opened()).findByRole('grid', {
+      name: 'Week',
+    });
+    await waitFor(() =>
+      expect(
+        within(week).getAllByRole('button', { name: /^Stand-up09/ }),
+      ).toHaveLength(7),
+    );
+    // Thursday, the fourth of the week.
+    await userEvent.click(
+      within(week).getAllByRole('button', {
+        name: /^Stand-up09/,
+      })[3] as HTMLElement,
+    );
+    const form = await screen.findByRole('form', { name: 'Event' });
+    await userEvent.click(within(form).getByLabelText('This and following'));
+    // From here on it may repeat another way.
+    expect(within(form).getByLabelText('Repeats')).toHaveValue('daily');
+    // The end goes with the start: it stays a quarter of an hour.
+    fireEvent.change(within(form).getByLabelText('Starts'), {
+      target: { value: '10:00' },
+    });
+    expect(within(form).getByLabelText('Ends')).toHaveValue('10:15');
+    await userEvent.click(within(form).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(
+        within(week).getAllByRole('button', { name: /^Stand-up10/ }),
+      ).toHaveLength(4),
+    );
+    expect(
+      within(week).getAllByRole('button', { name: /^Stand-up09/ }),
+    ).toHaveLength(3);
+    const kept = await events(backend);
+    expect(kept).toHaveLength(2);
+    expect(kept.map((each) => each.start.slice(11)).sort()).toEqual([
+      '09:00:00',
+      '10:00:00',
+    ]);
+  });
+
+  it('takes in a calendar file, once, and gives a calendar out as one', async () => {
+    const backend = await fakeBackend();
+    await renderApp(backend, '/settings');
+    const settings = await screen.findByRole('region', { name: 'Settings' });
+    await within(settings).findByRole('list', { name: 'Your calendars' });
+    const file = () =>
+      new File(
+        [
+          [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'BEGIN:VEVENT',
+            'UID:one@elsewhere.example',
+            'DTSTART:20261015T120000Z',
+            'DTEND:20261015T130000Z',
+            'SUMMARY:Lunch',
+            'END:VEVENT',
+            'BEGIN:VEVENT',
+            'UID:two@elsewhere.example',
+            'DTSTART;VALUE=DATE:20261224',
+            'DTEND;VALUE=DATE:20261225',
+            'SUMMARY:Christmas Eve',
+            'RRULE:FREQ=YEARLY',
+            'END:VEVENT',
+            'END:VCALENDAR',
+          ].join('\r\n'),
+        ],
+        'elsewhere.ics',
+        { type: 'text/calendar' },
+      );
+    await userEvent.click(
+      within(settings).getByRole('button', {
+        name: 'Import a file into Personal',
+      }),
+    );
+    await userEvent.upload(
+      within(settings).getByLabelText('Calendar file to import'),
+      file(),
+    );
+    expect(
+      await screen.findByText('2 events added to Personal'),
+    ).toBeInTheDocument();
+    const kept = await events(backend);
+    expect(kept.map((each) => each.title).sort()).toEqual([
+      'Christmas Eve',
+      'Lunch',
+    ]);
+    expect(
+      kept.find((each) => each.title === 'Christmas Eve')?.recurrenceRules,
+    ).toHaveLength(1);
+
+    // The same file again adds nothing.
+    await userEvent.click(
+      within(settings).getByRole('button', {
+        name: 'Import a file into Personal',
+      }),
+    );
+    await userEvent.upload(
+      within(settings).getByLabelText('Calendar file to import'),
+      file(),
+    );
+    expect(
+      await screen.findByText('0 events added to Personal, 2 already there'),
+    ).toBeInTheDocument();
+    expect(await events(backend)).toHaveLength(2);
+  });
+
+  it('shows a calendar kept somewhere else, which is not changed here', async () => {
+    const backend = await fakeBackend();
+    const address = 'https://calendar.example/secret/basic.ics';
+    const stamp = today.replace(/-/g, '');
+    backend.feeds[address] = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:swim@elsewhere.example',
+      `DTSTART:${stamp}T120000Z`,
+      `DTEND:${stamp}T130000Z`,
+      'SUMMARY:Swimming',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    await renderApp(backend, '/settings');
+    const settings = await screen.findByRole('region', { name: 'Settings' });
+    await userEvent.click(
+      await within(settings).findByRole('button', {
+        name: 'Subscribe to a calendar',
+      }),
+    );
+    const form = within(settings).getByRole('form', {
+      name: 'Subscribe to a calendar',
+    });
+    await userEvent.type(
+      within(form).getByLabelText('Name of the calendar'),
+      'Gmail',
+    );
+    // Nothing is published there: it is said, and no empty calendar is kept.
+    await userEvent.type(
+      within(form).getByLabelText('Address of the calendar'),
+      'https://calendar.example/wrong.ics',
+    );
+    await userEvent.click(
+      within(form).getByRole('button', { name: 'Subscribe' }),
+    );
+    expect(
+      await screen.findByText(/Nothing is published there/),
+    ).toBeInTheDocument();
+    const all = within(settings).getByRole('list', { name: 'Your calendars' });
+    expect(within(all).queryByText('Gmail')).not.toBeInTheDocument();
+
+    const where = within(form).getByLabelText('Address of the calendar');
+    await userEvent.clear(where);
+    await userEvent.type(where, address);
+    await userEvent.click(
+      within(form).getByRole('button', { name: 'Subscribe' }),
+    );
+    expect(await within(all).findByText('Gmail')).toBeInTheDocument();
+    expect(
+      within(all).getByText(/kept somewhere else · 1 events · looked at/),
+    ).toBeInTheDocument();
+    // Not one to import into, nor to make the default.
+    expect(
+      within(all).queryByRole('button', { name: 'Import a file into Gmail' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(all).getByRole('button', { name: 'Look at Gmail again' }),
+    ).toBeInTheDocument();
+
+    // On the calendar it is there, to be read and not changed.
+    await userEvent.click(
+      within(screen.getByRole('navigation', { name: 'Sections' })).getByRole(
+        'link',
+        { name: 'Calendar' },
+      ),
+    );
+    const week = await within(await opened()).findByRole('grid', {
+      name: 'Week',
+    });
+    await userEvent.click(
+      await within(week).findByRole('button', { name: /Swimming/ }),
+    );
+    const event = await screen.findByRole('form', { name: 'Event' });
+    expect(within(event).getByRole('note')).toHaveTextContent(
+      /kept somewhere else/,
+    );
+    expect(
+      within(event).queryByRole('button', { name: 'Save' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(event).queryByRole('button', { name: 'Delete' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows a month, a box to each day, and a day by itself', async () => {
+    const backend = await fakeBackend();
+    await addEvent(backend, { title: 'Dentist', start: `${today}T14:00:00` });
+    await renderApp(backend, `/calendar/month/${today}`);
+    const month = await within(await opened()).findByRole('grid', {
+      name: 'Month',
+    });
+    const named = new Date().toLocaleDateString(undefined, {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+    });
+    const box = within(month).getByRole('gridcell', { name: named });
+    expect(
+      await within(box).findByRole('button', { name: /Dentist/ }),
+    ).toHaveTextContent('14:00');
+    // The number of a day is the way to the day itself.
+    await userEvent.click(
+      within(box).getByRole('link', { name: `Go to ${named}` }),
+    );
+    const day = await within(await opened()).findByRole('grid', {
+      name: 'Day',
+    });
+    expect(within(day).getAllByRole('columnheader')).toHaveLength(1);
+    expect(
+      await within(day).findByRole('button', { name: /Dentist/ }),
+    ).toHaveTextContent('14:00 – 15:00');
+    expect(
+      within(await opened()).getByRole('link', { name: 'Next day' }),
+    ).toBeInTheDocument();
   });
 
   it('writes an event in a form that grows where it stands, and keeps it', async () => {

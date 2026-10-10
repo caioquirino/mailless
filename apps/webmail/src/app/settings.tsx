@@ -19,6 +19,7 @@ import { UNDO_SECONDS } from '../lib/undo';
 import { Face } from './face';
 import { FolderSetting } from './folders';
 import { TagSetting } from './tags';
+import { FilterSetting } from './filters';
 import {
   BlockedSetting,
   OwnAddressesSetting,
@@ -347,6 +348,7 @@ export function SettingsPage() {
         <PictureSetting />
         <FolderSetting />
         <TagSetting />
+        <FilterSetting />
         <CalendarSetting />
         <OwnAddressesSetting />
         <BlockedSetting />

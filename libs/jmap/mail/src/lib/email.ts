@@ -21,6 +21,7 @@ import {
 } from '@mailless/jmap-core';
 import { z } from 'zod';
 import { senderBlocked } from './blocked.js';
+import { filterDelivery } from './sieve.js';
 import { usedOctets } from './quota.js';
 import { buildDraft } from './draft.js';
 import { sendVacationReply } from './vacation.js';
@@ -1047,6 +1048,23 @@ export async function importMessage(
   if (options.delivery && (await senderBlocked(ctx, parsed.metadata.from))) {
     mailboxIds = await resolveMailboxIds(ctx, { mailboxRole: 'junk' });
     keywords = normaliseKeywords({ ...keywords, $junk: true });
+  }
+
+  // What was headed for the inbox is what the account's filters are for:
+  // they say where it is kept instead, and with which keywords.
+  if (options.delivery && options.mailboxRole === 'inbox') {
+    const junk = Object.keys(keywords).includes('$junk');
+    try {
+      const filtered = junk
+        ? null
+        : await filterDelivery(ctx, parsed.metadata.headers, raw.length);
+      if (filtered) {
+        if (filtered.mailboxIds) mailboxIds = filtered.mailboxIds;
+        keywords = normaliseKeywords({ ...keywords, ...filtered.keywords });
+      }
+    } catch {
+      // Mail is never lost to a filter: it goes where it was going.
+    }
   }
 
   // Mail arriving from outside is never turned away for lack of room: the

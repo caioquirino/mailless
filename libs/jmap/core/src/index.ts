@@ -6,3 +6,4 @@ export * from './lib/patch.js';
 export * from './lib/schemas.js';
 export * from './lib/methods.js';
 export * from './lib/mail.js';
+export * from './lib/sieve.js';

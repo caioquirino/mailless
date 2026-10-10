@@ -272,6 +272,10 @@ describe('the webmail', () => {
     await userEvent.click(
       within(carol).getByRole('button', { name: 'More for this message' }),
     );
+    // Once it is known that this server runs filters.
+    await within(carol).findByRole('menuitem', {
+      name: 'Filter messages like this',
+    });
     const menu = within(carol).getByRole('menu');
     expect(
       within(menu)
@@ -280,6 +284,7 @@ describe('the webmail', () => {
     ).toEqual([
       'Reply',
       'Forward',
+      'Filter messages like this',
       'Delete this message',
       'Mark unread from here',
       'Report as junk',
