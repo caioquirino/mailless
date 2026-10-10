@@ -193,6 +193,9 @@ export interface Subscription {
 }
 
 /** How long what was fetched of a calendar kept elsewhere is taken as it is, in seconds. */
+/** How many events are asked for in one call: no more than any JMAP server has to give. */
+const MOST_AT_ONCE = 250;
+
 export const SUBSCRIPTION_AGE = 30 * 60;
 
 export interface CalendarEvent {
@@ -923,16 +926,18 @@ export class Calendars {
         timeZone: ownTimeZone(),
       } as never,
     )) as { ids: Id[] };
-    const got =
-      found.ids.length === 0
-        ? { list: [] }
-        : ((await this.client.call(
-            'CalendarEvent/get' as never,
-            {
-              ids: found.ids,
-              properties: [...SHOWN_PROPERTIES, 'baseEventId', 'recurrenceId'],
-            } as never,
-          )) as { list: CalendarEvent[] });
+    // A busy month can be more than one answer may hold.
+    const got: { list: CalendarEvent[] } = { list: [] };
+    for (let at = 0; at < found.ids.length; at += MOST_AT_ONCE) {
+      const piece = (await this.client.call(
+        'CalendarEvent/get' as never,
+        {
+          ids: found.ids.slice(at, at + MOST_AT_ONCE),
+          properties: [...SHOWN_PROPERTIES, 'baseEventId', 'recurrenceId'],
+        } as never,
+      )) as { list: CalendarEvent[] };
+      got.list.push(...piece.list);
+    }
     // Another time was asked for meanwhile: this answer is to an old question.
     if (this.wanted !== wanted) return;
     this.window = { ...wanted, events: got.list };
@@ -957,12 +962,9 @@ export class Calendars {
     this.subscribable =
       session.capabilities[CAPABILITY_CALENDAR_SUBSCRIPTIONS] !== undefined;
     if (!this.available) return;
-    const batch = this.client.batch();
-    const calendars = this.calendars.loadIn(batch, null);
-    const events = this.events.loadIn(batch, null);
-    const result = await batch.send();
-    calendars.done(result);
-    events.done(result);
+    // A calendar kept somewhere else can hold more events than one answer
+    // may: the cache asks for them in pieces when it has to.
+    await Promise.all([this.calendars.load(), this.events.load()]);
     // Who the person is to the others on an event. An account that cannot send has nobody to tell.
     this.own = await this.client.call('Identity/get', { ids: null }).then(
       (found) =>

@@ -104,6 +104,10 @@ function cannotCalculate(error: unknown): boolean {
   );
 }
 
+function tooMany(error: unknown): boolean {
+  return error instanceof JmapMethodError && error.type === 'requestTooLarge';
+}
+
 function withAccount(
   accountId: Id | undefined,
   args: Record<string, unknown>,
@@ -203,18 +207,68 @@ export class ObjectCache<T extends { id: Id }> implements Synced {
     }
     const missing = ids?.filter((id) => !this.records.has(id));
     if (missing?.length === 0) return;
-    const response = (await this.client.call(
-      `${this.options.type}/get` as string,
-      this.args({
-        ids: missing ? [...new Set(missing)] : null,
-        properties: this.options.properties ?? null,
-      }),
-    )) as unknown as GetResponse<T>;
+    let response: GetResponse<T>;
+    try {
+      response = (await this.client.call(
+        `${this.options.type}/get` as string,
+        this.args({
+          ids: missing ? [...new Set(missing)] : null,
+          properties: this.options.properties ?? null,
+        }),
+      )) as unknown as GetResponse<T>;
+    } catch (error) {
+      if (missing || !tooMany(error)) throw error;
+      // More than the server gives in one answer: they are asked for in pieces.
+      await this.loadInPieces();
+      return;
+    }
     this.merge(response.list);
     // Only the first answer sets where changes are asked from: what was
     // loaded later is at least as new, and hearing of a change twice is harmless.
     this.state ??= response.state;
     if (ids === undefined) this.complete = true;
+    this.listeners.changed();
+  }
+
+  /**
+   * Fills a cache of everything when there is more than one answer may hold:
+   * which records there are is asked a page at a time, and then the records,
+   * as many at once as the server allows.
+   */
+  private async loadInPieces(): Promise<void> {
+    const { type, properties } = this.options;
+    const session = await this.client.session();
+    const core = session.capabilities[CAPABILITY_CORE] as
+      { maxObjectsInGet?: number } | undefined;
+    const most = Math.max(1, core?.maxObjectsInGet ?? 500);
+    // Where changes are asked from is taken before looking, so that what
+    // changes while the pieces arrive is heard of afterwards.
+    const first = (await this.client.call(
+      `${type}/get` as string,
+      this.args({ ids: [], properties: ['id'] }),
+    )) as unknown as GetResponse<T>;
+    const found: Id[] = [];
+    for (;;) {
+      const page = (await this.client.call(
+        `${type}/query` as string,
+        this.args({ position: found.length, limit: most }),
+      )) as unknown as QueryResponse;
+      found.push(...page.ids);
+      if (page.ids.length === 0) break;
+    }
+    const wanted = [...new Set(found)];
+    for (let at = 0; at < wanted.length; at += most) {
+      const piece = (await this.client.call(
+        `${type}/get` as string,
+        this.args({
+          ids: wanted.slice(at, at + most),
+          properties: properties ?? null,
+        }),
+      )) as unknown as GetResponse<T>;
+      this.merge(piece.list);
+    }
+    this.state ??= first.state;
+    this.complete = true;
     this.listeners.changed();
   }
 

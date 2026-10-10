@@ -15,10 +15,11 @@ const BASE = 'https://mail.example.com';
 const AUTH = { accountId: 'ann', username: 'ann' };
 
 /** A real server, reached through its HTTP handler without a network. */
-async function setup() {
+async function setup(limits?: { maxObjectsInGet: number }) {
   const server = createJmapServer({
     storage: new InMemoryStorageAdapter(),
     urls: jmapUrls(BASE),
+    ...(limits ? { limits } : {}),
   });
   await server.provisionAccount(AUTH);
   const handler = createFetchHandler({
@@ -249,6 +250,33 @@ describe('ObjectCache', () => {
     await deliver('Two');
     await mailboxes.sync();
     expect(mailboxes.get(inbox)?.unreadEmails).toBe(2);
+  });
+  it('fills a cache of everything in pieces when one answer may not hold it', async () => {
+    const { client } = await setup({ maxObjectsInGet: 2 });
+    const all = (await client.call('Mailbox/query', {})).ids;
+    expect(all.length).toBeGreaterThan(2);
+    const mailboxes = new ObjectCache<Mailbox>(client, {
+      type: 'Mailbox',
+      everything: true,
+    });
+
+    await mailboxes.load();
+    expect(mailboxes.isComplete).toBe(true);
+    expect(
+      mailboxes
+        .values()
+        .map((mailbox) => mailbox.id)
+        .sort(),
+    ).toEqual([...all].sort());
+
+    // What changes afterwards is still followed.
+    const made = await client.call('Mailbox/set', {
+      create: { a: { name: 'Projects' } },
+    });
+    await mailboxes.sync();
+    expect(mailboxes.get(made.created?.['a']?.id as string)?.name).toBe(
+      'Projects',
+    );
   });
 });
 

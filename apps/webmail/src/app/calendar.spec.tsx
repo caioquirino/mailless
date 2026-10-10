@@ -55,6 +55,34 @@ async function addEvent(backend: Backend, more: object = {}) {
 }
 
 describe('the calendar', () => {
+  it('opens on a calendar with more events than one answer may hold', async () => {
+    const backend = await fakeBackend();
+    await addEvent(backend);
+    const [{ id }] = (await call(backend, 'Calendar/get', { ids: null }))[
+      'list'
+    ] as Array<{ id: string }>;
+    for (let chunk = 0; chunk < 3; chunk++) {
+      await call(backend, 'CalendarEvent/set', {
+        create: Object.fromEntries(
+          Array.from({ length: 200 }, (_, at) => [
+            `e${at}`,
+            {
+              calendarIds: { [id as string]: true },
+              title: `Long ago ${chunk}-${at}`,
+              start: '2019-03-04T10:00:00',
+              duration: 'PT1H',
+              timeZone: 'Etc/UTC',
+            },
+          ]),
+        ),
+      });
+    }
+    await renderApp(backend, '/calendar');
+    expect(
+      await within(await opened()).findByRole('button', { name: /Dentist/ }),
+    ).toBeInTheDocument();
+  });
+
   it('is reached from beside the mail, and opens on this week', async () => {
     const backend = await fakeBackend();
     await addEvent(backend);
